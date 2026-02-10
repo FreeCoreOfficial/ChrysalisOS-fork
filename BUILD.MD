@@ -1,198 +1,139 @@
-# Chrysalis OS – Build Guide
+# Chrysalis OS – Build Guide (v0.2)
 
 This document describes how to build **Chrysalis OS** from source.
-
-Chrysalis OS is designed to be built on a Linux host using a cross-compiler.
-Native compilation is **not supported**.
+Chrysalis OS v0.2 uses a modular structure with a separate OS kernel and a Standalone Installer.
 
 ---
 
 ## Supported Host Systems
 
 Recommended:
-- Linux (Debian / Ubuntu / Arch / Fedora)
 
-Not supported:
-- Windows (without WSL)
-- macOS (untested)
+- Linux (Debian / Ubuntu / Arch / Fedora)
+- Windows (via WSL2 / Ubuntu)
 
 ---
 
 ## Required Dependencies
 
-### Core build tools
-
-Install the following packages:
+### 1. Core Build Tools
 
 ```sh
 sudo apt install build-essential gcc-multilib g++-multilib \
                  nasm make xorriso grub-pc-bin \
-                 qemu-system-i386
-````
-
----
-
-### Cross Compiler (Recommended)
-
-Although `gcc -m32` works, a dedicated cross-compiler is **strongly recommended**
-for stability and correctness.
-
-Target:
-
-```
-i686-elf
+                 qemu-system-i386 mtools
 ```
 
-Required binaries:
+### 2. Node.js (Build Wrapper)
 
-* `i686-elf-gcc`
-* `i686-elf-ld`
-* `i686-elf-objcopy`
-
----
-
-## Directory Structure
-
-Key directories:
-
-```
-.
-├── kernel/
-├── arch/
-├── build/
-├── iso/
-├── tools/
-├── Makefile
-```
-
----
-
-## Build Output
-
-The build process generates:
-
-* Kernel ELF binary
-* Bootable ISO image
-* Optional raw disk image
-
----
-
-## Building the Kernel
-
-From the project root:
+The build system uses `npm` scripts for high-level management.
 
 ```sh
+# Install Node.js & NPM if not present
+sudo apt install nodejs npm
+```
+
+---
+
+## Directory Structure (v0.2)
+
+```
+ChrysalisOS/
+├── os/                  # Main OS Kernel & Drivers
+│   ├── kernel/          # Kernel Source
+│   ├── arch/            # Architecture specific (x86)
+│   ├── build/           # Build output
+│   └── Makefile         # Kernel Makefile
+├── installer/           # Standalone Installer
+│   ├── installer.cpp    # Installer logic
+│   ├── stubs.cpp        # VGA Text Mode stubs
+│   └── Makefile         # Installer Makefile
+└── tools/               # Asset generation
+```
+
+---
+
+## Build Commands
+
+From the **project root**:
+
+### Build Everything
+
+```sh
+cd os
+npm run build        # Builds both Kernel and Installer
+```
+
+### Build Only Kernel
+
+```sh
+cd os
 make
 ```
 
-This will:
-
-* Compile all kernel sources
-* Assemble boot code
-* Link the kernel
-* Produce a bootable ISO
-
----
-
-## Running in QEMU
-
-Run the OS using:
+### Build Installer ISO
 
 ```sh
-make run
-```
-
-Or manually:
-
-```sh
-qemu-system-i386 \
-  -cdrom chrysalis.iso \
-  -serial stdio \
-  -m 128M
+cd os
+npm run create-i     # Generates installer.iso
 ```
 
 ---
 
-## Debug Builds
+## Running and Testing
 
-To enable debug symbols:
+### Quick Start (QEMU)
+
+```sh
+cd os
+npm run boot         # Boots the OS from virtual HDD
+```
+
+### Test Installer
+
+```sh
+cd os
+npm run installer:log # Boots the Installer ISO and logs to serial
+```
+
+Manual QEMU command:
+
+```sh
+qemu-system-i386 -cdrom installer.iso -serial stdio -m 256M
+```
+
+---
+
+## Build Options
+
+### Debug Symbols
+
+To enable GDB symbols and serial debugging:
 
 ```sh
 make DEBUG=1
 ```
 
-Recommended for kernel development.
+### Skip Cache Flush (ATA)
+
+If testing on slow storage emulators, the ATA driver can be tuned in `os/kernel/drivers/ata.cpp`.
 
 ---
 
-## Cleaning the Build
+## Common Issues
 
-Remove all build artifacts:
+### `installer.iso` not found
 
-```sh
-make clean
-```
+Ensure you ran `npm run create-i` inside the `os` directory. Detailed logs of the ISO creation are available in `os/installer_build.log`.
 
----
+### Black Screen on Boot
 
-## Common Build Issues
-
-### `undefined reference to __udivdi3`
-
-Cause:
-
-* 64-bit division used in freestanding kernel code.
-
-Fix:
-
-* Avoid 64-bit division
-* Or provide a manual implementation
+If the installer shows a black screen, ensure the `multiboot2_header.c` was compiled with `-DNO_FRAMEBUFFER` (automatic in the installer Makefile).
 
 ---
 
-### Kernel boots but hangs
+## License
 
-Tips:
+Chrysalis OS is released under the **MIT License**.
 
-* Enable serial logging early
-* Verify interrupts are acknowledged (EOI)
-* Check paging mappings
-
----
-
-### Framebuffer crashes QEMU
-
-Cause:
-
-* Framebuffer memory not fully mapped
-
-Fix:
-
-* Map full `height × pitch` bytes
-* Align mappings to page boundaries
-
----
-
-## Notes for Modders & Distros
-
-Chrysalis OS uses the **MIT License**.
-
-You are free to:
-
-* Modify the build system
-* Create custom ISOs
-* Distribute downstream builds
-
-Attribution is required.
-
----
-
-## Reproducible Builds
-
-Chrysalis OS does not currently guarantee reproducible builds.
-Toolchain versions may affect output.
-
----
-
-End of file
-
+Happy building!

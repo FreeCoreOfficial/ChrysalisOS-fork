@@ -1,82 +1,83 @@
-# Chrysalis OS - Project Status Report
+# Chrysalis OS - Project Status Report (v0.2 Ethereal)
 
 ## Executive Summary
 
-**Status:** 🚧 PRE-ALPHA - Active Development
+**Status:** 🚀 ALPHA - Active Development
+**Version:** 0.2
+**Codename:** Ethereal
 
-The Chrysalis OS project is a freestanding operating system built from scratch in C++.
+The Chrysalis OS project has transitioned from a terminal-only system to a graphical operating system with its own windowing environment and standalone installation capability.
 
-- **Current Focus:** Kernel stability, shell features, and memory management.
+- **Current Focus:** Optimization of FlyUI, process isolation, and filesystem performance.
 - **Architecture:** x86 (i386)
-- **Bootloader:** GRUB Multiboot
+- **Bootloader:** GRUB Multiboot2 (Framebuffer supported)
 
 ---
 
-## Objectives
+## Completed Milestones ✅
 
-### 1. Freestanding Kernel ✅
+### 1. Graphical Engine (FlyUI)
 
-**Status:** WORKING
+- **Status:** STABLE ALPHA
+- Custom compositor and window manager (WM).
+- Support for BMP icons and basic widgets (panels, labels, buttons).
+- Mouse events and keyboard focus system.
 
-- Multiboot compliant kernel
-- GDT, IDT, ISR, IRQ set up
-- Basic keyboard driver
-- VGA text mode driver
+### 2. Standalone Installer
 
-### 2. Shell Interface ✅
+- **Status:** WORKING
+- Bootable ISO that can format a target disk to FAT32.
+- Support for "Fresh Install" and "Upgrade" logic.
+- Post-install summary and recovery shell.
+- Visuals: Classic "Blue Screen" text interface.
 
-**Status:** WORKING
+### 3. FAT32 Filesystem
 
-- Basic command parsing
-- Builtin commands (`help`, `clear`, `echo`, etc.)
+- **Status:** ROBUST
+- Full Read/Write support.
+- Long File Name (LFN) support.
+- Verified writes for critical system files.
 
----
+### 4. Standalone ELF Executables
 
-## System Architecture
-
-```
-┌─────────────────────────────────────────┐
-│   GRUB 2 Bootloader (multiboot)        │
-└──────────────┬──────────────────────────┘
-               │
-               ▼
-┌─────────────────────────────────────────┐
-│   Chrysalis OS Kernel (C++)            │
-│   ├── GDT / IDT / ISR                  │
-│   ├── Memory Management                │
-│   ├── Drivers (VGA, Keyboard, PIT)     │
-│   └── Terminal / Shell                 │
-└─────────────────────────────────────────┘
-```
+- **Status:** EXPERIMENTAL
+- Support for `.petal` ELF files.
+- Syscall interface for drawing and file I/O.
+- Basic C compiler (`gcc` command in-OS) for simple scripts.
 
 ---
 
-## Usage Instructions
+## Roadmap 🗺️
 
-### Quick Start
+### Phase 1: Stability (Current)
 
-**Step 1: Build**
+- [ ] Fix memory leaks in window management.
+- [ ] Improve ATA driver cache handling.
+- [ ] Implement VESA BIOS Extensions (VBE) fallback.
 
-```bash
-cd os
-make
-```
+### Phase 2: Multitasking & User Mode
 
-**Step 2: Run**
+- [ ] Implement pre-emptive multitasking scheduler.
+- [ ] Full ring 3 isolation.
+- [ ] Dynamic linker for shared libraries.
 
-```bash
-make run
-```
+### Phase 3: Networking
+
+- [ ] RTL8139 driver support.
+- [ ] Minimal TCP/IP stack.
 
 ---
 
 ## Technical Stats
 
-| Component | Details |
-|-----------|---------|
-| **Language** | C++ / Assembly |
-| **Arch** | x86 (32-bit) |
-| **Format** | ELF Binary |
-| **Boot** | Multiboot 1/2 |
+| Component | Status | Details |
+|-----------|--------|---------|
+| **UI** | 💎 | FlyUI (640x480 or 1024x768) |
+| **Filesystem** | 📁 | FAT32 (RW), RamFS |
+| **Binary Format**| ⚙️ | ELF (.petal) |
+| **Memory** | 🧠 | Paging enabled, kmalloc |
+| **Boot Mode** | 🚢 | Multiboot2 Header |
 
 ---
+
+**Last Updated:** February 10, 2026

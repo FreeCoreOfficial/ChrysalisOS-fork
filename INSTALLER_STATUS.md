@@ -1,175 +1,69 @@
-# CHRYSALIS OS - REAL INSTALLER IMPLEMENTATION
+# Chrysalis OS - Installer Development Status
 
-## Status Report
+## 🚀 Current Status: STABLE (v2.0)
 
-✅ **COMPLETED**: Professional Installation Architecture
-- Researched Debian/Linux installation methodology
-- Designed Windows-like installer workflow  
-- Created GRUB multiboot2 bootloader integration
+The installer has evolved from a simple Python script/simulated environment into a **Standalone C++ mini-OS** that runs directly from a bootable ISO.
 
-✅ **COMPLETED**: Installation Media Preparation
-- Built Python script to package kernel + rootfs
-- Kernel binary integrated (271.9 KB)
-- GRUB configuration created
-- rootfs.tar archive generated
-- installer.iso updated with all components (22MB)
+### ✅ Completed Milestones
 
-✅ **COMPLETED**: Installer Bootability
-- Installer boots from ISO correctly
-- GRUB multiboot2 loading works
-- VGA output + serial port debugging functional
-- IDE disk detection operational
+- **Standalone Bootability**: Installer runs in its own Multiboot2 environment (VGA Text Mode).
+- **Disk I/O**: Full ATA/IDE driver support with LBA 28/48 addressing.
+- **FS Portability**: Real-time FAT32 formatting and file copying from ISO modules to Disk.
+- **Upgrade Logic**:
+  - Intelligent detection of existing `/boot/chrysalis/kernel.bin`.
+  - Preserves `/system/` user data while updating binary assets.
+  - Handles directory existence errors gracefully.
+- **Bug Fixes**:
+  - **Incomplete Write Fix**: Refactored FAT32 write logic to prevent BPB corruption during large file writes (e.g., icons).
+  - **Stability**: Added `kmalloc_reset()` to prevent OOM during batch icon installation.
+  - **Multitasking Support**: Installer now runs in full text mode by disabling the framebuffer tag in Multiboot2.
 
-## Architecture Implemented
+---
 
-```
-Installation Flow:
-┌─────────────────────────────────────────────────┐
-│ 1. USER boots installer.iso in QEMU/real PC    │
-│    GRUB loads installer.elf (multiboot2)        │
-└──────────────────┬──────────────────────────────┘
-                   │
-┌──────────────────▼──────────────────────────────┐
-│ 2. INSTALLER detects disks + prepares hdd.img  │
-│    Creates FAT32 partition table                │
-│    Formats boot sector                          │
-└──────────────────┬──────────────────────────────┘
-                   │
-┌──────────────────▼──────────────────────────────┐
-│ 3. INSTALLER copies kernel + rootfs from ISO   │
-│    Extracts rootfs.tar → filesystem            │
-│    Installs /boot/grub/grub.cfg                │
-└──────────────────┬──────────────────────────────┘
-                   │
-┌──────────────────▼──────────────────────────────┐
-│ 4. INSTALLER installs bootloader               │
-│    Writes MBR boot code                        │
-│    Sets boot flag                              │
-│    Verifies installation integrity             │
-└──────────────────┬──────────────────────────────┘
-                   │
-┌──────────────────▼──────────────────────────────┐
-│ 5. USER reboots → boots from hdd.img           │
-│    BIOS → MBR code → GRUB → kernel             │
-│    Chrysalis OS GUI/shell starts               │
-└─────────────────────────────────────────────────┘
-```
+## 🛠️ Internal Architecture
 
-## Technology Stack
+### 1. Boot Sequence
 
-- **Bootloader**: GRUB 2 (multiboot2 protocol)
-- **Filesystem**: FAT32 (bootable, simple)
-- **Kernel**: ChrysalisOS custom kernel (works as multiboot2 executable)
-- **Installation Media**: ISO 9660 + GRUB hybrid
-- **Installer**: C++ with IDE port I/O + serial debugging
-- **Deployment**: USB stick / VM image
+- GRUB loads `installer.elf`.
+- OS kernel modules are passed as Multiboot modules (`kernel.bin`, `icons`, `grub assets`).
+- Installer maps these modules in memory to source data for the installation.
 
-## Files
+### 2. FAT32 Driver
 
-### Installer ISO Contains:
-```
-/installer/installer.iso (22MB)
-├── boot/
-│   └── grub/               (GRUB bootloader)
-├── install/
-│   ├── bin/
-│   │   └── kernel.bin      (271.9 KB Chrysalis kernel)
-│   ├── rootfs/
-│   │   ├── boot/grub/grub.cfg
-│   │   ├── bin/
-│   │   ├── lib/
-│   │   ├── etc/
-│   │   └── sys/
-│   ├── rootfs.tar          (20 KB filesystem archive)
-│   └── manifest.txt        (installation metadata)
-└── installer.elf           (multiboot2 entry point)
-```
+- Handles cluster allocation and LFN entry creation.
+- **Verified Writes**: Every block written can be verified against the source buffer.
+- **BPB Protection**: Critical filesystem parameters are cached in local variables to avoid corruption during sector buffer reuse.
 
-### After Installation on hdd.img:
-```
-hdd.img (1GB FAT32)
-├── /boot/
-│   ├── grub/
-│   │   └── grub.cfg
-│   └── chrysalis/
-│       └── kernel.bin
-├── /lib/                   (runtime libraries)
-├── /etc/                   (configuration)
-├── /bin/, /sbin/           (utilities)
-├── /proc/, /sys/           (virtual filesystems)
-└── /root/                  (user data)
-```
+### 3. VGA Stubs
 
-## Kernel Integration Method
+- Custom `terminal_printf` and `serial` implementation for dual-output logging.
+- Support for basic text UI (colors, scrolling, clear screen).
 
-**Key insight**: No need to compile full Linux kernel!
+---
 
-ChrysalisOS kernel (custom-built C++ code) is:
-1. Already multiboot2-compatible (GRUB can load it)
-2. Small footprint (271.9 KB vs Linux 5MB+)
-3. Includes GUI + shell + drivers
-4. Installed as `/boot/chrysalis/kernel.bin`
+## 📉 Known Issues & Roadmap
 
-GRUB loads it exactly like standard Linux kernels:
-```
-multiboot /boot/chrysalis/kernel.bin
-```
+### Refinements
 
-## Next Steps (For Production)
+- [x] Post-install summary screen.
+- [x] Recovery shell for manual file management.
+- [ ] Support for GPT/UEFI partitioning (currently MBR/BIOS only).
+- [ ] Progress bar visualization (currently text-based progress).
 
-### Immediate (This Session):
-- [ ] Modify installer.cpp to copy files from ISO to hdd.img
-- [ ] Test boot-from-disk workflow
-- [ ] Verify full installation pipeline works
+### Stability
 
-### Short-term:
-- [ ] Package as USB stick image for real hardware
-- [ ] Create installation wizard UI
-- [ ] Add partitioning menu
-- [ ] Support multiple disks
+- FAT32 driver occasionally needs a `sync` or `cache flush` on some older ATA controllers.
+- Keyboard layout is currently fixed to US (kernel supports RO, but installer stub is simplified).
 
-### Long-term:
-- [ ] Network installation (PXE boot)
-- [ ] RAID/LVM support  
-- [ ] Encrypted filesystem
-- [ ] Multiboot with Windows/Linux
-- [ ] Automated deployment scripts
+---
 
-## Commands
+## ⚙️ Build Info
 
-```bash
-# Build everything
-npm run build
-python3 prepare-installer-media.py
-cd installer && make
+- **Target**: i386-pc
+- **Format**: ELF (Multiboot2)
+- **Compiler**: G++ (Freestanding)
+- **Linker**: LD (Linker script shared with main OS)
 
-# Test installer
-npm run installer
+---
 
-# Boot from disk
-npm run boot
-
-# Create USB image (future)
-dd if=installer.iso of=/dev/sdX bs=4M
-dd if=hdd.img of=/dev/sdY bs=4M
-```
-
-## Why This Approach Works
-
-✅ Follows professional Linux installation patterns (Debian, Fedora, Arch)  
-✅ Windows-like separate installer + target disk model  
-✅ Real bootable media that works on actual hardware  
-✅ Proper filesystem hierarchy (/bin, /lib, /etc, /boot, etc.)  
-✅ Multiboot2-compatible for GRUB and UEFI (future)  
-✅ Extensible for features (networking, encryption, etc.)  
-✅ Testable end-to-end in QEMU before real hardware  
-
-## Status: READY FOR DEPLOYMENT LOGIC
-
-The foundation is in place. The installer needs:
-- Real file I/O from ISO to hdd.img (currently shows it works in simulation)
-- Boot verification after installation
-- Minor UI/UX polish
-
-This provides a professional, working system installer comparable to Debian/Ubuntu.
-
+**Last Verified Build:** February 10, 2026

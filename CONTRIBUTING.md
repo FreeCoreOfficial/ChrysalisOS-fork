@@ -24,7 +24,9 @@ If a solution is harder but architecturally correct, it is preferred.
 
 You are welcome to contribute in many ways:
 
-* Kernel features (drivers, subsystems, abstractions)
+* Kernel features (drivers, FlyUI components, syscalls)
+* Standalone app development (.petal apps)
+* Installer logic and deployment scripts
 * Bug fixes and stability improvements
 * Refactoring for clarity or maintainability
 * Documentation (very important)
@@ -42,7 +44,7 @@ Even small improvements are valuable.
 * Avoid undefined behavior
 * Prefer explicit code over “magic”
 
-### Important:
+### Important
 
 * Do **NOT** rely on libc
 * Do **NOT** remove `-ffreestanding`

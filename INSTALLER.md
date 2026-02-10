@@ -1,148 +1,90 @@
-# Chrysalis OS System Installer Guide
+# Chrysalis OS Standalone Installer
 
 ## Overview
 
-The Chrysalis OS installer (`installer` command) sets up persistent system configuration on the hard disk. It copies the icons library and system files from the bootloader to the disk, making the system work independently without requiring the ISO to be attached after first boot.
+Chrysalis OS v0.2 features a **Standalone Bootable Installer**. Unlike previous versions that required a command-prompt installation, the new installer is a dedicated mini-OS environment designed to prepare your hardware for Chrysalis OS.
 
-## Features
+## 🚀 Key Features
 
-✅ **First-Run Installation**
-- Detects bootloader modules (icons.mod) from GRUB multiboot
-- Copies icons library to persistent FAT32 storage (/system/icons.mod)
-- Creates system configuration files
+- **Standalone Boot:** Boots directly from `installer.iso`.
+- **Dual Mode:**
+  - **Fresh Install:** Formats the target disk (LBA 0), creates a FAT32 filesystem, and installs a clean copy of the OS.
+  - **Upgrade:** Detects an existing Chrysalis OS installation, preserves user data, and only updates kernel/system files.
+- **Disk Management:** Automated ATA disk detection and partitioning.
+- **Visual Interface:** Classic "Blue Screen" text console with progress bars and status updates.
+- **Post-Install Actions:** Choice of Reboot, Shutdown, or dropping into a Recovery Shell.
 
-✅ **Persistent Storage**
-- Icons library stored at `/system/icons.mod` on disk
-- System information stored at `/system/info.txt`
-- Readme documentation at `/system/readme.txt`
+---
 
-✅ **Clean Separation**
-- Installation data is separate from ISO
-- System remains functional after reboot without ISO attached
-- Compatible with existing file structure
+## 🛠️ Usage Instructions
 
-## Usage
+### 1. Preparing the Media
 
-### First Boot with ISO
+Ensure you have built the system and generated the installer image:
 
-1. Boot Chrysalis OS with the ISO attached
-2. System boots to shell prompt
-3. Run installer command:
-   ```
-   > installer
-   ```
-
-4. Installer will:
-   - Mount FAT32 filesystem
-   - Load icons.mod from bootloader (if present)
-   - Copy it to `/system/icons.mod`
-   - Create system metadata files
-   - Display status and completion
-
-### Subsequent Boots
-
-After first boot with installer:
-1. Icons are loaded from `/system/icons.mod` on disk
-2. System works completely independently
-3. ISO attachment is no longer required
-4. All GUI features work with persistent icons
-
-## File Locations
-
-- **Bootloader Module**: Detected at 0x1e2000 (multiboot location)
-- **Persistent Icons**: `/system/icons.mod` (67 MB on disk)
-- **System Info**: `/system/info.txt`
-- **Readme**: `/system/readme.txt`
-
-## Technical Details
-
-### Icon Loading Priority
-
-1. **Persistent (FAT32)**: `/system/icons.mod` - checked first
-2. **Bootloader (RAMFS)**: Multiboot module - fallback only
-3. **Graceful Degradation**: GUI runs without icons if loading fails
-
-### Size Considerations
-
-- icons.mod: 67 MB (16 x 1024x1024 RGBA8888 images)
-- Ensure at least 100 MB free space on disk
-- Total system needs ~200 MB for comfortable operation
-
-### Disk Format
-
-- Filesystem: FAT32
-- Partition size: Configured during qemu disk setup
-- Boot: GRUB multiboot2 compatible
-
-## Troubleshooting
-
-### Icons not displaying after installer
-1. Verify disk has sufficient space:
-   ```
-   > fat
-   ```
-2. Check if icons.mod was written:
-   ```
-   > ls /system/
-   ```
-3. Run installer again if needed:
-   ```
-   > installer
-   ```
-
-### System won't boot without ISO
-- Ensure installer was successfully completed
-- Check `/system/info.txt` exists on disk
-- Reinstall if necessary
-
-## Manual Icon Installation
-
-If automatic installation fails:
-
-1. Boot with ISO attached
-2. Mount FAT32:
-   ```
-   > fat automount
-   ```
-
-3. Verify source (icons.mod should be in bootloader):
-   ```
-   > ramfs list
-   ```
-
-4. Check destination:
-   ```
-   > ls /system/
-   ```
-
-## Recovery
-
-To reset and reinstall:
-
-1. Delete system files from FAT32 partition
-2. Boot with ISO attached
-3. Run `installer` again
-4. System will reinitialize all settings
-
-## File Structure After Installation
-
-```
-/system/
-├── icons.mod           (67 MB - Icon library)
-├── info.txt            (System metadata)
-├── readme.txt          (Documentation)
-└── pkg/                (Package directory)
+```sh
+cd os && npm run build
+cd os && npm run create-i
 ```
 
-## Performance
+This produces `installer.iso`.
 
-- First boot with installer: ~5-10 seconds for copying
-- Subsequent boots: Icons load from disk (faster than multiboot)
-- No performance degradation after installation
-- System remains responsive during installation
+### 2. Booting the Installer
 
-## Version
+Boot your virtual machine (QEMU/VMWare) or physical hardware using the ISO.
 
-Installer Version: 1.0  
-Chrysalis OS Build: 2026-01-16  
-Supported Icon Format: RGBA8888, 1024x1024
+- QEMU: `qemu-system-i386 -cdrom installer.iso -m 256M`
+
+### 3. Installation Steps
+
+1. **Welcome Screen:** Select between `[1] Fresh Install` or `[2] Upgrade`.
+2. **Setup:** The installer scans for ATA disks and partitions.
+3. **Copying:** All necessary assets (Kernel, Icons, Bootloader) are copied to `/boot` and `/system`.
+4. **Completion:** Review the summary and choose your exit action.
+
+---
+
+## 📂 File Structure on Target Disk
+
+After a successful installation, your disk will have the following layout:
+
+```
+/
+├── boot/
+│   ├── grub/
+│   │   ├── grub.cfg    # Bootloader config
+│   │   ├── boot.img    # GRUB stage 1
+│   │   └── core.img    # GRUB stage 2
+│   └── chrysalis/
+│       └── kernel.bin  # The main OS Kernel
+└── system/
+    └── icons/          # BMP Icons for FlyUI
+        ├── start.bmp
+        ├── term.bmp
+        └── ...
+```
+
+---
+
+## 🔧 Troubleshooting
+
+### Black Screen on Boot
+
+The installer uses legacy VGA text mode (`0xB8000`). If you see a black screen, ensure your emulator supports standard VGA and that the `multiboot2_header` isn't forcing a graphics mode (this is handled automatically by the installer's `NO_FRAMEBUFFER` flag).
+
+### Write Failures
+
+If the installer reports "Incomplete write" or "Disk full":
+
+1. Ensure the target disk is at least 512MB.
+2. If upgrading, run `fat` command in the OS to check fragmentation.
+
+### Recovery Shell
+
+If installation fails or you need manual intervention, choose `[S]` at the success screen.
+Available commands: `help`, `reboot`, `version`, `exit`.
+
+---
+
+**Version:** 2.0 (Standalone)  
+**Last Updated:** February 10, 2026
