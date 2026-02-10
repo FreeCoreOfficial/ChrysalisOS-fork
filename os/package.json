@@ -34,6 +34,7 @@
     "kernel:iso": "make iso",
     "kernel:check": "nm -u build/kernel.bin | grep -v '__' || echo 'No external symbols found.'",
     "// --- Installer Suite --- //": "",
+    "create-i": "make -C ../installer clean && make -C ../installer",
     "installer:build": "make -C ../installer clean && make -C ../installer",
     "installer:run": "clear && qemu-system-i386 -audiodev pa,id=snd0 -machine pcspk-audiodev=snd0 -m 512 -smp 2 -boot order=d -cdrom ../installer/installer.iso -serial stdio -drive file=hdd.img,format=raw,if=ide -vga std",
     "installer:ahci": "clear && qemu-system-i386 -audiodev pa,id=snd0 -machine pcspk-audiodev=snd0 -m 512 -smp 2 -boot order=d -cdrom ../installer/installer.iso -serial stdio -drive file=hdd.img,format=raw,if=none,id=disk0 -device ahci,id=ahci -device ide-hd,drive=disk0,bus=ahci.0 -vga std",

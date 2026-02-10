@@ -5,6 +5,7 @@
 #include "registry.h"
 
 #include "../proc/exec.h"
+#include "bash_support.h"
 #include "beep.h"
 #include "buildinfo.h"
 #include "cat.h"
@@ -138,6 +139,9 @@ static int wrap_cmd_clear(int argc, char **argv) {
 }
 static int wrap_cmd_crash(int argc, char **argv) {
   return wrap_old_style(cmd_crash, argc, argv);
+}
+static int wrap_cmd_bash_support(int argc, char **argv) {
+  return wrap_old_style(cmd_bash_support, argc, argv);
 }
 static int wrap_cmd_credits(int argc, char **argv) {
   return wrap_old_style(cmd_credits, argc, argv);
@@ -348,6 +352,8 @@ Command command_table[] = {
     {"sha256", wrap_cmd_sha256},
     {"shutdown", wrap_cmd_shutdown},
     {"sysfetch", wrap_cmd_sysfetch},
+    {"neofetch", wrap_cmd_sysfetch},
+    {"bash-support", wrap_cmd_bash_support},
     {"ticks", wrap_cmd_ticks},
     {"tee", wrap_cmd_tee},
     {"tail", wrap_cmd_tail},

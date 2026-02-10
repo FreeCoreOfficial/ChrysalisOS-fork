@@ -1,3 +1,7 @@
+KERNEL_CODENAME = "mosquito-with-violin"
+LICENSE = "MIT"
+CHRYVER= "chrysver-0.2.1"
+
 CXX = g++
 CC = gcc
 AS = nasm
@@ -8,8 +12,8 @@ COMMON_FLAGS = -ffreestanding -O2 -Wall -Wextra -Ikernel/include -m32
 # CFLAGS += -DSCHED_COOPERATIVE # uncomment = fallback safe mode
 
 # C / C++
-CFLAGS = $(COMMON_FLAGS)
-CXXFLAGS = $(COMMON_FLAGS) -fno-exceptions -fno-rtti
+CFLAGS = $(COMMON_FLAGS) -DKERNEL_CODENAME=\"$(KERNEL_CODENAME)\" -DCHRYVER=\"$(CHRYVER)\" -DLICENSE=\"$(LICENSE)\"
+CXXFLAGS = $(COMMON_FLAGS) -fno-exceptions -fno-rtti -DKERNEL_CODENAME=\"$(KERNEL_CODENAME)\" -DCHRYVER=\"$(CHRYVER)\" -DLICENSE=\"$(LICENSE)\"
 
 ASFLAGS = -f elf32
 LDFLAGS = -m elf_i386 -T linker.ld
@@ -138,6 +142,7 @@ OBJS = \
 	$(BUILD)/cmds/curl.o \
 	$(BUILD)/cmds/pkg.o \
 	$(BUILD)/cmds/pathutil.o \
+	$(BUILD)/cmds/bash_support.o \
 	$(BUILD)/cmds/pwd.o \
 	$(BUILD)/cmds/cp.o \
 	$(BUILD)/cmds/mv.o \
@@ -638,6 +643,9 @@ $(BUILD)/cmds/pkg.o: kernel/cmds/pkg.cpp | dirs
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(BUILD)/cmds/pathutil.o: kernel/cmds/pathutil.cpp | dirs
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(BUILD)/cmds/bash_support.o: kernel/cmds/bash_support.cpp | dirs
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(BUILD)/cmds/pwd.o: kernel/cmds/pwd.cpp | dirs
