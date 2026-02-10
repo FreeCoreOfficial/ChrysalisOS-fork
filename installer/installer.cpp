@@ -60,6 +60,7 @@ int fat32_read_directory(const char *path, fat_file_info_t *out,
 int32_t fat32_get_file_size(const char *path);
 void terminal_clear(void);
 void terminal_putentryat(char c, uint8_t color, int x, int y);
+extern void fat32_deduplicate_root();
 void terminal_putchar(char c);
 void terminal_set_color(uint8_t color);
 void terminal_printf(const char *fmt, ...);
@@ -316,6 +317,12 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
     fat32_set_mounted(0, 'a');
   } else {
     fat32_set_mounted(start_lba, 'a');
+  }
+
+  /* 2.5 Repair phase (Deduplicate system dirs) */
+  if (upgrade_mode) {
+    serial("[INSTALLER] Repair Phase: Cleaning root directory duplicates...\n");
+    fat32_deduplicate_root();
   }
 
   /* Dump BPB layout for debug */

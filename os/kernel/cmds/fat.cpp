@@ -2135,6 +2135,69 @@ extern "C" int fat32_delete_file(const char *path) {
   return 0;
 }
 
+extern "C" void fat32_deduplicate_root() {
+  if (!is_fat_initialized)
+    return;
+
+  uint8_t *sector = (uint8_t *)kmalloc(512);
+  if (!sector)
+    return;
+
+  /* 1. Read BPB to get root cluster etc */
+  if (disk_read_sector(current_lba, sector) != 0) {
+    kfree(sector);
+    return;
+  }
+  struct fat_bpb *bpb = (struct fat_bpb *)sector;
+  uint32_t fat_start = current_lba + bpb->reserved_sectors;
+  uint32_t data_start = fat_start + (bpb->fats_count * bpb->sectors_per_fat_32);
+  uint32_t root_cluster = bpb->root_cluster;
+  uint8_t spc = bpb->sectors_per_cluster;
+  uint16_t bps = bpb->bytes_per_sector;
+
+  const char *targets[] = {"BOOT       ", "SYSTEM     "};
+  bool found[] = {false, false};
+
+  uint32_t curr = root_cluster;
+  while (curr < 0x0FFFFFF8 && curr >= 2) {
+    uint32_t cluster_lba = data_start + (curr - 2) * spc;
+    for (int i = 0; i < spc; i++) {
+      if (disk_read_sector(cluster_lba + i, sector) != 0)
+        break;
+      struct fat_dir_entry *entries = (struct fat_dir_entry *)sector;
+      bool modified = false;
+      for (int j = 0; j < 512 / 32; j++) {
+        if (entries[j].name[0] == 0)
+          break;
+        if ((uint8_t)entries[j].name[0] == 0xE5)
+          continue;
+        if (entries[j].attr == 0x0F)
+          continue;
+
+        for (int t = 0; t < 2; t++) {
+          if (memcmp(entries[j].name, targets[t], 11) == 0) {
+            if (found[t]) {
+              /* DUPLICATE! Kill it. */
+              entries[j].name[0] = 0xE5;
+              modified = true;
+              serial(
+                  "[FAT] deduplicate: removing surplus %s entry at index %d\n",
+                  targets[t], j);
+            } else {
+              found[t] = true;
+            }
+          }
+        }
+      }
+      if (modified) {
+        disk_write_sector(cluster_lba + i, sector);
+      }
+    }
+    curr = fat_get_next_cluster(curr, fat_start, bps, sector);
+  }
+  kfree(sector);
+}
+
 static int write_sector_verified(uint32_t lba, const uint8_t *buf, int verify) {
   int local_verify = verify;
   uint8_t *verify_buf = 0;
@@ -2234,6 +2297,23 @@ static int fat32_create_directory_impl(const char *path, int verify) {
     serial("[FAT] mkdir: invalid name length %d for %s\n", fname_len, path);
     kfree(sector);
     return -106;
+  }
+
+  /* Check if it already exists */
+  uint32_t existing_cluster = 0;
+  bool existing_is_dir = false;
+  if (find_in_cluster(parent_cluster, fname, fname_len, data_start, fat_start,
+                      spc, bps, &existing_cluster, NULL, NULL, NULL,
+                      &existing_is_dir) == 0) {
+    if (existing_is_dir) {
+      serial("[FAT] mkdir: %s already exists (directory), ok\n", path);
+      kfree(sector);
+      return 0; // Success, already exists
+    } else {
+      serial("[FAT] mkdir: %s already exists as a file!\n", path);
+      kfree(sector);
+      return -109; // Error, exists as file
+    }
   }
 
   /* allocate cluster */
