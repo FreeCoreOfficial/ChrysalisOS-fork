@@ -104,17 +104,32 @@ static void handle_scancode(uint8_t scancode) {
 
   /* Handle Special Keys with E0 prefix */
   if (e0_prefix) {
-    if (!win_is_gui_running()) {
-      if (scancode == 0x49)
-        fb_cons_scroll(-10); /* Page Up */
-      else if (scancode == 0x51)
-        fb_cons_scroll(10); /* Page Down */
-      else if (scancode == 0x48)
-        fb_cons_scroll(-1); /* Arrow Up */
-      else if (scancode == 0x50)
-        fb_cons_scroll(1); /* Arrow Down */
-    }
     e0_prefix = false;
+    if (scancode == 0x48) { /* Arrow Up */
+      if (!win_is_gui_running())
+        fb_cons_scroll(-1);
+      input_push_key(0x11, true);
+      return;
+    } else if (scancode == 0x50) { /* Arrow Down */
+      if (!win_is_gui_running())
+        fb_cons_scroll(1);
+      input_push_key(0x12, true);
+      return;
+    } else if (scancode == 0x4B) { /* Arrow Left */
+      input_push_key(0x13, true);
+      return;
+    } else if (scancode == 0x4D) { /* Arrow Right */
+      input_push_key(0x14, true);
+      return;
+    } else if (scancode == 0x49) { /* Page Up */
+      if (!win_is_gui_running())
+        fb_cons_scroll(-10);
+      return;
+    } else if (scancode == 0x51) { /* Page Down */
+      if (!win_is_gui_running())
+        fb_cons_scroll(10);
+      return;
+    }
     return;
   }
 
