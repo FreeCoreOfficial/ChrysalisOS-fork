@@ -1,119 +1,105 @@
-# Chrysalis OS – Modding Guide
+# Chrysalis OS – Modding Guide (v0.2)
 
-Chrysalis OS is designed from the ground up to be **hackable, moddable, and fork-friendly**.
-If you like to dig into kernels, drivers, UI stacks, or build your own OS flavor — this is for you.
-
-This document explains how to safely and sanely modify Chrysalis OS.
+Chrysalis OS is designed from the ground up to be **hackable, moddable, and fork-friendly**. This document explains how to extend the system, from the kernel core to the graphical interface.
 
 ---
 
-## Philosophy
+## 🛠️ Kernel Modding: Adding a Command
 
-- Chrysalis OS is a **base system**, not a locked product.
-- Modders are encouraged to:
-  - Replace subsystems
-  - Extend the kernel
-  - Build custom UI stacks
-  - Create entirely new distributions
+Chrysalis OS uses a registry-based system for shell commands. To add a new command:
 
-There is **no enforced ABI stability** at this stage.
-If you mod it, you own the result.
+1. Create your command function in `os/kernel/cmds/`.
+2. Register it in `os/kernel/cmds/registry.cpp`.
 
----
+### Example Snippet: `hello` command
 
-## License & Ownership
+```cpp
+// 1. In a new file or existing cmd file:
+int cmd_hello(int argc, char **argv) {
+    terminal_printf("Hello from the kernel, %s!\n", argc > 1 ? argv[1] : "Chrysalis User");
+    return 0;
+}
 
-Chrysalis OS is released under the **MIT License**.
+// 2. Wrap it in registry.cpp:
+static int wrap_cmd_hello(int argc, char **argv) {
+    return cmd_hello(argc, argv);
+}
 
-This means:
-- You may fork, modify, redistribute, and rebrand.
-- You may use it commercially or non-commercially.
-- You may create closed or open derivatives.
-
-**Requirement:**
-- You must preserve the original copyright notice.
-- You must mention that your project is based on Chrysalis OS.
-
-Other than that — **full control is yours**.
-
----
-
-## Kernel Modding Guidelines
-
-### Scheduling & Context Switching
-
-If you want real preemptive multitasking:
-
-- Implement a robust context switch routine:
-  - Save/restore full CPU state (general registers + EFLAGS).
-  - A minimal `mov esp` + `ret` approach is fragile.
-- Perform scheduling from a timer IRQ (PIT or HPET).
-- Ensure safe stack handling for kernel and user tasks.
-
-**Tip:**  
-Create a small switch test without interrupts first, then move to IRQ-driven scheduling.
+// 3. Add to command_table[]:
+Command command_table[] = {
+    ...
+    {"hello", wrap_cmd_hello},
+    ...
+};
+```
 
 ---
 
-### Interrupt Safety
+## 🔌 System Calls: Extending the API
 
-To avoid catastrophic crashes:
+Syscalls allow user-mode programs (like `.petal` apps) to talk to the kernel.
 
-- Always install a **double-fault handler**.
-- On double-fault:
-  - Print debug info (serial preferred).
-  - Halt safely instead of letting the CPU triple-fault.
-- A triple-fault causes a reset and is not recoverable.
+1. Add a new ID in `os/kernel/include/chrysalis/syscall_nums.h`.
+2. Implement the logic in `os/kernel/arch/i386/syscall_dispatch.cpp`.
 
----
+### Example Snippet: `SYS_GET_TICKS`
 
-### Diagnostics & Debugging
+```cpp
+// 1. syscall_nums.h
+#define SYS_GET_TICKS 40
 
-Strongly recommended practices:
-
-- Keep **serial logging enabled** in early boot.
-- Log every critical subsystem init.
-- Use VM snapshots before enabling experimental features.
-- Validate new subsystems in isolation.
-
-Serial logs save lives.
+// 2. syscall_dispatch.cpp
+case SYS_GET_TICKS:
+    return (int)timer_get_ticks();
+```
 
 ---
 
-## UI / WM / FlyUI Modding
+## 🎨 UI Modding: FlyUI Widgets & Apps
 
-The UI stack is intentionally modular:
+The **FlyUI** framework (in `os/kernel/ui/flyui/`) is used for all graphical elements.
 
-- `kernel/ui/compositor` – pixel composition
-- `kernel/ui/wm` – window management
-- `kernel/ui/flyui` – GUI toolkit
+### Creating a Simple Window
 
-You may:
-- Replace FlyUI entirely
-- Write a new WM
-- Build text, hybrid, or full graphical systems
-- Implement theme engines or scripting layers
+```cpp
+void my_app_init() {
+    surface_t* surf = surface_create(300, 200);
+    window_t* win = wm_create_window(surf, 100, 100);
+    wm_set_title(win, "My Modded App");
+    
+    // Draw a button
+    fly_draw_rect_fill(surf, 10, 10, 80, 30, color_grey);
+    fly_draw_text(surf, 15, 15, "Click Me", color_white);
+    
+    wm_mark_dirty();
+}
+```
 
-No UI assumptions are enforced by the kernel.
+### Changing Themes
+
+Themes are strictly defined in `os/kernel/ui/flyui/theme.c`. You can modify the `default_theme` structure to change the entire system's look (colors for title bars, backgrounds, and text).
 
 ---
 
-## Stability Expectations
+## 💿 Installer Modding
 
-- This is **not a stable ABI project**.
-- Kernel interfaces may change.
-- Modders are expected to maintain their forks.
+The installer is a separate binary located in `/installer`. It uses a custom **Blue Screen** text UI.
 
-This is freedom by design.
+- Modifying `installer/installer.cpp` allows you to change the installation routine (partitioning, file copying).
+- Modifying `installer/stubs.cpp` changes the low-level VGA text output behavior.
+
+---
+
+## 🛡️ Best Practices
+
+- **Serial Logs**: Use `serial("[TAG] Message\n")` for debugging. It works even when the VGA/GUI crashes.
+- **Memory**: Always use `kmalloc`/`kfree` for dynamic objects.
+- **Header Alingment**: If you modify `multiboot2_header.c`, ensure structures are packed and 8-byte aligned.
 
 ---
 
 ## Final Note
 
-Chrysalis OS exists to be transformed.
-
 If you break it — you learned something.  
 If you improve it — share it.  
-If you fork it — own it.
-
-Happy hacking.
+**Happy hacking!**
