@@ -440,8 +440,11 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
                          'r', 'y', 's', 'a', 'l', 'i', 's', 0};
   char grub_path[11] = {'/', 'b', 'o', 'o', 't', '/', 'g', 'r', 'u', 'b', 0};
   char system_path[8] = {'/', 's', 'y', 's', 't', 'e', 'm', 0};
-  char icons_dir[14] = {'/', 's', 'y', 's', 't', 'e', 'm',
-                        '/', 'i', 'c', 'o', 'n', 's', 0};
+  char themes_dir[18] = {'/', 'b', 'o', 'o', 't', '/', 'g', 'r', 'u',
+                         'b', '/', 't', 'h', 'e', 'm', 'e', 's', 0};
+  char theme_dir[28] = {'/', 'b', 'o', 'o', 't', '/', 'g', 'r', 'u', 'b',
+                        '/', 't', 'h', 'e', 'm', 'e', 's', '/', 'c', 'h',
+                        'r', 'y', 's', 'a', 'l', 'i', 's', 0};
 
   int mr = fat32_create_directory_verified(boot_path, 1);
   if (mr != 0 && !upgrade_mode) {
@@ -462,10 +465,14 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   if (mr != 0 && !upgrade_mode) {
     serial("[INSTALLER] WARN: mkdir /system failed (err=%d), continuing\n", mr);
   }
-  mr = fat32_create_directory_verified(icons_dir, 1);
+  mr = fat32_create_directory_verified(themes_dir, 1);
+  if (mr != 0 && !upgrade_mode) {
+    serial("[INSTALLER] WARN: mkdir /boot/grub/themes failed (err=%d)\n", mr);
+  }
+  mr = fat32_create_directory_verified(theme_dir, 1);
   if (mr != 0 && !upgrade_mode) {
     serial(
-        "[INSTALLER] WARN: mkdir /system/icons failed (err=%d), continuing\n",
+        "[INSTALLER] WARN: mkdir /boot/grub/themes/chrysalis failed (err=%d)\n",
         mr);
   }
 
@@ -480,6 +487,12 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   size_t core_img_size = 0;
   void *icon_data[ICON_COUNT] = {0};
   size_t icon_sizes[ICON_COUNT] = {0};
+  void *theme_txt_data = NULL;
+  size_t theme_txt_size = 0;
+  void *bg_tga_data = NULL;
+  size_t bg_tga_size = 0;
+  void *sel_tga_data = NULL;
+  size_t sel_tga_size = 0;
 
   /* Scan multidoob tags (parsed manually here as we need raw addresses) */
   struct multiboot2_tag *tag = (struct multiboot2_tag *)(uintptr_t)(addr + 8);
@@ -522,6 +535,18 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
           core_img = (void *)(uintptr_t)mod->mod_start;
           core_img_size = mod->mod_end - mod->mod_start;
           serial("[INSTALLER] Assigned to core.img\n");
+        } else if (strcmp(mod_name, "theme.txt") == 0) {
+          theme_txt_data = (void *)(uintptr_t)mod->mod_start;
+          theme_txt_size = mod->mod_end - mod->mod_start;
+          serial("[INSTALLER] Assigned to theme.txt\n");
+        } else if (strcmp(mod_name, "background.tga") == 0) {
+          bg_tga_data = (void *)(uintptr_t)mod->mod_start;
+          bg_tga_size = mod->mod_end - mod->mod_start;
+          serial("[INSTALLER] Assigned to background.tga\n");
+        } else if (strcmp(mod_name, "select_c.tga") == 0) {
+          sel_tga_data = (void *)(uintptr_t)mod->mod_start;
+          sel_tga_size = mod->mod_end - mod->mod_start;
+          serial("[INSTALLER] Assigned to select_c.tga\n");
         } else {
           /* Try BMP icons */
           for (int i = 0; i < ICON_COUNT; i++) {
@@ -571,11 +596,47 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
          (int)core_img_size);
   write_sectors(1, core_img, (uint32_t)core_img_size);
 
-  /* 5. Write GRUB config early */
-  const char *grub_cfg = "set timeout=3\n"
+  /* 5. Write GRUB config */
+  const char *grub_cfg = "# Load graphical modules\n"
+                         "insmod png\n"
+                         "insmod tga\n"
+                         "insmod jpeg\n"
+                         "insmod font\n"
+                         "insmod gfxterm\n"
+                         "insmod vbe\n"
+                         "insmod vga\n"
+                         "insmod all_video\n"
+                         "\n"
+                         "# Set graphics mode\n"
+                         "set gfxmode=1024x768,800x600,auto\n"
+                         "set gfxpayload=keep\n"
+                         "\n"
+                         "# Enable graphical terminal\n"
+                         "terminal_output gfxterm\n"
+                         "\n"
+                         "# Set theme\n"
+                         "set theme=/boot/grub/themes/chrysalis/theme.txt\n"
+                         "\n"
+                         "set timeout=5\n"
                          "set default=0\n"
+                         "\n"
                          "menuentry \"Chrysalis OS\" {\n"
                          "  multiboot2 /boot/chrysalis/kernel.bin\n"
+                         "  module2 /system/icons/start.bmp start.bmp\n"
+                         "  module2 /system/icons/term.bmp term.bmp\n"
+                         "  module2 /system/icons/files.bmp files.bmp\n"
+                         "  module2 /system/icons/img.bmp img.bmp\n"
+                         "  module2 /system/icons/note.bmp note.bmp\n"
+                         "  module2 /system/icons/paint.bmp paint.bmp\n"
+                         "  module2 /system/icons/calc.bmp calc.bmp\n"
+                         "  module2 /system/icons/clock.bmp clock.bmp\n"
+                         "  module2 /system/icons/task.bmp task.bmp\n"
+                         "  module2 /system/icons/info.bmp info.bmp\n"
+                         "  module2 /system/icons/3D.bmp 3D.bmp\n"
+                         "  module2 /system/icons/mine.bmp mine.bmp\n"
+                         "  module2 /system/icons/net.bmp net.bmp\n"
+                         "  module2 /system/icons/x0.bmp x0.bmp\n"
+                         "  module2 /system/icons/run.bmp run.bmp\n"
                          "  boot\n"
                          "}\n"
                          "menuentry \"Chrysalis OS (PIC Safe)\" {\n"
@@ -591,6 +652,23 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   serial("[INSTALLER] Copying core.img to /boot/grub/core.img...\n");
   fat32_create_file_verified("/boot/grub/core.img", core_img,
                              (uint32_t)core_img_size, 1);
+
+  /* Write theme files */
+  if (theme_txt_data && theme_txt_size > 0) {
+    serial("[INSTALLER] Installing theme.txt...\n");
+    fat32_create_file_verified("/boot/grub/themes/chrysalis/theme.txt",
+                               theme_txt_data, (uint32_t)theme_txt_size, 1);
+  }
+  if (bg_tga_data && bg_tga_size > 0) {
+    serial("[INSTALLER] Installing background.tga...\n");
+    fat32_create_file_verified("/boot/grub/themes/chrysalis/background.tga",
+                               bg_tga_data, (uint32_t)bg_tga_size, 1);
+  }
+  if (sel_tga_data && sel_tga_size > 0) {
+    serial("[INSTALLER] Installing select_c.tga...\n");
+    fat32_create_file_verified("/boot/grub/themes/chrysalis/select_c.tga",
+                               sel_tga_data, (uint32_t)sel_tga_size, 1);
+  }
 
   /* 6. Install Kernel (chunked) */
   if (kernel_data && kernel_size > 0) {

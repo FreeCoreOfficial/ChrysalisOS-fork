@@ -1,0 +1,75 @@
+# Chrysalis OS GRUB Theme
+# Modern, premium boot menu theme
+
+# General Settings
+title-text: ""
+desktop-image: "background.tga"
+desktop-color: "#050510"
+
+# Boot Menu
++ boot_menu {
+  left = 20%
+  top = 40%
+  width = 60%
+  height = 40%
+  item_font = "Fixed 14"
+  item_color = "#b0b0e0"
+  selected_item_color = "#ffffff"
+  selected_item_pixmap_style = "select_*.tga"
+  item_height = 30
+  item_padding = 10
+  item_spacing = 8
+  icon_width = 32
+  icon_height = 32
+}
+
+# Title Bar (Chrysalis OS logo/text area)
++ label {
+  top = 18%
+  left = 0
+  width = 100%
+  height = 60
+  align = "center"
+  color = "#d0d0ff"
+  font = "Fixed Bold 20"
+  text = "CHRYSALIS OS"
+}
+
+# Version/Info Label
++ label {
+  top = 26%
+  left = 0
+  width = 100%
+  height = 30
+  align = "center"
+  color = "#7070a0"
+  font = "Fixed 12"
+  text = "Installer v0.2.1"
+}
+
+# Progress Bar (for timeout)
++ progress_bar {
+  id = "__timeout__"
+  left = 30%
+  top = 82%
+  height = 20
+  width = 40%
+  font = "Fixed 10"
+  text_color = "#ffffff"
+  fg_color = "#4040ff"
+  bg_color = "#101030"
+  border_color = "#303080"
+  text = "Booting in %d seconds..."
+}
+
+# Footer
++ label {
+  top = 90%
+  left = 0
+  width = 100%
+  height = 20
+  align = "center"
+  color = "#505080"
+  font = "Fixed 10"
+  text = "Use UP/DOWN to select • ENTER to confirm"
+}

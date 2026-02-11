@@ -1,6 +1,8 @@
 KERNEL_CODENAME = "mosquito-with-violin"
 LICENSE = "MIT"
 CHRYVER= "chrysver-0.2.1"
+GITHUB= "https://github.com/mihai209/chrysalisos"
+
 
 CXX = g++
 CC = gcc
@@ -954,7 +956,11 @@ iso: all iso/boot/grub/grub.cfg icons
 	@mkdir -p $(ISO)/boot/grub
 	@mkdir -p $(ISO)/system/pkg/installed
 	@cp kernel/chryspkg/catalog.json $(ISO)/system/pkg/catalog.json
-	grub-mkrescue -o chrysalis.iso $(ISO)
+	@echo "[GRUB] Installing theme..."
+	@mkdir -p $(ISO)/boot/grub/themes/chrysalis
+	@cp ../grub-theme/* $(ISO)/boot/grub/themes/chrysalis/ 2>/dev/null || true
+	@echo "[GRUB] Creating ISO with graphical modules..."
+	GRUB_FONT_PATH=/usr/share/grub grub-mkrescue -o chrysalis.iso --modules="gfxterm gfxmenu png tga jpeg font all_video" $(ISO) 2>&1 | grep -v "xorriso:"
 
 run: iso
 	qemu-system-x86_64 -cdrom chrysalis.iso -m 512
