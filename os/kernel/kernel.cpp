@@ -55,6 +55,7 @@
 #include "hardware/apic.h"
 #include "hardware/hpet.h"
 #include "hardware/pci.h"
+#include "include/types.h"
 #include "input/input.h"
 #include "input/keyboard_buffer.h"
 #include "interrupts/irq.h"
@@ -714,6 +715,10 @@ extern "C" void kernel_main(uint32_t magic, uint32_t addr) {
     disk_probe_partitions();
     fat_automount();
   }
+
+  /* Initialize Users (load from disk now that FS is ready) */
+  terminal_writestring("[kernel] initializing users...\n");
+  user_init();
 
   terminal_writestring("Sleeping 1 second...\n");
   sleep(1000);

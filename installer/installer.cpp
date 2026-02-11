@@ -13,6 +13,8 @@
 #include "../os/kernel/storage/ata.h"
 #include "../os/kernel/string.h"
 
+#include "../os/kernel/crypto/sha256.h"
+
 /* Local BPB struct for installer debug dump */
 struct fat_bpb {
   uint8_t jmp[3];
@@ -60,6 +62,9 @@ int fat32_read_directory(const char *path, fat_file_info_t *out,
 int32_t fat32_get_file_size(const char *path);
 void terminal_clear(void);
 void terminal_putentryat(char c, uint8_t color, int x, int y);
+int terminal_get_cursor_x(void);
+int terminal_get_cursor_y(void);
+void terminal_set_cursor_pos(int x, int y);
 extern void fat32_deduplicate_root();
 void terminal_putchar(char c);
 void terminal_set_color(uint8_t color);
@@ -206,6 +211,51 @@ static char kbd_getchar() {
   return 0;
 }
 
+/* Simple input helper */
+static void get_input(char *buf, int max) {
+  int i = 0;
+  while (i < max - 1) {
+    char c = kbd_getchar();
+    if (c == '\n') {
+      break;
+    } else if (c == '\b') {
+      if (i > 0) {
+        i--;
+        terminal_putentryat(' ', 0x1F, terminal_get_cursor_x() - 1,
+                            terminal_get_cursor_y());
+        terminal_set_cursor_pos(terminal_get_cursor_x() - 1,
+                                terminal_get_cursor_y());
+      }
+    } else if (c >= 32 && c <= 126) {
+      buf[i++] = c;
+      terminal_putchar(c);
+    }
+  }
+  buf[i] = 0;
+}
+
+static void get_password(char *buf, int max) {
+  int i = 0;
+  while (i < max - 1) {
+    char c = kbd_getchar();
+    if (c == '\n') {
+      break;
+    } else if (c == '\b') {
+      if (i > 0) {
+        i--;
+        terminal_putentryat(' ', 0x1F, terminal_get_cursor_x() - 1,
+                            terminal_get_cursor_y());
+        terminal_set_cursor_pos(terminal_get_cursor_x() - 1,
+                                terminal_get_cursor_y());
+      }
+    } else if (c >= 32 && c <= 126) {
+      buf[i++] = c;
+      terminal_putchar('*');
+    }
+  }
+  buf[i] = 0;
+}
+
 extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   (void)magic;
   kmalloc_init();
@@ -305,7 +355,45 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
            start_lba);
   }
 
-  serial("[INSTALLER] Mounting FAT32...\n");
+  /* 2.1 User Setup (New feature) */
+  char username[32];
+  char password[32];
+  char hostname[32];
+
+  terminal_clear();
+  terminal_set_color(0x70);
+  for (int x = 0; x < 80; x++)
+    terminal_putentryat(' ', 0x70, x, 0);
+  terminal_printf(
+      " Chrysalis OS - User Setup                                    "
+      "             ");
+  terminal_set_color(0x1F);
+  terminal_printf("\n\n");
+
+  terminal_printf("    Please create your user account:\n\n");
+
+  terminal_printf("    Username: ");
+  get_input(username, 32);
+  terminal_printf("\n");
+
+  terminal_printf("    Password: ");
+  get_password(password, 32);
+  terminal_printf("\n");
+
+  terminal_printf("    Device Name: ");
+  get_input(hostname, 32);
+  terminal_printf("\n");
+
+  serial("[INSTALLER] User setup: user='%s' host='%s'\n", username, hostname);
+
+  terminal_clear();
+  terminal_set_color(0x70);
+  for (int x = 0; x < 80; x++)
+    terminal_putentryat(' ', 0x70, x, 0);
+  terminal_printf(" Chrysalis OS %s in progress...",
+                  upgrade_mode ? "Upgrade" : "Installation");
+  terminal_set_color(0x1F);
+  terminal_printf("\n\n");
   if (fat32_init(0, start_lba) != 0) {
     serial("[INSTALLER] Search failed at LBA %d, checking LBA 0...\n",
            start_lba);
@@ -581,7 +669,74 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   }
   serial("[INSTALLER] Icons Installed OK (%d files).\n", icons_written);
 
-  /* /boot/grub listing disabled to reduce stack usage */
+  serial("[INSTALLER] Icons Installed OK (%d files).\n", icons_written);
+
+  /* 7.1 Create User Data */
+  char users_dir[32] = "/system/users";
+  fat32_create_directory_verified(users_dir, 1);
+
+  // char user_home[64];
+  // user_home[0] = 0; /* Just a placeholder */
+  // snprintf not available, manually build path
+  int ulen = strlen(username);
+  if (ulen > 0) {
+    char udir[64];
+    // /system/users/USERNAME
+    memcpy(udir, users_dir, 13);
+    udir[13] = '/';
+    memcpy(udir + 14, username, ulen);
+    udir[14 + ulen] = 0;
+
+    fat32_create_directory_verified(udir, 1);
+
+    // Hash password
+    uint8_t hash[32];
+    sha256_ctx_t sha;
+    sha256_init(&sha);
+    sha256_update(&sha, (const uint8_t *)password, strlen(password));
+    sha256_final(&sha, hash);
+
+    char hash_hex[65];
+    const char *hex = "0123456789abcdef";
+    for (int i = 0; i < 32; i++) {
+      hash_hex[i * 2] = hex[(hash[i] >> 4) & 0xF];
+      hash_hex[i * 2 + 1] = hex[hash[i] & 0xF];
+    }
+    hash_hex[64] = 0;
+
+    // Create data.json
+    char json_path[128];
+    memcpy(json_path, udir, strlen(udir));
+    memcpy(json_path + strlen(udir), "/data.json", 11); // 10 chars + null
+    json_path[strlen(udir) + 10] = 0;
+
+    // Build JSON content manually
+    char json_content[512];
+    // Format: {"username":"U","password":"H","device-name":"D"}
+    // We don't have sprintf, so we construct it carefully or use
+    // terminal_printf trick (no, cannot redirect). Let's implement a mini-copy.
+
+    // We will perform exact copy for simplicity
+    // Note: simplistic, assumes no escaping needed.
+    char *p = json_content;
+    auto append = [&](const char *s) {
+      while (*s)
+        *p++ = *s++;
+    };
+
+    append("{\n  \"username\": \"");
+    append(username);
+    append("\",\n  \"password\": \"");
+    append(hash_hex);
+    append("\",\n  \"device-name\": \"");
+    append(hostname);
+    append("\"\n}\n");
+    *p = 0;
+
+    fat32_create_file_verified(json_path, json_content,
+                               (uint32_t)(p - json_content), 1);
+    serial("[INSTALLER] User data written to %s\n", json_path);
+  }
 
   int32_t gsz = fat32_get_file_size("/boot/grub/grub.cfg");
   serial("[INSTALLER] grub.cfg size: %d\n", gsz);

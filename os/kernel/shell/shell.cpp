@@ -42,6 +42,10 @@ typedef struct {
   int hist_head;
   int hist_count;
   int hist_pos;
+
+  /* Login State */
+  int state; // 0=NORMAL, 1=LOGIN_USER, 2=LOGIN_PASS
+  char temp_user[32];
 } shell_ctx_t;
 
 static shell_ctx_t contexts[MAX_SHELL_CONTEXTS];
@@ -64,7 +68,14 @@ static void shell_render_line() {
   /* Render prompt and current line content */
   terminal_putchar('\r');
   shell_prompt();
-  terminal_writestring(ctx->line);
+
+  if (ctx->state == 2) {
+    /* Password Masking */
+    for (int i = 0; i < ctx->line_len; i++)
+      terminal_putchar('*');
+  } else {
+    terminal_writestring(ctx->line);
+  }
 
   /* Clear trailing garbage */
   if (ctx->last_rendered_len > ctx->line_len) {
@@ -232,6 +243,37 @@ static void shell_exec_single(char *cmd_str) {
 static void shell_exec_line() {
   shell_ctx_t *ctx = &contexts[active_ctx_id];
   terminal_putchar('\n');
+
+  if (ctx->state == 1) {
+    /* Got Username */
+    if (ctx->line_len > 0) {
+      strncpy(ctx->temp_user, ctx->line, 31);
+      ctx->temp_user[31] = 0;
+      ctx->state = 2; /* Move to Password */
+    }
+    ctx->line[0] = 0;
+    ctx->line_len = 0;
+    ctx->cursor = 0;
+    shell_prompt();
+    return;
+  }
+
+  if (ctx->state == 2) {
+    /* Got Password */
+    /* Try login */
+    if (user_switch(ctx->temp_user, ctx->line) == 0) {
+      ctx->state = 0; /* Success */
+      terminal_printf("Welcome, %s!\n", ctx->temp_user);
+    } else {
+      terminal_printf("Login incorrect.\n");
+      ctx->state = 1; /* Retry username */
+    }
+    ctx->line[0] = 0;
+    ctx->line_len = 0;
+    ctx->cursor = 0;
+    shell_prompt();
+    return;
+  }
 
   if (ctx->line_len == 0) {
     shell_prompt();
@@ -527,10 +569,15 @@ void shell_init_context(int id) {
   ctx->line[0] = 0;
   ctx->line_len = 0;
   ctx->cursor = 0;
-  ctx->hist_head = 0;
   ctx->hist_count = 0;
   ctx->hist_pos = -1;
   ctx->last_rendered_len = 0;
+
+  if (user_get_current() == 0) {
+    ctx->state = 1; /* Start with Login User */
+  } else {
+    ctx->state = 0;
+  }
 }
 
 void shell_handle_char(char c) {
@@ -632,11 +679,22 @@ void shell_set_active_context(int id) {
 }
 
 void shell_prompt(void) {
+  shell_ctx_t *ctx = &contexts[active_ctx_id];
+
+  if (ctx->state == 1) {
+    terminal_printf("login: ");
+    return;
+  }
+  if (ctx->state == 2) {
+    terminal_printf("password: ");
+    return;
+  }
+
   user_t *u = user_get_current();
   char cwd[64];
   cd_get_cwd(cwd, 64);
   if (u) {
-    terminal_printf("%s@chrysalis:%s$ ", u->name, cwd);
+    terminal_printf("%s@%s:%s$ ", u->name, u->hostname, cwd);
   } else {
     terminal_printf("guest@chrysalis:%s$ ", cwd);
   }

@@ -18,6 +18,35 @@ void terminal_putentryat(char c, uint8_t color, int x, int y) {
   VGA_MEMORY[index] = (uint16_t)c | (uint16_t)color << 8;
 }
 
+static inline void outb(uint16_t port, uint8_t val) {
+  asm volatile("outb %0, %1" : : "a"(val), "Nd"(port));
+}
+
+int terminal_get_cursor_x(void) { return terminal_column; }
+
+int terminal_get_cursor_y(void) { return terminal_row; }
+
+void terminal_set_cursor_pos(int x, int y) {
+  if (x < 0)
+    x = 0;
+  if (y < 0)
+    y = 0;
+  if (x >= VGA_WIDTH)
+    x = VGA_WIDTH - 1;
+  if (y >= VGA_HEIGHT)
+    y = VGA_HEIGHT - 1;
+
+  terminal_column = x;
+  terminal_row = y;
+
+  uint16_t pos = y * VGA_WIDTH + x;
+
+  outb(0x3D4, 0x0F);
+  outb(0x3D5, (uint8_t)(pos & 0xFF));
+  outb(0x3D4, 0x0E);
+  outb(0x3D5, (uint8_t)((pos >> 8) & 0xFF));
+}
+
 void terminal_scroll() {
   for (int y = 0; y < VGA_HEIGHT - 1; y++) {
     for (int x = 0; x < VGA_WIDTH; x++) {

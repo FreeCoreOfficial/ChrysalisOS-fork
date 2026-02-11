@@ -30,7 +30,8 @@ OBJS = \
 	../os/build/cmd_fat.o \
 	../os/build/serial.o \
 	../os/build/ramfs.o \
-	../os/build/string.o
+	../os/build/string.o \
+	$(BUILD)/sha256.o
 
 # Force looking for headers in OS include
 CFLAGS += -I../os/kernel/include
@@ -79,6 +80,11 @@ $(BUILD)/partitions_stub.o: partitions_stub.cpp
 $(BUILD)/stubs.o: stubs.cpp
 	@echo "[BUILD] stubs.cpp"
 	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# SHA256 implementation
+$(BUILD)/sha256.o: ../os/kernel/crypto/sha256.c
+	@echo "[BUILD] sha256.c"
+	$(CC) $(CFLAGS) -c $< -o $@
 
 # Kernel ELF binary
 $(BUILD)/installer.elf: $(OBJS)
