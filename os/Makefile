@@ -210,6 +210,7 @@ OBJS = \
 	$(BUILD)/ui/flyui/widgets/panel.o \
 	$(BUILD)/ui/flyui/widgets/image.o \
 	$(BUILD)/ui/flyui/widgets/icon_button.o \
+	$(BUILD)/ui/flyui/widgets/textbox.o \
 	$(BUILD)/toolchain/cc.o \
 	$(BUILD)/apps/app_manager.o \
 	$(BUILD)/apps/calculator_app.o \
@@ -276,6 +277,7 @@ dirs: $(BUILD)
 	mkdir -p ${BUILD}/crypto
 	mkdir -p ${BUILD}/chryspkg
 	mkdir -p ${BUILD}/user
+	mkdir -p ${BUILD}/storage/ahci
 	mkdir -p $(ISO)/system/apps
 
 
@@ -702,7 +704,7 @@ $(BUILD)/hardware/pci.o: kernel/hardware/pci.cpp
 $(BUILD)/hardware/acpi.o: kernel/hardware/acpi.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(BUILD)/arch/interrupts.o: kernel/arch/i386/interrupts.c
+$(BUILD)/arch/interrupts.o: kernel/arch/i386/interrupts.c | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/hardware/msr.o: kernel/hardware/msr.c | dirs
@@ -914,6 +916,10 @@ $(BUILD)/ui/flyui/widgets/image.o: kernel/ui/flyui/widgets/image.c | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/ui/flyui/widgets/icon_button.o: kernel/ui/flyui/widgets/icon_button.c | dirs
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/ui/flyui/widgets/textbox.o: kernel/ui/flyui/widgets/textbox.c | dirs
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 

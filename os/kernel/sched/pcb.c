@@ -17,13 +17,8 @@ static int current_tid = -1;
 
 void pcb_init_all(void) {
   for (int i = 0; i < MAX_TASKS; ++i) {
-    pcbs[i].kstack_ptr = 0;
-    pcbs[i].state = TASK_UNUSED;
+    zero_mem(&pcbs[i], sizeof(pcb_t));
     pcbs[i].pid = i;
-    pcbs[i].ticks_remaining = 0;
-    zero_mem(pcbs[i].kstack, KSTACK_SIZE);
-    for (int j = 0; j < MAX_FILES_PER_PROCESS; j++)
-      pcbs[i].files[j] = NULL;
   }
   current_tid = -1;
 }

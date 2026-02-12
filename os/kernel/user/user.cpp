@@ -112,7 +112,12 @@ int user_create(const char *name, uint32_t uid, const char *password,
   if (password)
     strncpy_k(u->password, password, sizeof(u->password));
   memset_k(u->hostname, 0, sizeof(u->hostname));
-  strncpy_k(u->hostname, "chrysalis", sizeof(u->hostname)); /* default */
+  user_t *current = user_get_current();
+  if (current) {
+    strncpy_k(u->hostname, current->hostname, sizeof(u->hostname));
+  } else {
+    strncpy_k(u->hostname, "chrysalis", sizeof(u->hostname)); /* default */
+  }
   memset_k(u->home, 0, sizeof(u->home));
   if (home)
     strncpy_k(u->home, home, sizeof(u->home));
@@ -359,4 +364,9 @@ void user_init(void) {
     // current_user = &users[0]; // Disable auto-login
     current_user = 0;
   }
+}
+
+extern "C" void user_logout(void) {
+  current_user = 0;
+  serial("[USER] Logged out current user\n");
 }

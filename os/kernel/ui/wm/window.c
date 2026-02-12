@@ -2,6 +2,8 @@
 #include "../../include/task.h"
 #include "../../mem/kmalloc.h"
 
+extern void serial(const char *fmt, ...);
+
 window_t *window_create(surface_t *surface, int x, int y) {
   window_t *win = (window_t *)kmalloc(sizeof(window_t));
   if (!win)
@@ -29,12 +31,19 @@ window_t *window_create(surface_t *surface, int x, int y) {
   /* Initialize owner */
   win->owner = 0;
 
+  serial("[WINDOW] created %x (surface=%x)\n", win, surface);
+
   return win;
 }
 
 void window_push_event(window_t *win, input_event_t *ev) {
-  if (!win || !win->owner)
+  if (!win)
     return;
+  if (!win->owner) {
+    // Only log once or for interesting events to avoid spam, but useful for
+    // debug serial("[WINDOW] skip push to %x: no owner\n", win);
+    return;
+  }
   task_push_event((task_t *)win->owner, ev);
 }
 

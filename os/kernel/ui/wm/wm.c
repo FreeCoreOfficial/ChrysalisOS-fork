@@ -1,5 +1,6 @@
 #include "wm.h"
 #include "../../mem/kmalloc.h"
+#include "../../sched/pcb.h"
 #include "../../string.h"
 #include "../../terminal.h"
 #include "../../video/compositor.h"
@@ -460,13 +461,19 @@ window_t *wm_create_window(surface_t *surface, int x, int y) {
 
   win->id = next_win_id++;
 
+  /* Link window to task for event routing */
+  pcb_t *cur = pcb_get_current();
+  if (cur && win) {
+    win->owner = cur;
+  }
+
   /* Add to list */
   win->next = windows_list;
   windows_list = win;
 
   rebuild_win_array();
 
-  serial("[WM] Window created id=%u\n", win->id);
+  serial("[WM] Window created id=%u owner=%x\n", win->id, win->owner);
 
   wm_hooks_t *hooks = wm_get_hooks();
   if (hooks && hooks->on_window_create) {
@@ -481,6 +488,8 @@ window_t *wm_create_window(surface_t *surface, int x, int y) {
 void wm_destroy_window(window_t *win) {
   if (!win)
     return;
+
+  serial("[WM] Destroying window id=%u\n", win->id);
 
   wm_chrome_t *chrome = wm_chrome_peek(win);
   if (chrome) {

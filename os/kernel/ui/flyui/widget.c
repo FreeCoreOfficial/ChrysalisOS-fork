@@ -20,6 +20,7 @@ fly_widget_t *fly_widget_create(void) {
   w->on_draw = NULL;
   w->on_event = NULL;
   w->visible = true;
+  w->focused = false;
 
   return w;
 }

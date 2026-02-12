@@ -28,6 +28,9 @@ int user_create(const char *name, uint32_t uid, const char *password,
 /* Switch current user (returns 0 ok, -1 fail) */
 int user_switch(const char *name, const char *password);
 
+/* Log out current user */
+void user_logout(void);
+
 #ifdef __cplusplus
 }
 #endif

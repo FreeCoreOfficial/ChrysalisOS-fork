@@ -108,18 +108,18 @@ static void handle_scancode(uint8_t scancode) {
     if (scancode == 0x48) { /* Arrow Up */
       if (!win_is_gui_running())
         fb_cons_scroll(-1);
-      input_push_key(0x11, true);
+      input_push_key(0x80, true);
       return;
     } else if (scancode == 0x50) { /* Arrow Down */
       if (!win_is_gui_running())
         fb_cons_scroll(1);
-      input_push_key(0x12, true);
+      input_push_key(0x81, true);
       return;
     } else if (scancode == 0x4B) { /* Arrow Left */
-      input_push_key(0x13, true);
+      input_push_key(0x82, true);
       return;
     } else if (scancode == 0x4D) { /* Arrow Right */
-      input_push_key(0x14, true);
+      input_push_key(0x83, true);
       return;
     } else if (scancode == 0x49) { /* Page Up */
       if (!win_is_gui_running())

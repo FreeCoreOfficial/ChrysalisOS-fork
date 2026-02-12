@@ -12,6 +12,7 @@ flyui_context_t *flyui_init(surface_t *surface) {
 
   ctx->surface = surface;
   ctx->root = NULL;
+  ctx->focused_widget = NULL;
 
   serial("[FLYUI] Initialized context for surface 0x%x\n", surface);
   return ctx;
@@ -90,9 +91,27 @@ bool flyui_dispatch_event(flyui_context_t *ctx, fly_event_t *event) {
   if (!ctx || !ctx->root)
     return false;
 
-  /* Simple dispatch: hit test for mouse events */
-  /* For now, we just dispatch to the target found by hit test */
+  /* Keyboard events always go to the focused widget */
+  if (event->type == FLY_EVENT_KEY_DOWN || event->type == FLY_EVENT_KEY_UP) {
+    if (ctx->focused_widget && ctx->focused_widget->on_event) {
+      return ctx->focused_widget->on_event(ctx->focused_widget, event);
+    }
+    return false;
+  }
+
+  /* Mouse events use hit testing */
   fly_widget_t *target = hit_test(ctx->root, event->mx, event->my, 0, 0);
+
+  if (event->type == FLY_EVENT_MOUSE_DOWN) {
+    if (ctx->focused_widget) {
+      ctx->focused_widget->focused = false;
+    }
+    ctx->focused_widget = target;
+    if (ctx->focused_widget) {
+      ctx->focused_widget->focused = true;
+    }
+  }
+
   if (target && target->on_event) {
     return target->on_event(target, event);
   }

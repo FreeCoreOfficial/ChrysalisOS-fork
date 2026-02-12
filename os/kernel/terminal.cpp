@@ -1,5 +1,6 @@
 // kernel/terminal/terminal.cpp
 #include "terminal.h"
+#include "arch/i386/io.h"
 #include "colors/cl.h"
 #include "drivers/serial.h"
 #include "string.h"
@@ -586,4 +587,27 @@ extern "C" int terminal_read_char(void) {
     return (unsigned char)input_buf[input_pos++];
   }
   return -1; /* EOF */
+}
+
+extern "C" void terminal_set_cursor_position(int x, int y) {
+  col = x;
+  row = y;
+
+  if (term_mode == TERMINAL_MODE_VGA) {
+    uint16_t pos = row * 80 + col;
+    outb(0x3D4, 0x0F);
+    outb(0x3D5, (uint8_t)(pos & 0xFF));
+    outb(0x3D4, 0x0E);
+    outb(0x3D5, (uint8_t)((pos >> 8) & 0xFF));
+  } else if (term_mode == TERMINAL_MODE_FB) {
+    fb_cons_set_cursor(x, y);
+  } else if (term_mode == TERMINAL_MODE_WINDOW) {
+    term_dirty = true;
+  }
+}
+
+extern "C" void terminal_set_cursor_visible(bool visible) {
+  if (term_mode == TERMINAL_MODE_FB) {
+    fb_cons_set_cursor_visible(visible);
+  }
 }

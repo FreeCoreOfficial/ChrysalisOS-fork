@@ -183,7 +183,13 @@ static int wrap_cmd_uptime(int argc, char **argv) {
 /* login and mem headers declare old-style; use old wrapper (if implementations
  * are actually new-style you'll need to migrate those implementations) */
 static int wrap_cmd_login(int argc, char **argv) {
-  return wrap_old_style(cmd_login_main, argc, argv);
+  return wrap_new_int(cmd_login_main, argc, argv);
+}
+static int wrap_cmd_add_user(int argc, char **argv) {
+  return wrap_new_int(cmd_add_user, argc, argv);
+}
+static int wrap_cmd_logoff(int argc, char **argv) {
+  return wrap_new_int(cmd_logoff, argc, argv);
 }
 static int wrap_cmd_mem(int argc, char **argv) {
   return wrap_old_style(cmd_mem, argc, argv);
@@ -364,6 +370,8 @@ Command command_table[] = {
     {"which", wrap_cmd_which},
     {"write", wrap_cmd_write},
     {"win", wrap_cmd_launch},
+    {"logoff", wrap_cmd_logoff},
+    {"add-user", wrap_cmd_add_user},
     {"vt", wrap_cmd_vt},
     {"cp", wrap_cmd_cp},
     {"mv", wrap_cmd_mv},

@@ -19,8 +19,10 @@
 #include "../ui/flyui/widgets/widgets.h"
 #include "../ui/wm/wm.h"
 #include "../usb/usb_core.h"
+#include "../user/user.h"
 #include "../video/compositor.h"
 #include "../video/gpu.h"
+#include "shutdown.h"
 
 extern "C" void serial(const char *fmt, ...);
 extern "C" void yield();
@@ -42,6 +44,11 @@ static window_t *net_win = NULL;
 static flyui_context_t *net_ctx = NULL;
 static window_t *start_menu_win = NULL;
 static flyui_context_t *start_menu_ctx = NULL;
+static window_t *login_win = NULL;
+static flyui_context_t *login_ctx = NULL;
+static fly_widget_t *login_user_box = NULL;
+static fly_widget_t *login_pass_box = NULL;
+static fly_widget_t *login_msg_label = NULL;
 static bool is_gui_running = false;
 static int taskbar_last_min = -1;
 static bool start_menu_just_toggled = false;
@@ -282,6 +289,121 @@ static void xo_btn_click(fly_widget_t *w) {
   tic_tac_toe_app_create();
 }
 
+static void create_desktop();
+static void create_taskbar();
+
+static void login_btn_click(fly_widget_t *w) {
+  (void)w;
+  const char *u = fly_textbox_get_text(login_user_box);
+  const char *p = fly_textbox_get_text(login_pass_box);
+
+  if (user_switch(u, p) == 0) {
+    serial("[LOGIN] GUI Login Success for '%s'\n", u);
+    wm_destroy_window(login_win);
+    login_win = NULL;
+    login_ctx = NULL;
+
+    create_desktop();
+    create_taskbar();
+    wm_set_reserved_bottom(TASKBAR_H);
+    wm_mark_dirty();
+  } else {
+    serial("[LOGIN] GUI Login Failed for '%s'\n", u);
+    fly_label_set_text(login_msg_label, "Login Failed!");
+    fly_textbox_set_text(login_pass_box, "");
+    wm_mark_dirty();
+  }
+}
+
+static void login_shutdown_click(fly_widget_t *w) {
+  (void)w;
+  cmd_shutdown(NULL);
+}
+
+static void create_login_screen() {
+  gpu_device_t *gpu = gpu_get_primary();
+  if (!gpu)
+    return;
+
+  int lw = 300;
+  int lh = 200;
+  int lx = (gpu->width - lw) / 2;
+  int ly = (gpu->height - lh) / 2;
+
+  surface_t *s = surface_create(lw, lh);
+  if (!s)
+    return;
+
+  login_win = wm_create_window(s, lx, ly);
+  wm_set_window_flags(login_win, WIN_FLAG_NO_DECOR | WIN_FLAG_NO_RESIZE);
+  wm_set_title(login_win, "Login");
+  login_win->w = lw;
+  login_win->h = lh;
+
+  login_ctx = flyui_init(login_win->surface);
+  fly_widget_t *root = fly_panel_create(lw, lh);
+  root->bg_color = 0xFFE0E0E0;
+  flyui_set_root(login_ctx, root);
+
+  /* Title */
+  fly_widget_t *lbl_title = fly_label_create("Chrysalis OS Login");
+  lbl_title->x = (lw - (18 * 8)) / 2;
+  lbl_title->y = 20;
+  fly_widget_add(root, lbl_title);
+
+  /* Username */
+  fly_widget_t *lbl_user = fly_label_create("Username:");
+  lbl_user->x = 40;
+  lbl_user->y = 60;
+  fly_widget_add(root, lbl_user);
+
+  login_user_box = fly_textbox_create(200, false);
+  login_user_box->x = 40;
+  login_user_box->y = 80;
+  fly_widget_add(root, login_user_box);
+
+  /* Password */
+  fly_widget_t *lbl_pass = fly_label_create("Password:");
+  lbl_pass->x = 40;
+  lbl_pass->y = 110;
+  fly_widget_add(root, lbl_pass);
+
+  login_pass_box = fly_textbox_create(200, true);
+  login_pass_box->x = 40;
+  login_pass_box->y = 130;
+  fly_widget_add(root, login_pass_box);
+
+  /* Message Label */
+  login_msg_label = fly_label_create("");
+  login_msg_label->x = 40;
+  login_msg_label->y = 160;
+  login_msg_label->fg_color = 0xFFFF0000;
+  fly_widget_add(root, login_msg_label);
+
+  /* Login Button */
+  fly_widget_t *btn_login = fly_button_create("Login");
+  btn_login->x = 180;
+  btn_login->y = 160;
+  btn_login->w = 80;
+  fly_button_set_callback(btn_login, login_btn_click);
+  fly_widget_add(root, btn_login);
+
+  /* Shutdown Button */
+  fly_widget_t *btn_sh = fly_button_create("Power");
+  btn_sh->x = 240;
+  btn_sh->y = 10;
+  btn_sh->w = 50;
+  btn_sh->h = 20;
+  fly_button_set_callback(btn_sh, login_shutdown_click);
+  fly_widget_add(root, btn_sh);
+
+  login_ctx->focused_widget = login_user_box;
+  if (login_user_box)
+    login_user_box->focused = true;
+
+  flyui_render(login_ctx);
+}
+
 /* Taskbar Clock Widget Draw */
 static void taskbar_clock_draw(fly_widget_t *w, surface_t *surf, int x, int y) {
   /* Background */
@@ -326,106 +448,10 @@ static void taskbar_clock_draw(fly_widget_t *w, surface_t *surf, int x, int y) {
   fly_draw_text(surf, dx, dy, date_str, 0xFF000000);
 }
 
-/* Popup Handlers */
-static bool popup_yes_event(fly_widget_t *w, fly_event_t *e) {
-  (void)w;
-  if (e->type == FLY_EVENT_MOUSE_UP) {
-    if (popup_win) {
-      wm_destroy_window(popup_win);
-      popup_win = NULL;
-      popup_ctx = NULL;
-    }
-    is_gui_running = false;
-    return true;
-  }
-  return false;
-}
-
-static bool popup_no_event(fly_widget_t *w, fly_event_t *e) {
-  (void)w;
-  if (e->type == FLY_EVENT_MOUSE_UP) {
-    if (popup_win) {
-      wm_destroy_window(popup_win);
-      popup_win = NULL;
-      popup_ctx = NULL;
-      wm_mark_dirty();
-    }
-    return true;
-  }
-  return false;
-}
-
 /* Run Button Handler */
 static void run_btn_click(fly_widget_t *w) {
   (void)w;
   run_dialog_app_create();
-}
-
-static void create_exit_popup() {
-  if (popup_win)
-    return;
-
-  fly_theme_t *th = theme_get();
-  int w = 320;
-  int h = 140;
-  surface_t *s = surface_create(w, h);
-  if (!s)
-    return;
-  surface_clear(s, th->win_bg);
-
-  /* Window Border */
-  fly_draw_rect_outline(s, 0, 0, w, h, th->color_hi_1);
-  fly_draw_rect_outline(s, 0, 0, w - 1, h - 1, th->color_lo_2);
-
-  popup_ctx = flyui_init(s);
-  fly_widget_t *root = fly_panel_create(w, h);
-  root->bg_color = th->win_bg;
-  flyui_set_root(popup_ctx, root);
-
-  /* Title/Question */
-  fly_widget_t *lbl = fly_label_create("Want to exit the GUI enviroment?");
-  lbl->x = 20;
-  lbl->y = 40;
-  fly_widget_add(root, lbl);
-
-  /* Yes Button */
-  fly_widget_t *btn_yes = fly_button_create("Yes");
-  btn_yes->x = 60;
-  btn_yes->y = 90;
-  btn_yes->w = 80;
-  btn_yes->h = 30;
-  btn_yes->on_event = popup_yes_event;
-  fly_widget_add(root, btn_yes);
-
-  /* No Button */
-  fly_widget_t *btn_no = fly_button_create("No");
-  btn_no->x = 180;
-  btn_no->y = 90;
-  btn_no->w = 80;
-  btn_no->h = 30;
-  btn_no->on_event = popup_no_event;
-  fly_widget_add(root, btn_no);
-
-  /* X Button */
-  fly_widget_t *btn_x = fly_button_create("X");
-  btn_x->x = w - 30;
-  btn_x->y = 5;
-  btn_x->w = 25;
-  btn_x->h = 25;
-  btn_x->on_event = popup_no_event;
-  fly_widget_add(root, btn_x);
-
-  flyui_render(popup_ctx);
-
-  gpu_device_t *gpu = gpu_get_primary();
-  int sx = (gpu->width - w) / 2;
-  int sy = (gpu->height - h) / 2;
-  popup_win = wm_create_window(s, sx, sy);
-  if (popup_win) {
-    wm_set_window_flags(popup_win, WIN_FLAG_NO_DECOR | WIN_FLAG_NO_RESIZE |
-                                       WIN_FLAG_NO_DRAG);
-    wm_set_title(popup_win, "Popup");
-  }
 }
 
 /* Network Popup Handlers */
@@ -621,12 +647,10 @@ static void net_btn_click(fly_widget_t *w) {
 /* Start Menu Implementation */
 static void start_menu_shutdown_click(fly_widget_t *w) {
   (void)w;
-  if (start_menu_win) {
-    wm_destroy_window(start_menu_win);
-    start_menu_win = NULL;
-    start_menu_ctx = NULL;
-  }
-  create_exit_popup();
+  serial("[WIN] Shutdown requested from Start Menu.\n");
+
+  // Power off the system directly
+  cmd_shutdown(nullptr);
 }
 
 static void create_start_menu() {
@@ -755,7 +779,7 @@ static void create_start_menu() {
   fly_widget_add(root, sep);
   y += 10;
 
-  btn = fly_button_create("Exit GUI");
+  btn = fly_button_create("Shutdown");
   btn->x = bx;
   btn->y = y;
   btn->w = bw;
@@ -786,11 +810,11 @@ static void start_btn_click(fly_widget_t *w) {
 static void desktop_draw(fly_widget_t *w, surface_t *surf, int x, int y) {
   (void)x;
   (void)y;
-  /* Draw a nice gradient or color background */
-  fly_draw_rect_fill(surf, 0, 0, w->w, w->h, 0xFF354B5E);
+  /* Dark aesthetic blue gradient */
+  fly_draw_rect_vgradient(surf, 0, 0, w->w, w->h, 0xFF435A6F, 0xFF202B36);
 
-  /* Draw subtle pattern or logo */
-  fly_draw_text(surf, w->w - 200, w->h - 40, "Chrysalis OS v0.1", 0x40FFFFFF);
+  /* Subtle watermark */
+  fly_draw_text(surf, w->w - 180, w->h - 30, "Chrysalis OS v0.2 beta", 0x20FFFFFF);
 }
 
 static void create_desktop() {
@@ -934,6 +958,45 @@ extern "C" int cmd_launch_exit(int argc, char **argv) {
   return 1;
 }
 
+extern "C" int cmd_logoff(int argc, char **argv) {
+  (void)argc;
+  (void)argv;
+
+  serial("[WIN] Logoff requested (GUI: %d)\n", is_gui_running);
+
+  if (is_gui_running) {
+    /* GUI Logoff Flow */
+    if (start_menu_win) {
+      wm_destroy_window(start_menu_win);
+      start_menu_win = NULL;
+    }
+    if (net_win) {
+      wm_destroy_window(net_win);
+      net_win = NULL;
+    }
+    if (taskbar_win) {
+      wm_destroy_window(taskbar_win);
+      taskbar_win = NULL;
+    }
+    if (desktop_win) {
+      wm_destroy_window(desktop_win);
+      desktop_win = NULL;
+    }
+    /* Note: Ideally we would notify apps to close, but for now we just clean up
+     * sys UI */
+
+    user_logout();
+    create_login_screen();
+  } else {
+    /* Text mode logoff is handled by shell logic if it detects user change,
+       but here we just ensure user is reset. */
+    user_logout();
+    terminal_printf("Logged out successfully.\n");
+  }
+
+  return 0;
+}
+
 extern "C" int cmd_launch(int argc, char **argv) {
   (void)argc;
   (void)argv;
@@ -970,10 +1033,14 @@ extern "C" int cmd_launch(int argc, char **argv) {
 
   app_manager_init();
 
-  /* 3. Create Desktop & Taskbar */
-  create_desktop();
-  create_taskbar();
-  wm_set_reserved_bottom(TASKBAR_H);
+  /* 3. Initial View: Login if not authenticated */
+  if (user_get_current() == NULL) {
+    create_login_screen();
+  } else {
+    create_desktop();
+    create_taskbar();
+    wm_set_reserved_bottom(TASKBAR_H);
+  }
 
   /* 4. Main GUI Loop */
   input_event_t ev;
@@ -1035,8 +1102,7 @@ extern "C" int cmd_launch(int argc, char **argv) {
           is_gui_running = false;
         }
 
-        /* Route keyboard to Shell if it's active and focused (or if progman
-         * isn't focused) */
+        /* Route keyboard to Focused Window */
         window_t *focused = wm_get_focused();
         if (focused == shell_get_window()) {
           shell_handle_char((char)ev.keycode);
@@ -1044,6 +1110,13 @@ extern "C" int cmd_launch(int argc, char **argv) {
           notepad_app_handle_key((char)ev.keycode);
         } else if (focused == run_dialog_app_get_window()) {
           run_dialog_app_handle_key((char)ev.keycode);
+        } else if (focused == login_win && login_ctx) {
+          fly_event_t fev;
+          fev.type = FLY_EVENT_KEY_DOWN;
+          fev.keycode = ev.keycode;
+          flyui_dispatch_event(login_ctx, &fev);
+          flyui_render(login_ctx);
+          wm_mark_dirty();
         } else if (focused) {
           /* Route to standalone app via window queue */
           window_push_event(focused, &ev);
@@ -1148,205 +1221,81 @@ extern "C" int cmd_launch(int argc, char **argv) {
           }
         }
 
-        /* 3.1 Dispatch to Clock App */
-        if (target == clock_app_get_window()) {
+        /* 3. Dispatch Mouse Events */
+
+        /* 3.1 Apps */
+        if (target == clock_app_get_window())
           clock_app_handle_event(&ev);
-        }
-
-        /* 3.2 Dispatch to Shell Window */
         if (target == shell_get_window()) {
-          if (shell_handle_event(&ev)) {
-            target = NULL; /* Window destroyed */
-          }
+          if (shell_handle_event(&ev))
+            target = NULL;
         }
-
-        /* 3.3 Dispatch to Calculator */
-        if (target == calculator_app_get_window()) {
+        if (target == calculator_app_get_window())
           calculator_app_handle_event(&ev);
-        }
-
-        /* 3.4 Dispatch to Notepad */
-        if (target == notepad_app_get_window()) {
+        if (target == notepad_app_get_window())
           notepad_app_handle_event(&ev);
-        }
-
-        /* 3.5 Dispatch to Calendar */
-        if (target == calendar_app_get_window()) {
+        if (target == calendar_app_get_window())
           calendar_app_handle_event(&ev);
-        }
-
-        /* 3.6 Dispatch to File Manager */
-        if (target == file_manager_app_get_window()) {
+        if (target == file_manager_app_get_window())
           file_manager_app_handle_event(&ev);
-        }
-
-        /* 3.7 Dispatch to Image Viewer */
-        if (target == image_viewer_app_get_window()) {
+        if (target == image_viewer_app_get_window())
           image_viewer_app_handle_event(&ev);
-        }
-
-        /* 3.8 Dispatch to SysInfo */
-        if (target == sysinfo_app_get_window()) {
+        if (target == sysinfo_app_get_window())
           sysinfo_app_handle_event(&ev);
-        }
-
-        /* 3.9 Dispatch to Run Dialog */
-        if (target == run_dialog_app_get_window()) {
+        if (target == run_dialog_app_get_window())
           run_dialog_app_handle_event(&ev);
-        }
-
-        /* 3.10 Dispatch to Task Manager */
-        if (target == task_manager_app_get_window()) {
+        if (target == task_manager_app_get_window())
           task_manager_app_handle_event(&ev);
-        }
-
-        /* 3.11 Dispatch to Paint */
-        if (target == paint_app_get_window()) {
+        if (target == paint_app_get_window())
           paint_app_handle_event(&ev);
-        }
-
-        /* 3.12 Dispatch to Demo 3D */
-        if (target == demo3d_app_get_window()) {
+        if (target == demo3d_app_get_window())
           demo3d_app_handle_event(&ev);
-        }
-
-        /* 3.14 Dispatch to Minesweeper */
-        if (target == minesweeper_app_get_window()) {
+        if (target == minesweeper_app_get_window())
           minesweeper_app_handle_event(&ev);
-        }
-
-        /* 3.15 Dispatch to Tic Tac Toe */
-        if (target == tic_tac_toe_app_get_window()) {
+        if (target == tic_tac_toe_app_get_window())
           tic_tac_toe_app_handle_event(&ev);
-        }
 
-        /* 3.6 Dispatch to Popup */
-        if (target == popup_win && popup_ctx) {
-          fly_event_t fev;
-          fev.mx = ev.mouse_x - popup_win->x;
-          fev.my = ev.mouse_y - popup_win->y;
-          fev.keycode = 0;
-          fev.type = FLY_EVENT_NONE;
+        /* 3.2 FlyUI based windows (Login, Net, Start, Popups) */
+        struct {
+          void operator()(window_t *win, flyui_context_t *ctx,
+                          input_event_t &ev) {
+            if (win && ctx) {
+              fly_event_t fev;
+              fev.mx = ev.mouse_x - win->x;
+              fev.my = ev.mouse_y - win->y;
+              fev.keycode = 0;
+              fev.type = FLY_EVENT_NONE;
+              if (ev.type == INPUT_MOUSE_MOVE)
+                fev.type = FLY_EVENT_MOUSE_MOVE;
+              else if (ev.type == INPUT_MOUSE_CLICK)
+                fev.type =
+                    ev.pressed ? FLY_EVENT_MOUSE_DOWN : FLY_EVENT_MOUSE_UP;
 
-          if (ev.type == INPUT_MOUSE_MOVE) {
-            fev.type = FLY_EVENT_MOUSE_MOVE;
-          } else if (ev.type == INPUT_MOUSE_CLICK) {
-            fev.type = ev.pressed ? FLY_EVENT_MOUSE_DOWN : FLY_EVENT_MOUSE_UP;
-          }
-
-          if (fev.type != FLY_EVENT_NONE) {
-            flyui_dispatch_event(popup_ctx, &fev);
-            if (fev.type != FLY_EVENT_MOUSE_MOVE) {
-              flyui_render(popup_ctx);
-              wm_mark_dirty();
+              if (fev.type != FLY_EVENT_NONE) {
+                flyui_dispatch_event(ctx, &fev);
+                if (fev.type != FLY_EVENT_MOUSE_MOVE) {
+                  flyui_render(ctx);
+                  wm_mark_dirty();
+                }
+              }
             }
           }
-        }
+        } dispatch_flyui_fn;
 
-        /* 3.15 Dispatch to Net Popup */
-        if (target == net_win && net_ctx) {
-          fly_event_t fev;
-          fev.mx = ev.mouse_x - net_win->x;
-          fev.my = ev.mouse_y - net_win->y;
-          fev.keycode = 0;
-          fev.type = FLY_EVENT_NONE;
+        if (target == login_win)
+          dispatch_flyui_fn(login_win, login_ctx, ev);
+        if (target == popup_win)
+          dispatch_flyui_fn(popup_win, popup_ctx, ev);
+        if (target == net_win)
+          dispatch_flyui_fn(net_win, net_ctx, ev);
+        if (target == start_menu_win)
+          dispatch_flyui_fn(start_menu_win, start_menu_ctx, ev);
 
-          if (ev.type == INPUT_MOUSE_MOVE) {
-            fev.type = FLY_EVENT_MOUSE_MOVE;
-          } else if (ev.type == INPUT_MOUSE_CLICK) {
-            fev.type = ev.pressed ? FLY_EVENT_MOUSE_DOWN : FLY_EVENT_MOUSE_UP;
-          }
-
-          if (fev.type != FLY_EVENT_NONE) {
-            flyui_dispatch_event(net_ctx, &fev);
-            if (fev.type != FLY_EVENT_MOUSE_MOVE) {
-              flyui_render(net_ctx);
-              wm_mark_dirty();
-            }
-          }
-        }
-
-        /* 3.16 Dispatch to Start Menu */
-        if (target == start_menu_win && start_menu_ctx) {
-          fly_event_t fev;
-          fev.mx = ev.mouse_x - start_menu_win->x;
-          fev.my = ev.mouse_y - start_menu_win->y;
-          fev.keycode = 0;
-          fev.type = FLY_EVENT_NONE;
-
-          if (ev.type == INPUT_MOUSE_MOVE) {
-            fev.type = FLY_EVENT_MOUSE_MOVE;
-          } else if (ev.type == INPUT_MOUSE_CLICK) {
-            fev.type = ev.pressed ? FLY_EVENT_MOUSE_DOWN : FLY_EVENT_MOUSE_UP;
-          }
-
-          if (fev.type != FLY_EVENT_NONE) {
-            flyui_dispatch_event(start_menu_ctx, &fev);
-            if (fev.type != FLY_EVENT_MOUSE_MOVE) {
-              flyui_render(start_menu_ctx);
-              wm_mark_dirty();
-            }
-          }
-        }
-
-        /* 3. Dispatch to Taskbar (only if it's the target and we are NOT
-         * dragging) */
         if (target == taskbar_win && taskbar_ctx && !drag_win) {
-          fly_event_t fev;
-          fev.mx = ev.mouse_x - taskbar_win->x;
-          fev.my = ev.mouse_y - taskbar_win->y;
-          fev.keycode = 0;
-          fev.type = FLY_EVENT_NONE;
-
-          if (ev.type == INPUT_MOUSE_MOVE) {
-            fev.type = FLY_EVENT_MOUSE_MOVE;
-          } else if (ev.type == INPUT_MOUSE_CLICK) {
-            fev.type = ev.pressed ? FLY_EVENT_MOUSE_DOWN : FLY_EVENT_MOUSE_UP;
-          }
-
-          if (fev.type != FLY_EVENT_NONE) {
-            flyui_dispatch_event(taskbar_ctx, &fev);
-
-            /* Always update taskbar if it was the target */
-            flyui_render(taskbar_ctx);
-            wm_mark_dirty();
-          }
+          dispatch_flyui_fn(taskbar_win, taskbar_ctx, ev);
         }
-
-        /* 4. Dispatch to Desktop (if target and not dragging) */
         if (target == desktop_win && desktop_ctx && !drag_win) {
-          fly_event_t fev;
-          fev.mx = ev.mouse_x - desktop_win->x;
-          fev.my = ev.mouse_y - desktop_win->y;
-          fev.keycode = 0;
-          fev.type = FLY_EVENT_NONE;
-
-          if (ev.type == INPUT_MOUSE_MOVE) {
-            fev.type = FLY_EVENT_MOUSE_MOVE;
-          } else if (ev.type == INPUT_MOUSE_CLICK) {
-            fev.type = ev.pressed ? FLY_EVENT_MOUSE_DOWN : FLY_EVENT_MOUSE_UP;
-          }
-
-          if (fev.type != FLY_EVENT_NONE) {
-            flyui_dispatch_event(desktop_ctx, &fev);
-
-            /* Note: only render desktop FlyUI if it's NOT a move event
-               to avoid excessive draws, but WM is already dirty from move
-               above. */
-            if (fev.type != FLY_EVENT_MOUSE_MOVE) {
-              flyui_render(desktop_ctx);
-              wm_mark_dirty();
-            }
-          }
-        }
-
-        /* 5. Dispatch to standalone app via Window Queue (Fallthrough) */
-        if (target && target != taskbar_win && target != desktop_win) {
-          input_event_t win_ev = ev;
-          /* Translate to window-relative coordinates */
-          win_ev.mouse_x -= target->x;
-          win_ev.mouse_y -= target->y;
-          window_push_event(target, &win_ev);
+          dispatch_flyui_fn(desktop_win, desktop_ctx, ev);
         }
 
         /* Close start menu when clicking outside it */
@@ -1393,6 +1342,10 @@ extern "C" int cmd_launch(int argc, char **argv) {
     wm_destroy_window(desktop_win);
   desktop_win = NULL;
   desktop_ctx = NULL;
+  if (login_win)
+    wm_destroy_window(login_win);
+  login_win = NULL;
+  login_ctx = NULL;
 
   /* Dacă terminalul a fost deschis, îl închidem curat */
   if (shell_is_window_active()) {

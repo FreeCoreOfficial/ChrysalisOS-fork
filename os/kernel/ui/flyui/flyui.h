@@ -40,6 +40,7 @@ typedef struct fly_widget {
   uint32_t bg_color;
   uint32_t fg_color;
   bool visible;
+  bool focused;
 
   struct fly_widget *parent;
   struct fly_widget *first_child;
@@ -55,6 +56,7 @@ typedef struct fly_widget {
 typedef struct {
   surface_t *surface;
   fly_widget_t *root;
+  fly_widget_t *focused_widget;
 } flyui_context_t;
 
 /* Core API */

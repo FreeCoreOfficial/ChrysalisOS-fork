@@ -37,6 +37,7 @@
 #include "bootlogo/bootlogo.h"
 #include "cmds/disk.h"
 #include "cmds/fat.h"
+#include "cmds/win.h"
 #include "colors/cl.h"
 #include "detect/virtualbox.h"
 #include "drivers/audio/audio.h"
@@ -87,6 +88,7 @@
 #include "vt/vt.h"
 
 static bool g_force_pic = false;
+static bool g_boot_gui = false;
 
 static bool cmdline_has_token(const char *cmdline, const char *tok) {
   if (!cmdline || !tok)
@@ -116,6 +118,10 @@ static void parse_cmdline(const char *cmdline) {
       cmdline_has_token(cmdline, "noapic")) {
     g_force_pic = true;
     apic_set_forced_off(true);
+  }
+  if (cmdline_has_token(cmdline, "gui=1") ||
+      cmdline_has_token(cmdline, "boot=gui")) {
+    g_boot_gui = true;
   }
 }
 
@@ -854,6 +860,10 @@ extern "C" void kernel_main(uint32_t magic, uint32_t addr) {
   // If you want the shell to be preempted by tasks, move shell into its own
   // task and enable TASKS_ENABLED after implementing a safe switch_to.
   serial("[KERNEL] Entering main loop...\n");
+  if (g_boot_gui) {
+    serial("[KERNEL] Auto-booting into GUI mode...\n");
+    cmd_launch(0, NULL);
+  }
 
   /* Reprint shell prompt as screen might have been cleared or scrolled */
   shell_prompt();

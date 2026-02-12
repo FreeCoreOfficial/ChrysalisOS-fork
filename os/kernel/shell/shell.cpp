@@ -25,10 +25,10 @@
 #define KEY_ENTER '\n'
 #define KEY_BACKSPACE '\b'
 #define KEY_TAB '\t'
-#define KEY_UP 0x11
-#define KEY_DOWN 0x12
-#define KEY_LEFT 0x13
-#define KEY_RIGHT 0x14
+#define KEY_UP 0x80
+#define KEY_DOWN 0x81
+#define KEY_LEFT 0x82
+#define KEY_RIGHT 0x83
 #define KEY_CTRL_P 16 /* Up (Previous) */
 #define KEY_CTRL_N 14 /* Down (Next) */
 
@@ -616,25 +616,25 @@ void shell_handle_char(char c) {
     return;
   }
 
-  if (c == KEY_LEFT) {
+  if ((uint8_t)c == KEY_LEFT) {
     if (ctx->cursor > 0) {
       ctx->cursor--;
       shell_render_line();
     }
     return;
   }
-  if (c == KEY_RIGHT) {
+  if ((uint8_t)c == KEY_RIGHT) {
     if (ctx->cursor < ctx->line_len) {
       ctx->cursor++;
       shell_render_line();
     }
     return;
   }
-  if (c == KEY_UP) {
+  if ((uint8_t)c == KEY_UP) {
     shell_history_nav(1);
     return;
   }
-  if (c == KEY_DOWN) {
+  if ((uint8_t)c == KEY_DOWN) {
     shell_history_nav(-1);
     return;
   }

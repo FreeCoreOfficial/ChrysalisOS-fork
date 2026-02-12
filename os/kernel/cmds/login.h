@@ -4,7 +4,8 @@
 extern "C" {
 #endif
 
-void cmd_login_main(const char* args);
+int cmd_login_main(int argc, char **argv);
+int cmd_add_user(int argc, char **argv);
 
 #ifdef __cplusplus
 }
