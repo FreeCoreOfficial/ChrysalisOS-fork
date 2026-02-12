@@ -71,9 +71,10 @@ int toolchain_compile_and_run(const char *source) {
     if (!*p)
       break;
 
-    // print("...")
-    if (strncmp(p, "print(\"", 7) == 0) {
-      p += 7;
+    // print("...") or printf("...")
+    if (strncmp(p, "print(\"", 7) == 0 || strncmp(p, "printf(\"", 8) == 0) {
+      int skip = (strncmp(p, "printf(\"", 7) == 0) ? 8 : 7;
+      p += skip;
       const char *start = p;
       while (*p && *p != '\"')
         p++;

@@ -19,5 +19,7 @@ void serial(const char *fmt, ...);
 extern "C" void kernel_main(uint32_t magic, uint32_t addr) {
   serial_init();
   serial("[INSTALLER] kernel_main: magic=%x addr=%x\n", magic, addr);
+  serial("[INSTALLER] Starting Chrysalis OS Installer...\n");
+  serial("");
   installer_main(magic, addr);
 }

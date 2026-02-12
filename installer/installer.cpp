@@ -262,9 +262,28 @@ static void get_password(char *buf, int max) {
 
 static void recovery_shell() {
   terminal_clear();
+
+  // Try to mount FAT32 if not already done
+  serial("[RECOVERY] Attempting to mount filesystem...\n");
+  ata_init();
+  uint32_t start_lba = 2048;
+  if (fat32_init(0, start_lba) != 0) {
+    if (fat32_init(0, 0) != 0) {
+      serial("[RECOVERY] Failed to mount FAT32\n");
+      terminal_printf("WARN: Filesystem not mounted.\n");
+    } else {
+      fat32_set_mounted(0, 'a');
+      terminal_printf("Filesystem mounted at LBA 0\n");
+    }
+  } else {
+    fat32_set_mounted(start_lba, 'a');
+    terminal_printf("Filesystem mounted at LBA %d\n", start_lba);
+  }
+
   terminal_set_color(0x07); // Light Grey on Black
   terminal_printf("Chrysalis OS Recovery Shell\n");
-  terminal_printf("Commands: ls, cd, reboot, shutdown, exit\n\n");
+  terminal_printf(
+      "Commands: ls, cd, cat, reboot, shutdown, disk, free, exit\n\n");
 
   char buf[128];
   char *argv[16];
@@ -302,6 +321,36 @@ static void recovery_shell() {
         return;
       } else if (strcmp(argv[0], "ls") == 0) {
         cmd_ls(argc, argv);
+      } else if (strcmp(argv[0], "cat") == 0) {
+        // Simple cat implementation for recovery
+        if (argc < 2) {
+          terminal_printf("Usage: cat <file>\n");
+        } else {
+          int sz = fat32_get_file_size(argv[1]);
+          if (sz < 0) {
+            terminal_printf("File not found: %s\n", argv[1]);
+          } else {
+            if (sz > 16384)
+              sz = 16384; // Limit size
+            char *fbuf = (char *)kmalloc(sz + 1);
+            if (fbuf) {
+              fat32_read_file(argv[1], fbuf, sz);
+              fbuf[sz] = 0;
+              terminal_printf("%s\n", fbuf);
+              kfree(fbuf);
+            } else {
+              terminal_printf("OOM\n");
+            }
+          }
+        }
+      } else if (strcmp(argv[0], "disk") == 0) {
+        uint32_t cap = disk_get_capacity();
+        terminal_printf("Disk Capacity: %u sectors (%u MB)\n", cap,
+                        (cap * 512) / 1024 / 1024);
+      } else if (strcmp(argv[0], "free") == 0) {
+        // crude memory check since we don't have pmm here fully exported
+        terminal_printf(
+            "Installer Memory: kmalloc_simple used unknown bytes.\n");
       } else if (strcmp(argv[0], "cd") == 0) {
         cmd_cd(argc, argv);
       } else if (strcmp(argv[0], "reboot") == 0) {
@@ -312,6 +361,8 @@ static void recovery_shell() {
         terminal_printf("Available commands:\n");
         terminal_printf("  ls [dir]        - List directory\n");
         terminal_printf("  cd [dir]        - Change directory\n");
+        terminal_printf("  cat [file]      - Read file\n");
+        terminal_printf("  disk            - Show disk info\n");
         terminal_printf("  reboot          - Reboot system\n");
         terminal_printf("  shutdown        - Shutdown system\n");
         terminal_printf("  exit            - Return to installer\n");
@@ -970,8 +1021,7 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
 
     terminal_printf("    [M] Shutdown  - Safely turn off the computer.\n");
     terminal_printf("    [R] Reboot    - Restart to boot into Chrysalis OS.\n");
-    terminal_printf(
-        "    [S] Shell     - Drop into a minimal recovery shell.\n\n");
+    terminal_printf("    [J] Recovery  - Drop into recovery shell.\n\n");
 
     terminal_printf("\n\n\n\n\n\n");
 
@@ -979,7 +1029,7 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
     terminal_set_color(0x70);
     for (int x = 0; x < 80; x++)
       terminal_putentryat(' ', 0x70, x, 24);
-    terminal_printf(" [M,R,S] Select Action");
+    terminal_printf(" [M,R,J] Select Action");
     terminal_set_color(0x1F);
 
     bool back_to_menu = false;
@@ -993,48 +1043,8 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
       } else if (fc == 'r' || fc == 'R') {
         serial("[INSTALLER] Rebooting...\n");
         outb(0x64, 0xFE);
-      } else if (fc == 's' || fc == 'S') {
-        // Simple shell placeholder
-        terminal_clear();
-        terminal_set_color(0x07);
-        terminal_printf("Chrysalis OS Installer Minimal Recovery Shell\n");
-        terminal_printf(
-            "Type 'reboot' to restart, or 'exit' to return to menu.\n\n# ");
-
-        char line[64];
-        int pos = 0;
-        bool in_shell = true;
-        while (in_shell) {
-          char c = kbd_getchar();
-          if (c == '\n') {
-            line[pos] = 0;
-            terminal_printf("\n");
-            if (pos > 0) {
-              if (strcmp(line, "reboot") == 0)
-                outb(0x64, 0xFE);
-              else if (strcmp(line, "exit") == 0)
-                in_shell = false;
-              else if (strcmp(line, "help") == 0)
-                terminal_printf(
-                    "Available commands: help, reboot, exit, version\n");
-              else if (strcmp(line, "version") == 0)
-                terminal_printf("Chrysalis OS Installer v1.0 (Kernel 0.2)\n");
-              else
-                terminal_printf("Unknown command: %s\n", line);
-            }
-            if (in_shell)
-              terminal_printf("# ");
-            pos = 0;
-          } else if (c == '\b') {
-            if (pos > 0) {
-              pos--;
-              terminal_printf("\b \b");
-            }
-          } else if (c >= 32 && pos < 63) {
-            line[pos++] = c;
-            terminal_putchar(c);
-          }
-        }
+      } else if (fc == 'j' || fc == 'J') {
+        recovery_shell();
         back_to_menu = true;
       }
     }
