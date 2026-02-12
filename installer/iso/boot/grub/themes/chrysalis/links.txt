@@ -1,0 +1,2 @@
+boot-background = https://share.google/JEscdMOKT9uOXE5Gg
+select-c = gemini-content 

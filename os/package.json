@@ -46,7 +46,7 @@
     "run:debug": "qemu-system-i386 -cdrom chrysalis.iso -serial stdio -d int,cpu_reset",
     "run:gdb": "qemu-system-i386 -cdrom chrysalis.iso -s -S",
     "// --- Tools & Utilities --- //": "",
-    "grub-convert": "convert background.png -resize 1024x768! background.tga && convert select_c.png -resize 600x30! select_c.tga",
+    "grub-convert": "cd ../ && cd grub-theme && convert background.jpg -resize 1024x768! background.tga && convert select_c.png -resize 600x30! select_c.tga && cd .. && cd os",
     "disk:create": "qemu-img create -f raw hdd.img 2G",
     "disk:info": "qemu-img info hdd.img",
     "font:generate": "grub-mkfont -s 24 -o iso/boot/grub/unicode.pf2 /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
