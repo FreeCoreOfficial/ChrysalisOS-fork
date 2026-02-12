@@ -2,8 +2,12 @@
 #include <stdint.h>
 
 #include "../os/kernel/arch/i386/io.h" /* for outb */
-#include "../os/kernel/cmds/disk.h"    /* For disk_init, disk_read_sector etc */
+#include "../os/kernel/cmds/cd.h"
+#include "../os/kernel/cmds/disk.h" /* For disk_init, disk_read_sector etc */
 #include "../os/kernel/cmds/fat.h"
+#include "../os/kernel/cmds/ls.h"
+#include "../os/kernel/cmds/reboot.h"
+#include "../os/kernel/cmds/shutdown.h"
 #include "../os/kernel/drivers/serial.h"
 #include "../os/kernel/fs/fat/fat.h"
 #include "../os/kernel/fs/ramfs/ramfs.h"
@@ -256,6 +260,68 @@ static void get_password(char *buf, int max) {
   buf[i] = 0;
 }
 
+static void recovery_shell() {
+  terminal_clear();
+  terminal_set_color(0x07); // Light Grey on Black
+  terminal_printf("Chrysalis OS Recovery Shell\n");
+  terminal_printf("Commands: ls, cd, reboot, shutdown, exit\n\n");
+
+  char buf[128];
+  char *argv[16];
+
+  while (1) {
+    char cwd[256];
+    cd_get_cwd(cwd, 256);
+    terminal_printf("Shell:%s> ", cwd);
+
+    get_input(buf, 128);
+    terminal_printf("\n");
+
+    if (strlen(buf) == 0)
+      continue;
+
+    // Tokenize
+    int argc = 0;
+    char *p = buf;
+    while (*p) {
+      while (*p == ' ')
+        p++;
+      if (!*p)
+        break;
+      argv[argc++] = p;
+      while (*p && *p != ' ')
+        p++;
+      if (*p)
+        *p++ = 0;
+      if (argc >= 16)
+        break;
+    }
+
+    if (argc > 0) {
+      if (strcmp(argv[0], "exit") == 0) {
+        return;
+      } else if (strcmp(argv[0], "ls") == 0) {
+        cmd_ls(argc, argv);
+      } else if (strcmp(argv[0], "cd") == 0) {
+        cmd_cd(argc, argv);
+      } else if (strcmp(argv[0], "reboot") == 0) {
+        cmd_reboot(NULL);
+      } else if (strcmp(argv[0], "shutdown") == 0) {
+        cmd_shutdown(NULL);
+      } else if (strcmp(argv[0], "help") == 0) {
+        terminal_printf("Available commands:\n");
+        terminal_printf("  ls [dir]        - List directory\n");
+        terminal_printf("  cd [dir]        - Change directory\n");
+        terminal_printf("  reboot          - Reboot system\n");
+        terminal_printf("  shutdown        - Shutdown system\n");
+        terminal_printf("  exit            - Return to installer\n");
+      } else {
+        terminal_printf("Unknown command: %s\n", argv[0]);
+      }
+    }
+  }
+}
+
 extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   (void)magic;
   kmalloc_init();
@@ -296,20 +362,48 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   terminal_printf(
       "    [1] Fresh Install  - Wipes the disk and installs a new system.\n");
   terminal_printf("    [2] Upgrade        - Keeps your files and updates "
-                  "system components.\n\n");
-  terminal_printf("\n\n\n\n\n\n\n\n\n\n\n");
+                  "system components.\n");
+  terminal_printf("    [0] Shutdown       - Shuts down the system.\n");
+  terminal_printf("    [J] Recovery Shell - Opens a command shell.\n\n");
+  terminal_printf("\n\n\n\n\n\n\n\n\n");
 
   // Footer bar
   terminal_set_color(0x70);
   for (int x = 0; x < 80; x++)
     terminal_putentryat(' ', 0x70, x, 24);
-  terminal_printf(" [1,2] Select Option    [F3] Exit");
+  terminal_printf(" [1,2,0,J] Select Option    [F3] Exit");
 
   terminal_set_color(0x1F);
 
   char choice = 0;
-  while (choice != '1' && choice != '2') {
+  while (choice != '1' && choice != '2' && choice != '0' && choice != 'J' &&
+         choice != 'j') {
     choice = kbd_getchar();
+  }
+
+  if (choice == '0') {
+    serial("[INSTALLER] Shutting down...\n");
+    cmd_shutdown(NULL);
+    return;
+  }
+
+  if (choice == 'J' || choice == 'j') {
+    recovery_shell();
+    // After exit, restart main (recursive or loop? safer to just return to
+    // allow main loop if structure supports it, but here we are in main. Let's
+    // restart main logic by using a goto or loop.) Actually easier to just
+    // recursively call installer_main or jump to start. Jumping to start of
+    // installer_main is hard without a label. Let's just return, and in the
+    // loader we define what happens? No, the loader hangs. I should put the
+    // menu in a loop. For now, let's just loop back to menu by recursive call
+    // (stack depth is fine for a few tries) or better: refactor main to have a
+    // loop. Refactoring is cleaner. I will wrap the menu in a `while(true)`
+
+    // Since I can't easily refactor the whole function in this block,
+    // I will use `installer_main(magic, addr); return;` which is recursion.
+    // It's safe enough for a recovery shell option.
+    installer_main(magic, addr);
+    return;
   }
   serial("> Choice: %c selected.\n\n", choice);
 
@@ -440,6 +534,8 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
                          'r', 'y', 's', 'a', 'l', 'i', 's', 0};
   char grub_path[11] = {'/', 'b', 'o', 'o', 't', '/', 'g', 'r', 'u', 'b', 0};
   char system_path[8] = {'/', 's', 'y', 's', 't', 'e', 'm', 0};
+  char icons_dir[14] = {'/', 's', 'y', 's', 't', 'e', 'm',
+                        '/', 'i', 'c', 'o', 'n', 's', 0};
   char themes_dir[18] = {'/', 'b', 'o', 'o', 't', '/', 'g', 'r', 'u',
                          'b', '/', 't', 'h', 'e', 'm', 'e', 's', 0};
   char theme_dir[28] = {'/', 'b', 'o', 'o', 't', '/', 'g', 'r', 'u', 'b',
@@ -464,6 +560,10 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   mr = fat32_create_directory_verified(system_path, 1);
   if (mr != 0 && !upgrade_mode) {
     serial("[INSTALLER] WARN: mkdir /system failed (err=%d), continuing\n", mr);
+  }
+  mr = fat32_create_directory_verified(icons_dir, 1);
+  if (mr != 0 && !upgrade_mode) {
+    serial("[INSTALLER] WARN: mkdir /system/icons failed (err=%d)\n", mr);
   }
   mr = fat32_create_directory_verified(themes_dir, 1);
   if (mr != 0 && !upgrade_mode) {

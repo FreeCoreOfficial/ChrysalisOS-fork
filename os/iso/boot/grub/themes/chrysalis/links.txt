@@ -1,0 +1,4 @@
+boot-background = https://share.google/JEscdMOKT9uOXE5Gg
+select-c = gemini-content 
+resize tool = https://the-image-editor.com/
+convert png -> tga tool = https://www.freeconvert.com/png-to-tga

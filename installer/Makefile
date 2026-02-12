@@ -31,6 +31,10 @@ OBJS = \
 	../os/build/serial.o \
 	../os/build/ramfs.o \
 	../os/build/string.o \
+	$(BUILD)/cmd_ls.o \
+	$(BUILD)/cmd_cd.o \
+	$(BUILD)/cmd_reboot.o \
+	$(BUILD)/cmd_shutdown.o \
 	$(BUILD)/sha256.o
 
 # Force looking for headers in OS include
@@ -87,6 +91,27 @@ $(BUILD)/partitions_stub.o: partitions_stub.cpp
 $(BUILD)/stubs.o: stubs.cpp
 	@mkdir -p $(BUILD)
 	@echo "[BUILD] stubs.cpp"
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Local build of kernel commands for installer
+$(BUILD)/cmd_ls.o: ../os/kernel/cmds/ls.cpp
+	@mkdir -p $(BUILD)
+	@echo "[BUILD] cmd_ls.o"
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(BUILD)/cmd_cd.o: ../os/kernel/cmds/cd.cpp
+	@mkdir -p $(BUILD)
+	@echo "[BUILD] cmd_cd.o"
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(BUILD)/cmd_reboot.o: ../os/kernel/cmds/reboot.cpp
+	@mkdir -p $(BUILD)
+	@echo "[BUILD] cmd_reboot.o"
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(BUILD)/cmd_shutdown.o: ../os/kernel/cmds/shutdown.cpp
+	@mkdir -p $(BUILD)
+	@echo "[BUILD] cmd_shutdown.o"
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # SHA256 implementation
