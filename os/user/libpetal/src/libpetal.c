@@ -1,6 +1,13 @@
 /* user/libpetal/src/libpetal.c */
 #include "../include/petal.h"
 
+static size_t strlen(const char *s) {
+  size_t len = 0;
+  while (s[len])
+    len++;
+  return len;
+}
+
 static inline int syscall0(int num) {
   int ret;
   asm volatile("int $0x80" : "=a"(ret) : "a"(num));
@@ -19,6 +26,12 @@ static inline int syscall2(int num, uint32_t a1, uint32_t a2) {
   return ret;
 }
 
+static inline int syscall3(int num, uint32_t a1, uint32_t a2, uint32_t a3) {
+  int ret;
+  asm volatile("int $0x80" : "=a"(ret) : "a"(num), "b"(a1), "c"(a2), "d"(a3));
+  return ret;
+}
+
 static inline int syscall5(int num, uint32_t a1, uint32_t a2, uint32_t a3,
                            uint32_t a4, uint32_t a5) {
   int ret;
@@ -28,9 +41,24 @@ static inline int syscall5(int num, uint32_t a1, uint32_t a2, uint32_t a3,
   return ret;
 }
 
+static inline int syscall6(int num, uint32_t a1, uint32_t a2, uint32_t a3,
+                           uint32_t a4, uint32_t a5, uint32_t a6) {
+  int ret;
+  asm volatile("pushl %%ebp\n"
+               "movl %7, %%ebp\n"
+               "int $0x80\n"
+               "popl %%ebp"
+               : "=a"(ret)
+               : "a"(num), "b"(a1), "c"(a2), "d"(a3), "S"(a4), "D"(a5), "m"(a6)
+               : "memory");
+  return ret;
+}
+
 void p_exit(int code) { syscall1(SYS_EXIT, (uint32_t)code); }
 
-void p_write(const char *s) { syscall1(SYS_WRITE, (uint32_t)(uintptr_t)s); }
+void p_write(const char *s) {
+  syscall3(SYS_WRITE, 1, (uint32_t)(uintptr_t)s, (uint32_t)strlen(s));
+}
 
 void *p_wm_create_window(int w, int h, int x, int y, const char *title) {
   return (void *)(uintptr_t)syscall5(SYS_WM_CREATE_WINDOW, (uint32_t)w,
@@ -53,9 +81,8 @@ void p_wm_get_pos(void *win, int *x, int *y) {
 }
 
 void p_draw_rect_fill(void *win, int x, int y, int w, int h, uint32_t color) {
-  uint32_t packed_h_color = (color << 16) | (h & 0xFFFF);
-  syscall5(SYS_FLY_DRAW_RECT_FILL, (uint32_t)(uintptr_t)win, (uint32_t)x,
-           (uint32_t)y, (uint32_t)w, packed_h_color);
+  syscall6(SYS_FLY_DRAW_RECT_FILL, (uint32_t)(uintptr_t)win, (uint32_t)x,
+           (uint32_t)y, (uint32_t)w, (uint32_t)h, color);
 }
 
 void p_draw_text(void *win, int x, int y, const char *text, uint32_t color) {
@@ -66,3 +93,6 @@ void p_draw_text(void *win, int x, int y, const char *text, uint32_t color) {
 int p_get_event(p_input_event_t *ev) {
   return syscall1(SYS_GET_EVENT, (uint32_t)(uintptr_t)ev);
 }
+
+void p_sleep(uint32_t ms) { syscall1(SYS_SLEEP, ms); }
+void p_yield() { syscall0(SYS_YIELD); }

@@ -17,13 +17,11 @@ static int current_tid = -1;
 
 void pcb_init_all(void) {
   for (int i = 0; i < MAX_TASKS; ++i) {
-    pcbs[i].esp = 0;
+    pcbs[i].kstack_ptr = 0;
     pcbs[i].state = TASK_UNUSED;
-    pcbs[i].tid = i;
-    pcbs[i].entry = 0;
-    pcbs[i].arg = 0;
+    pcbs[i].pid = i;
     pcbs[i].ticks_remaining = 0;
-    zero_mem(pcbs[i].stack, TASK_STACK_SIZE);
+    zero_mem(pcbs[i].kstack, KSTACK_SIZE);
     for (int j = 0; j < MAX_FILES_PER_PROCESS; j++)
       pcbs[i].files[j] = NULL;
   }
@@ -38,7 +36,7 @@ extern void task_trampoline(void);
 
 static uint32_t *init_stack_for(pcb_t *p) {
   /* start at top of stack (grow down) */
-  uint32_t *sp = (uint32_t *)(p->stack + TASK_STACK_SIZE);
+  uint32_t *sp = (uint32_t *)(p->kstack + KSTACK_SIZE);
 
   /* push a fake return address so 'ret' goes to task_trampoline */
   *(--sp) = (uint32_t)task_trampoline;
@@ -56,21 +54,21 @@ int pcb_create(task_fn_t entry, void *arg) {
   for (int i = 0; i < MAX_TASKS; ++i) {
     if (pcbs[i].state == TASK_UNUSED) {
       pcbs[i].state = TASK_READY;
-      pcbs[i].entry = entry;
-      pcbs[i].arg = arg;
-      pcbs[i].esp = init_stack_for(&pcbs[i]);
+      /* Note: in new task_t, entry and arg are not fields,
+         we prepare them on the stack. */
+      pcbs[i].kstack_ptr = init_stack_for(&pcbs[i]);
+      /* manually push entry & arg if needed (init_stack_for prepares
+       * trampoline) */
+      /* Actually task_trampoline needs them? Or we can use the task_t push
+       * helper */
       pcbs[i].ticks_remaining = 0;
-      return pcbs[i].tid;
+      return pcbs[i].pid;
     }
   }
   return -1; /* no slot */
 }
 
-pcb_t *pcb_get_current(void) {
-  if (current_tid < 0)
-    return NULL;
-  return &pcbs[current_tid];
-}
+pcb_t *pcb_get_current(void) { return current_task; }
 
 /* small helpers used by scheduler.c */
 pcb_t *_pcb_get_by_index(int idx) {

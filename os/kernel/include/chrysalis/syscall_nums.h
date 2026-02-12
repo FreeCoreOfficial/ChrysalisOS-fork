@@ -27,5 +27,6 @@
 /* Event Syscalls */
 #define SYS_GET_EVENT 30
 #define SYS_SLEEP 31
+#define SYS_YIELD 32
 
 #endif

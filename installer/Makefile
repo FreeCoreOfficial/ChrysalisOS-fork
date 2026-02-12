@@ -128,11 +128,15 @@ $(BUILD)/installer.elf: $(OBJS)
 # ISO creation
 installer.iso: $(BUILD)/installer.elf
 	@echo "[ISO] Preparing assets..."
+	@mkdir -p $(ISO)/boot/chrysalis
+	@mkdir -p $(ISO)/boot/grub
 	@cp $(BUILD)/installer.elf $(ISO)/boot/
 	@# Copy Assets from Main OS Build
 	@if [ -f ../os/iso/boot/kernel.bin ]; then cp ../os/iso/boot/kernel.bin $(ISO)/boot/chrysalis/; else echo "WARNING: kernel.bin not found!"; fi
 	@mkdir -p $(ISO)/icons
 	@if [ -d ../os/iso/icons ]; then cp ../os/iso/icons/*.bmp $(ISO)/icons/; else echo "WARNING: icons bmp not found!"; fi
+	@mkdir -p $(ISO)/system/apps
+	@if [ -d ../os/iso/system/apps ]; then cp ../os/iso/system/apps/*.petal $(ISO)/system/apps/; else echo "WARNING: petal apps not found!"; fi
 	@# Build GRUB core image + include boot.img + embed config
 	@if [ -f /usr/lib/grub/i386-pc/boot.img ]; then cp /usr/lib/grub/i386-pc/boot.img $(ISO)/boot/grub/; else echo "WARNING: boot.img not found!"; fi
 	@echo 'search --file --set=root /boot/grub/grub.cfg' > $(ISO)/boot/grub/grub_embed.cfg
@@ -169,6 +173,9 @@ installer.iso: $(BUILD)/installer.elf
 	@echo '  module2 /icons/net.bmp net.bmp' >> $(ISO)/boot/grub/grub.cfg
 	@echo '  module2 /icons/x0.bmp x0.bmp' >> $(ISO)/boot/grub/grub.cfg
 	@echo '  module2 /icons/run.bmp run.bmp' >> $(ISO)/boot/grub/grub.cfg
+	@echo '  module2 /system/apps/calc.petal calc.petal' >> $(ISO)/boot/grub/grub.cfg
+	@echo '  module2 /system/apps/hello.petal hello.petal' >> $(ISO)/boot/grub/grub.cfg
+	@echo '  module2 /system/apps/clickme.petal clickme.petal' >> $(ISO)/boot/grub/grub.cfg
 	@echo '  module2 /boot/grub/boot.img boot.img' >> $(ISO)/boot/grub/grub.cfg
 	@echo '  module2 /boot/grub/core.img core.img' >> $(ISO)/boot/grub/grub.cfg
 	@echo '  module2 /boot/grub/themes/chrysalis/background.tga background.tga' >> $(ISO)/boot/grub/grub.cfg

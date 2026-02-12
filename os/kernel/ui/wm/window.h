@@ -6,6 +6,10 @@
 extern "C" {
 #endif
 
+#include "../../input/input.h"
+
+#define WINDOW_EVENT_QUEUE_SIZE 16
+
 typedef struct window {
   uint32_t id;
   surface_t *surface;
@@ -27,8 +31,14 @@ typedef struct window {
   void (*on_resize)(struct window *win);
   char title[32];
 
+  void *owner; /* pointer to task_t */
   struct window *next;
 } window_t;
+
+/* Helper to push event to window queue */
+void window_push_event(window_t *win, input_event_t *ev);
+/* Helper to pop event from window queue */
+int window_pop_event(window_t *win, input_event_t *ev);
 
 enum { WIN_STATE_NORMAL = 0, WIN_STATE_MAXIMIZED = 1, WIN_STATE_MINIMIZED = 2 };
 

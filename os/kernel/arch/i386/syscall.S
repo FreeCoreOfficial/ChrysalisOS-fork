@@ -6,7 +6,8 @@ extern syscall_dispatch
 section .text
 syscall_handler:
     cli
-    ; ABI: eax=num, ebx=arg1, ecx=arg2, edx=arg3, esi=arg4, edi=arg5
+    ; ABI: eax=num, ebx=arg1, ecx=arg2, edx=arg3, esi=arg4, edi=arg5, ebp=arg6
+    push ebp
     push edi
     push esi
     push edx
@@ -16,7 +17,7 @@ syscall_handler:
 
     call syscall_dispatch
 
-    add esp, 24
+    add esp, 28
 
     sti
     iretd

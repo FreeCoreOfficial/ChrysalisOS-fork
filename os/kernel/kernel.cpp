@@ -881,7 +881,7 @@ extern "C" void kernel_main(uint32_t magic, uint32_t addr) {
       }
     }
 
-    asm volatile("hlt"); // reduce power until next interrupt
+    yield(); // cooperative switch
   }
 }
 

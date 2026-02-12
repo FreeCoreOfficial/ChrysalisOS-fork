@@ -829,12 +829,17 @@ $(BUILD)/user/libpetal.o: user/libpetal/src/libpetal.c | dirs
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-PETAL_APPS_SRC = $(wildcard kernel/apps/*.cpp)
-PETAL_APPS = $(patsubst kernel/apps/%.cpp, $(ISO)/system/apps/%.petal, $(PETAL_APPS_SRC))
+PETAL_APPS_SRC = $(wildcard apps/*.cpp)
+PETAL_APPS = $(patsubst apps/%.cpp, $(ISO)/system/apps/%.petal, $(PETAL_APPS_SRC))
 
-$(ISO)/system/apps/%.petal: kernel/apps/%.cpp $(BUILD)/user/libpetal.o | dirs
+PETAL_CXXFLAGS = $(CXXFLAGS) -fno-pic -Iuser/libpetal/include
+PETAL_HEADERS = user/libpetal/include/petal.h
+PETAL_LDFLAGS = -m elf_i386 -static -T user/app.ld -e _start
+
+$(ISO)/system/apps/%.petal: apps/%.cpp $(BUILD)/user/libpetal.o $(PETAL_HEADERS) | dirs
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -static -nostdlib -e _start $< $(BUILD)/user/libpetal.o -o $@
+	$(CXX) $(PETAL_CXXFLAGS) -c $< -o $(BUILD)/apps/$*.o
+	$(LD) $(PETAL_LDFLAGS) $(BUILD)/apps/$*.o $(BUILD)/user/libpetal.o -o $@
 
 petal_apps: $(PETAL_APPS)
 

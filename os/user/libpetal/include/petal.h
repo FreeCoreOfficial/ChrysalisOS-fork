@@ -37,6 +37,9 @@ void p_draw_rect_fill(void *win, int x, int y, int w, int h, uint32_t color);
 void p_draw_text(void *win, int x, int y, const char *text, uint32_t color);
 int p_get_event(p_input_event_t *ev);
 
+void p_sleep(uint32_t ms);
+void p_yield();
+
 #ifdef __cplusplus
 }
 #endif

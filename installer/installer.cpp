@@ -100,6 +100,14 @@ static const char *g_icon_files[ICON_COUNT] = {
     "mine.bmp",  "net.bmp",   "x0.bmp",    "run.bmp",
 };
 
+/* Petal app filenames */
+#define PETAL_COUNT 3
+static const char *g_petal_files[PETAL_COUNT] = {
+    "calc.petal",
+    "hello.petal",
+    "clickme.petal",
+};
+
 static void normalize_module_name_len(const char *cmdline, size_t cmdline_len,
                                       char *out, size_t out_sz) {
   if (!out || out_sz == 0)
@@ -592,6 +600,8 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   char theme_dir[28] = {'/', 'b', 'o', 'o', 't', '/', 'g', 'r', 'u', 'b',
                         '/', 't', 'h', 'e', 'm', 'e', 's', '/', 'c', 'h',
                         'r', 'y', 's', 'a', 'l', 'i', 's', 0};
+  char apps_dir[13] = {'/', 's', 'y', 's', 't', 'e', 'm',
+                       '/', 'a', 'p', 'p', 's', 0};
 
   int mr = fat32_create_directory_verified(boot_path, 1);
   if (mr != 0 && !upgrade_mode) {
@@ -626,6 +636,10 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
         "[INSTALLER] WARN: mkdir /boot/grub/themes/chrysalis failed (err=%d)\n",
         mr);
   }
+  mr = fat32_create_directory_verified(apps_dir, 1);
+  if (mr != 0 && !upgrade_mode) {
+    serial("[INSTALLER] WARN: mkdir /system/apps failed (err=%d)\n", mr);
+  }
 
   /* Directory listings disabled to reduce stack usage and avoid instability */
 
@@ -644,6 +658,8 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   size_t bg_tga_size = 0;
   void *sel_tga_data = NULL;
   size_t sel_tga_size = 0;
+  void *petal_data[PETAL_COUNT] = {0};
+  size_t petal_sizes[PETAL_COUNT] = {0};
 
   /* Scan multidoob tags (parsed manually here as we need raw addresses) */
   struct multiboot2_tag *tag = (struct multiboot2_tag *)(uintptr_t)(addr + 8);
@@ -705,6 +721,15 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
               icon_data[i] = (void *)(uintptr_t)mod->mod_start;
               icon_sizes[i] = mod->mod_end - mod->mod_start;
               serial("[INSTALLER] Assigned to %s\n", g_icon_files[i]);
+              goto mod_done;
+            }
+          }
+          /* Try Petal apps */
+          for (int i = 0; i < PETAL_COUNT; i++) {
+            if (strcmp(mod_name, g_petal_files[i]) == 0) {
+              petal_data[i] = (void *)(uintptr_t)mod->mod_start;
+              petal_sizes[i] = mod->mod_end - mod->mod_start;
+              serial("[INSTALLER] Assigned to %s\n", g_petal_files[i]);
               goto mod_done;
             }
           }
@@ -904,6 +929,48 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   serial("[INSTALLER] Icons Installed OK (%d files).\n", icons_written);
 
   serial("[INSTALLER] Icons Installed OK (%d files).\n", icons_written);
+
+  /* 7.2 Install Petal Apps */
+  serial("[INSTALLER] Installing Petal Apps...\n");
+  int petals_written = 0;
+  for (int i = 0; i < PETAL_COUNT; i++) {
+    if (!petal_data[i] || petal_sizes[i] == 0)
+      continue;
+    char path[48];
+    /* "/system/apps/<name>" */
+    path[0] = '/';
+    path[1] = 's';
+    path[2] = 'y';
+    path[3] = 's';
+    path[4] = 't';
+    path[5] = 'e';
+    path[6] = 'm';
+    path[7] = '/';
+    path[8] = 'a';
+    path[9] = 'p';
+    path[10] = 'p';
+    path[11] = 's';
+    path[12] = '/';
+    const char *nm = g_petal_files[i];
+    int j = 0;
+    while (nm[j] && (13 + j) < (int)sizeof(path) - 1) {
+      path[13 + j] = nm[j];
+      j++;
+    }
+    path[13 + j] = 0;
+
+    serial("[INSTALLER] petal %s (%d bytes) -> %s\n", nm, (int)petal_sizes[i],
+           path);
+    int r = fat32_create_file_verified(path, petal_data[i],
+                                       (uint32_t)petal_sizes[i], 0);
+    if (r != 0) {
+      serial("[INSTALLER] ERROR: petal write failed (%s err=%d)\n", nm, r);
+      return;
+    }
+    petals_written++;
+    kmalloc_reset();
+  }
+  serial("[INSTALLER] Petal Apps Installed OK (%d files).\n", petals_written);
 
   /* 7.1 Create User Data (Only for Fresh Install) */
   if (!upgrade_mode) {

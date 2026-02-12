@@ -6,12 +6,14 @@
 #include "../../mem/kmalloc.h"
 #include "../../sched/pcb.h"
 #include "../../terminal.h"
+#include "../../time/timer.h"
 #include "../../toolchain/cc.h"
 #include "../../ui/flyui/draw.h"
 #include "../../ui/wm/wm.h"
 #include <stdint.h>
 
 extern "C" void schedule();
+extern "C" void serial(const char *fmt, ...);
 
 #ifdef __cplusplus
 extern "C" {
@@ -102,7 +104,9 @@ static int sys_close(int fd) {
 }
 
 int syscall_dispatch(uint32_t num, uint32_t a1, uint32_t a2, uint32_t a3,
-                     uint32_t a4, uint32_t a5) {
+                     uint32_t a4, uint32_t a5, uint32_t a6) {
+  // serial("[SYSCALL] %d (a1=%x a2=%x a3=%x a4=%x a5=%x a6=%x)\n", num, a1, a2,
+  //        a3, a4, a5, a6);
   switch (num) {
   case SYS_WRITE:
     return sys_write((int)a1, (const char *)(uintptr_t)a2, a3);
@@ -132,15 +136,23 @@ int syscall_dispatch(uint32_t num, uint32_t a1, uint32_t a2, uint32_t a3,
     if (win && a5) {
       wm_set_title(win, (const char *)(uintptr_t)a5);
     }
+    /* Link window to task for event routing */
+    pcb_t *cur = pcb_get_current();
+    if (cur && win) {
+      win->owner = cur;
+    }
     return (uint32_t)(uintptr_t)win;
   }
 
-  case SYS_WM_DESTROY_WINDOW:
-    wm_destroy_window((window_t *)(uintptr_t)a1);
+  case SYS_WM_DESTROY_WINDOW: {
+    window_t *win = (window_t *)(uintptr_t)a1;
+    wm_destroy_window(win);
     return 0;
+  }
 
   case SYS_WM_MARK_DIRTY:
     wm_mark_dirty();
+    wm_render();
     return 0;
 
   case SYS_WM_GET_POS: {
@@ -152,10 +164,28 @@ int syscall_dispatch(uint32_t num, uint32_t a1, uint32_t a2, uint32_t a3,
 
   case SYS_GET_EVENT: {
     input_event_t *out_ev = (input_event_t *)(uintptr_t)a1;
+    pcb_t *cur = pcb_get_current();
+
+    /* Prefer process-specific events (routed/translated) */
+    if (cur) {
+      if (task_pop_event(cur, out_ev))
+        return 1;
+    }
+
     if (input_pop(out_ev))
       return 1;
+    /* If no event, yield to allow others to run (important in tight loops) */
+    schedule();
     return 0;
   }
+
+  case SYS_SLEEP:
+    sleep((uint32_t)a1);
+    return 0;
+
+  case SYS_YIELD:
+    schedule();
+    return 0;
 
   case SYS_FLY_DRAW_TEXT: {
     window_t *win = (window_t *)(uintptr_t)a1;
@@ -168,8 +198,7 @@ int syscall_dispatch(uint32_t num, uint32_t a1, uint32_t a2, uint32_t a3,
   case SYS_FLY_DRAW_RECT_FILL: {
     window_t *win = (window_t *)(uintptr_t)a1;
     if (win && win->surface) {
-      fly_draw_rect_fill(win->surface, a2, a3, a4, (uint16_t)(a5 & 0xFFFF),
-                         (uint32_t)(a5 >> 16));
+      fly_draw_rect_fill(win->surface, a2, a3, a4, (uint16_t)a5, a6);
     }
     return 0;
   }

@@ -23,6 +23,7 @@
 #include "../video/gpu.h"
 
 extern "C" void serial(const char *fmt, ...);
+extern "C" void yield();
 
 /* Window control metrics */
 #define WM_TITLEBAR_H 28
@@ -754,7 +755,7 @@ static void create_start_menu() {
   fly_widget_add(root, sep);
   y += 10;
 
-  btn = fly_button_create("Shutdown");
+  btn = fly_button_create("Exit GUI");
   btn->x = bx;
   btn->y = y;
   btn->w = bw;
@@ -1043,6 +1044,9 @@ extern "C" int cmd_launch(int argc, char **argv) {
           notepad_app_handle_key((char)ev.keycode);
         } else if (focused == run_dialog_app_get_window()) {
           run_dialog_app_handle_key((char)ev.keycode);
+        } else if (focused) {
+          /* Route to standalone app via window queue */
+          window_push_event(focused, &ev);
         }
       }
 
@@ -1336,6 +1340,15 @@ extern "C" int cmd_launch(int argc, char **argv) {
           }
         }
 
+        /* 5. Dispatch to standalone app via Window Queue (Fallthrough) */
+        if (target && target != taskbar_win && target != desktop_win) {
+          input_event_t win_ev = ev;
+          /* Translate to window-relative coordinates */
+          win_ev.mouse_x -= target->x;
+          win_ev.mouse_y -= target->y;
+          window_push_event(target, &win_ev);
+        }
+
         /* Close start menu when clicking outside it */
         if (ev.type == INPUT_MOUSE_CLICK && ev.pressed) {
           if (start_menu_win && !start_menu_just_toggled &&
@@ -1355,7 +1368,7 @@ extern "C" int cmd_launch(int argc, char **argv) {
       wm_render();
     }
 
-    asm volatile("hlt");
+    yield();
   }
 
   /* 5. Cleanup & Return to Text Mode */

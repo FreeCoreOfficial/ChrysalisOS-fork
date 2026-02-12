@@ -323,11 +323,9 @@ void ps2_controller_watchdog(void) {
     watchdog_stuck_count = 0;
   }
 
-  /* Poll keyboard if IRQ isn't firing */
-  if ((status & STATUS_OUTPUT_FULL) && !(status & STATUS_AUX_FULL)) {
-    uint8_t scancode = inb(PS2_DATA);
-    handle_scancode(scancode);
-  }
+  /* REMOVED: redundant poll keyboard logic that caused duplicate characters.
+     We rely on IRQ1 (keyboard_handler) for processing scancodes.
+     The watchdog only focuses on de-blocking stuck buffers as handled above. */
 
   /* If output buffer is full but no IRQ fired for a long time, we might need a
      reset handled above in the watchdog_stuck_count logic.
