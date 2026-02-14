@@ -10,6 +10,7 @@
 #include "../../time/clock.h"
 #include "../../time/timer.h"
 #include "../../toolchain/cc.h"
+#include "../../ui/flyui/bmp.h"
 #include "../../ui/flyui/draw.h"
 #include "../../ui/wm/wm.h"
 #include <stdint.h>
@@ -164,6 +165,13 @@ int syscall_dispatch(uint32_t num, uint32_t a1, uint32_t a2, uint32_t a3,
     return 0;
   }
 
+  case SYS_WM_GET_SIZE: {
+    window_t *win = (window_t *)(uintptr_t)a1;
+    if (win)
+      return (uint32_t)(((win->w & 0xFFFF) << 16) | (win->h & 0xFFFF));
+    return 0;
+  }
+
   case SYS_GET_EVENT: {
     input_event_t *out_ev = (input_event_t *)(uintptr_t)a1;
     pcb_t *cur = pcb_get_current();
@@ -210,34 +218,49 @@ int syscall_dispatch(uint32_t num, uint32_t a1, uint32_t a2, uint32_t a3,
   case SYS_FLY_DRAW_BMP: {
     window_t *win = (window_t *)(uintptr_t)a1;
     const char *path = (const char *)(uintptr_t)a2;
-    if (win && win->surface && path) {
-      /* Use internal BMP loader to draw directly to window surface */
-      /* Note: We need a way to draw at X,Y offset? fly_load_bmp_to_surface
-         loads to the *whole* surface generally, or we need a helper to load
-         to a temp surface and blit.
-
-         Existing fly_load_bmp_to_surface(surface, path) overwrites surface
-         content. If we want to position it, we need a blit.
-
-         For now, for image-viewer, we will just load it to the window surface
-         directly. Ideally: sys_draw_bmp(win, path, x, y). But we don't have a
-         direct "load file to X,Y of surface" helper exposed easily yet.
-
-         Let's assume we want to load full image to 0,0 or stretch?
-         Actually, let's look at `fly_load_bmp_to_surface` again. It iterates
-         through file and writes to surface pixels. It does bound checking. If
-         we want to support offset, we should probably add `x, y` args to
-         `fly_load_bmp_to_surface` or creating a new helper.
-
-         Alternative: `p_load_bmp` returns a handle (surface ID) and we have
-         `p_draw_surface`. But we only have `SYS_FLY_DRAW_BMP` slot for now.
-
-         Let's invoke `fly_load_bmp_to_surface` for now. It draws at 0,0.
-      */
-      extern int fly_load_bmp_to_surface(surface_t * surf, const char *path);
+    if (win && win->surface && path)
       return fly_load_bmp_to_surface(win->surface, path);
-    }
     return -1;
+  }
+
+  case SYS_FLY_DRAW_BMP_FIT: {
+    window_t *win = (window_t *)(uintptr_t)a1;
+    const char *path = (const char *)(uintptr_t)a2;
+    if (!win || !win->surface || !path)
+      return -1;
+
+    surface_t *img = fly_load_bmp(path);
+    if (!img)
+      return -1;
+
+    int dst_w = (int)win->surface->width;
+    int dst_h = (int)win->surface->height;
+    if (dst_w <= 0 || dst_h <= 0 || img->width == 0 || img->height == 0) {
+      surface_destroy(img);
+      return -1;
+    }
+
+    fly_draw_rect_fill(win->surface, 0, 0, dst_w, dst_h, 0xFF101010);
+
+    int draw_w = dst_w;
+    int draw_h = (int)(((uint64_t)img->height * (uint64_t)dst_w) /
+                       (uint64_t)img->width);
+    if (draw_h > dst_h) {
+      draw_h = dst_h;
+      draw_w = (int)(((uint64_t)img->width * (uint64_t)dst_h) /
+                     (uint64_t)img->height);
+    }
+    if (draw_w < 1)
+      draw_w = 1;
+    if (draw_h < 1)
+      draw_h = 1;
+
+    int draw_x = (dst_w - draw_w) / 2;
+    int draw_y = (dst_h - draw_h) / 2;
+    fly_draw_surface_scaled(win->surface, img, draw_x, draw_y, draw_w, draw_h);
+
+    surface_destroy(img);
+    return 0;
   }
 
   case SYS_GET_TIME: {

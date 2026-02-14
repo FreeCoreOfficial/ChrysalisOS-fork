@@ -159,7 +159,7 @@ These are not implemented upstream.
 
 ## Notes for Modders
 
-Chrysalis OS is released under the **MIT License**.
+Chrysalis OS is released under the **GNU GPL v3**.
 
 You are free to:
 - Create new architecture ports

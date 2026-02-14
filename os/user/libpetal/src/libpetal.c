@@ -80,6 +80,14 @@ void p_wm_get_pos(void *win, int *x, int *y) {
     *y = (int)(ret & 0xFFFF);
 }
 
+void p_wm_get_size(void *win, int *w, int *h) {
+  uint32_t ret = (uint32_t)syscall1(SYS_WM_GET_SIZE, (uint32_t)(uintptr_t)win);
+  if (w)
+    *w = (int)(ret >> 16);
+  if (h)
+    *h = (int)(ret & 0xFFFF);
+}
+
 void p_draw_rect_fill(void *win, int x, int y, int w, int h, uint32_t color) {
   syscall6(SYS_FLY_DRAW_RECT_FILL, (uint32_t)(uintptr_t)win, (uint32_t)x,
            (uint32_t)y, (uint32_t)w, (uint32_t)h, color);
@@ -96,6 +104,11 @@ int p_draw_bmp(void *win, int x, int y, const char *path) {
   (void)x;
   (void)y;
   return syscall2(SYS_FLY_DRAW_BMP, (uint32_t)(uintptr_t)win,
+                  (uint32_t)(uintptr_t)path);
+}
+
+int p_draw_bmp_fit(void *win, const char *path) {
+  return syscall2(SYS_FLY_DRAW_BMP_FIT, (uint32_t)(uintptr_t)win,
                   (uint32_t)(uintptr_t)path);
 }
 

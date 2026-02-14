@@ -10,7 +10,8 @@ typedef enum {
     INPUT_KEYBOARD,
     INPUT_MOUSE,
     INPUT_MOUSE_MOVE,
-    INPUT_MOUSE_CLICK
+    INPUT_MOUSE_CLICK,
+    INPUT_WINDOW_RESIZE
 } input_type_t;
 
 typedef struct {

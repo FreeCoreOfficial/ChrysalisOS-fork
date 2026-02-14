@@ -1,4 +1,4 @@
-# Chrysalis OS
+# Chrysalis OS ![License: GNU GPL v3](https://img.shields.io/badge/License-gpl3.0-blue.svg)
 
 Chrysalis OS is a custom operating system built from scratch in **C/C++**, designed as a
 hands-on learning and research project in low-level systems programming.
@@ -82,7 +82,7 @@ ChrysalisOS/
 
 ## License
 
-MIT License (see `LICENSE` file).
+GNU GPL v3 (see `LICENSE` file).
 
 ---
 

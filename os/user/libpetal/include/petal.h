@@ -15,7 +15,8 @@ typedef enum {
   P_INPUT_KEYBOARD,
   P_INPUT_MOUSE,
   P_INPUT_MOUSE_MOVE,
-  P_INPUT_MOUSE_CLICK
+  P_INPUT_MOUSE_CLICK,
+  P_INPUT_WINDOW_RESIZE
 } p_input_type_t;
 
 typedef struct {
@@ -38,10 +39,13 @@ void p_write(const char *s);
 void *p_wm_create_window(int w, int h, int x, int y, const char *title);
 void p_wm_destroy_window(void *win);
 void p_wm_mark_dirty();
+void p_wm_get_pos(void *win, int *x, int *y);
+void p_wm_get_size(void *win, int *w, int *h);
 
 void p_draw_rect_fill(void *win, int x, int y, int w, int h, uint32_t color);
 void p_draw_text(void *win, int x, int y, const char *text, uint32_t color);
 int p_draw_bmp(void *win, int x, int y, const char *path);
+int p_draw_bmp_fit(void *win, const char *path);
 int p_get_event(p_input_event_t *ev);
 
 void p_sleep(uint32_t ms);

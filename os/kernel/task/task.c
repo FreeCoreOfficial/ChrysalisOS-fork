@@ -136,8 +136,18 @@ void yield(void) { schedule(); }
 void task_yield(void) { schedule(); }
 
 void task_push_event(task_t *t, input_event_t *ev) {
-  if (!t)
+  if (!t || !ev)
     return;
+
+  if (ev->type == INPUT_WINDOW_RESIZE && t->event_head != t->event_tail) {
+    int last =
+        (t->event_tail + TASK_EVENT_QUEUE_SIZE - 1) % TASK_EVENT_QUEUE_SIZE;
+    if (t->event_queue[last].type == INPUT_WINDOW_RESIZE) {
+      t->event_queue[last] = *ev;
+      return;
+    }
+  }
+
   int next_tail = (t->event_tail + 1) % TASK_EVENT_QUEUE_SIZE;
   if (next_tail == t->event_head) {
     /* Queue full */

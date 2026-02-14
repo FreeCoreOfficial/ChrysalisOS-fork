@@ -1,9 +1,7 @@
 #include "../user/libpetal/include/petal.h"
 
-/* Force C linkage for the entry point */
-extern "C" {
-__attribute__((section(".text._start"))) void _start();
-}
+static int g_w = 200;
+static int g_h = 100;
 
 static void itoa(int n, char *s) {
   int i = 0;
@@ -49,17 +47,36 @@ static void format_time(p_time_t *t, char *buf) {
   buf[8] = '\0';
 }
 
-void _start() {
+static void redraw_clock(void *win, const char *time_str) {
+  int text_w = 8 * 8;
+  int text_x = (g_w - text_w) / 2;
+  int text_y = (g_h - 16) / 2;
+  if (text_x < 0)
+    text_x = 0;
+  if (text_y < 0)
+    text_y = 0;
+
+  p_draw_rect_fill(win, 0, 0, g_w, g_h, 0x000000);
+  p_draw_text(win, text_x, text_y, time_str, 0x00FF00);
+  p_wm_mark_dirty();
+}
+
+int main() {
   p_write("[APP] Clock Petal started\n");
   void *win = p_wm_create_window(200, 100, 200, 200, "Clock");
 
   if (!win) {
-    p_exit(1);
+    return 1;
   }
 
   p_time_t last_t = {255, 255, 255};
   char time_str[16];
+  time_str[0] = '\0';
   p_input_event_t ev;
+  int need_redraw = 1;
+  p_wm_get_size(win, &g_w, &g_h);
+  p_get_time(&last_t);
+  format_time(&last_t, time_str);
 
   int running = 1;
   while (running) {
@@ -69,25 +86,33 @@ void _start() {
     if (current_t.second != last_t.second) {
       last_t = current_t;
       format_time(&current_t, time_str);
-
-      /* Redraw */
-      p_draw_rect_fill(win, 0, 0, 200, 100, 0x000000); /* Black background */
-      p_draw_text(win, 50, 40, time_str, 0x00FF00);    /* Green text */
-      p_wm_mark_dirty();
+      need_redraw = 1;
     }
 
-    /* Check for events non-blocking */
     while (p_get_event(&ev)) {
-      if (ev.type == P_INPUT_KEYBOARD && ev.pressed) {
-        if (ev.keycode == 'q' || ev.keycode == 0x1B) { /* 'q' or ESC */
+      if (ev.type == P_INPUT_WINDOW_RESIZE) {
+        g_w = ev.mouse_x;
+        g_h = ev.mouse_y;
+        if (g_w < 120)
+          g_w = 120;
+        if (g_h < 80)
+          g_h = 80;
+        need_redraw = 1;
+      } else if (ev.type == P_INPUT_KEYBOARD && ev.pressed) {
+        if (ev.keycode == 'q' || ev.keycode == 0x1B) {
           running = 0;
         }
       }
     }
 
-    p_sleep(100);
+    if (need_redraw && time_str[0]) {
+      redraw_clock(win, time_str);
+      need_redraw = 0;
+    }
+
+    p_sleep(50);
   }
 
   p_wm_destroy_window(win);
-  p_exit(0);
+  return 0;
 }

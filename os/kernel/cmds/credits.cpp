@@ -5,7 +5,7 @@ extern "C" void cmd_credits(const char* args)
 {
     /* short version */
     if (args && args[0] == '-' && args[1] == '-') {
-        terminal_writestring("Chrysalis OS by Mihai (MIT License)\n");
+        terminal_writestring("Chrysalis OS by Mihai (GNU GPL v3)\n");
         return;
     }
 
@@ -17,9 +17,9 @@ extern "C" void cmd_credits(const char* args)
     terminal_writestring("  - Mihai\n\n");
 
     terminal_writestring(" License:\n");
-    terminal_writestring("  - MIT License\n");
+    terminal_writestring("  - GNU GPL v3\n");
     terminal_writestring("  - Modifications are allowed\n");
-    terminal_writestring("  - Original author must be credited\n\n");
+    terminal_writestring("  - Derivatives distributed under GPL terms\n\n");
 
     terminal_writestring(" Core:\n");
     terminal_writestring("  - Custom x86 Kernel\n");

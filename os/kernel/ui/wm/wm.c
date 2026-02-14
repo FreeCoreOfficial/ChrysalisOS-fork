@@ -333,6 +333,23 @@ void wm_set_on_resize(window_t *win, void (*on_resize)(window_t *)) {
   win->on_resize = on_resize;
 }
 
+static void wm_emit_resize_event(window_t *win) {
+  if (!win || !win->owner)
+    return;
+
+  pcb_t *owner = (pcb_t *)win->owner;
+  if (!owner->is_user_app)
+    return;
+
+  input_event_t ev;
+  ev.type = INPUT_WINDOW_RESIZE;
+  ev.keycode = 0;
+  ev.pressed = true;
+  ev.mouse_x = win->w;
+  ev.mouse_y = win->h;
+  window_push_event(win, &ev);
+}
+
 void wm_minimize_window(window_t *win) {
   if (!win || !win->surface)
     return;
@@ -388,6 +405,7 @@ static void wm_maximize_window(window_t *win) {
     win->h = new_h;
     if (win->on_resize)
       win->on_resize(win);
+    wm_emit_resize_event(win);
   }
   win->state = WIN_STATE_MAXIMIZED;
   wm_dirty = true;
@@ -404,6 +422,7 @@ static void wm_restore_from_max(window_t *win) {
     win->h = win->restore_h;
     if (win->on_resize)
       win->on_resize(win);
+    wm_emit_resize_event(win);
   }
   win->state = WIN_STATE_NORMAL;
   wm_dirty = true;
@@ -436,6 +455,7 @@ bool wm_resize_window(window_t *win, int w, int h) {
   win->h = h;
   if (win->on_resize)
     win->on_resize(win);
+  wm_emit_resize_event(win);
   wm_dirty = true;
   return true;
 }

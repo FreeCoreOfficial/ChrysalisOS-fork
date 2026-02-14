@@ -60,7 +60,7 @@ qemu-system-i386 \
   -device tpm-tis,tpmdev=tpm0 \
   -m 64
 
-https://opensource.org/license/mit
+https://www.gnu.org/licenses/gpl-3.0.html
 
 | Segment       | Access |
 | ------------- | ------ |
