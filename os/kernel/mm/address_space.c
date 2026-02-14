@@ -28,13 +28,23 @@ address_space_t* address_space_create()
         return NULL;
     }
 
-    /* copiază kernel mappings (3GB–4GB) */
-    for (int i = 768; i < 1024; i++)
+    /* Copy all currently valid kernel mappings first.
+     * IMPORTANT: Chrysalis kernel executes in low identity-mapped memory
+     * (EIP around 0x001xxxxx), so dropping all PDE<768 causes immediate
+     * faults after CR3 switch.
+     */
+    for (int i = 0; i < 1024; i++)
         as->page_directory[i] = kernel_page_directory[i];
 
-    /* user part = gol */
-    for (int i = 0; i < 768; i++)
-        as->page_directory[i] = 0;
+    /* Clear only user-app virtual range, keep low kernel identity + high-half.
+     * Petal apps are linked at 0x08048000, so reserve from 0x08000000 upward.
+     */
+    {
+        const uint32_t USER_VIRT_BASE = 0x08000000u;
+        const int user_pde_start = (int)(USER_VIRT_BASE >> 22); /* 32 */
+        for (int i = user_pde_start; i < 768; i++)
+            as->page_directory[i] = 0;
+    }
 
     return as;
 }

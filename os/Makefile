@@ -250,9 +250,9 @@ OBJS = \
 # TARGETURI PRINCIPALE
 # -------------------------
 
-.PHONY: all iso run clean help consolerun dirs icons
+.PHONY: all iso run clean help consolerun dirs icons petal_apps
 
-all: $(ISO)/boot/$(KERNEL)
+all: $(ISO)/boot/$(KERNEL) petal_apps
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -839,6 +839,7 @@ PETAL_APPS_SRC = $(wildcard apps/*.cpp)
 PETAL_APPS = $(patsubst apps/%.cpp, $(ISO)/system/apps/%.petal, $(PETAL_APPS_SRC))
 
 PETAL_CXXFLAGS = $(CXXFLAGS) -fno-pic -Iuser/libpetal/include
+PETAL_LDFLAGS = -m elf_i386
 PETAL_HEADERS = user/libpetal/include/petal.h
 
 $(BUILD)/user/start.o: user/libpetal/src/start.asm | dirs
@@ -1002,7 +1003,7 @@ help:
 	@echo ""
 	@echo "Chrysalis OS - Makefile commands"
 	@echo "--------------------------------"
-	@echo "make           -> compilează kernelul"
+	@echo "make           -> compilează kernelul + app-urile .petal"
 	@echo "make iso       -> creează imaginea bootabilă ISO"
 	@echo "make run       -> rulează OS-ul în QEMU (cu grafică)"
 	@echo "make consolerun-> rulează OS-ul în QEMU (doar consolă)"

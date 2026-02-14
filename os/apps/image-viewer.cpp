@@ -19,14 +19,14 @@ static void redraw(void *win, int win_w, int win_h, const char *bmp_path) {
 
 int main() {
   p_write("[APP] Image Viewer Petal started\n");
-  void *win = p_wm_create_window(400, 300, 150, 150, "Image Viewer");
+  void *win = p_wm_create_window(400, 300, 150, 150, "Image Viewer [BETA]");
 
   if (!win) {
     p_exit(1);
   }
 
   char launch_path[256];
-  const char *bmp_path = "/system/apps/icons/img.bmp";
+  const char *bmp_path = "/system/icons/img.bmp";
   int arg_len = p_get_launch_arg(launch_path, sizeof(launch_path));
   if (arg_len > 0 && launch_path[0]) {
     bmp_path = launch_path;
@@ -40,6 +40,19 @@ int main() {
   p_input_event_t ev;
   int running = 1;
   while (running) {
+    int polled_w = 0;
+    int polled_h = 0;
+    p_wm_get_size(win, &polled_w, &polled_h);
+    if (polled_w < 120)
+      polled_w = 120;
+    if (polled_h < 80)
+      polled_h = 80;
+    if (polled_w != win_w || polled_h != win_h) {
+      win_w = polled_w;
+      win_h = polled_h;
+      redraw(win, win_w, win_h, bmp_path);
+    }
+
     if (p_get_event(&ev)) {
       if (ev.type == P_INPUT_WINDOW_RESIZE) {
         win_w = ev.mouse_x;

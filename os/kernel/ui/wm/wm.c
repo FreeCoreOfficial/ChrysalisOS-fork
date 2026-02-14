@@ -337,10 +337,6 @@ static void wm_emit_resize_event(window_t *win) {
   if (!win || !win->owner)
     return;
 
-  pcb_t *owner = (pcb_t *)win->owner;
-  if (!owner->is_user_app)
-    return;
-
   input_event_t ev;
   ev.type = INPUT_WINDOW_RESIZE;
   ev.keycode = 0;

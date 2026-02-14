@@ -165,7 +165,12 @@ void task_push_event(task_t *t, input_event_t *ev) {
 
   int next_tail = (t->event_tail + 1) % TASK_EVENT_QUEUE_SIZE;
   if (next_tail == t->event_head) {
-    /* Queue full */
+    /* Queue full: keep latest resize state if possible */
+    if (ev->type == INPUT_WINDOW_RESIZE && t->event_head != t->event_tail) {
+      int last =
+          (t->event_tail + TASK_EVENT_QUEUE_SIZE - 1) % TASK_EVENT_QUEUE_SIZE;
+      t->event_queue[last] = *ev;
+    }
     return;
   }
   t->event_queue[t->event_tail] = *ev;

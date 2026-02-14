@@ -102,6 +102,20 @@ int main() {
   int running = 1;
 
   while (running) {
+    int polled_w = 0;
+    int polled_h = 0;
+    p_wm_get_size(win, &polled_w, &polled_h);
+    if (polled_w < 120)
+      polled_w = 120;
+    if (polled_h < 80)
+      polled_h = 80;
+    if (polled_w != win_w || polled_h != win_h) {
+      win_w = polled_w;
+      win_h = polled_h;
+      layout_button(&btn, win_w, win_h);
+      layout_and_redraw(win, &btn, win_w, win_h);
+    }
+
     if (p_get_event(&ev)) {
       if (ev.type == P_INPUT_WINDOW_RESIZE) {
         win_w = ev.mouse_x;

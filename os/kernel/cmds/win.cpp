@@ -1222,104 +1222,110 @@ extern "C" int cmd_launch(int argc, char **argv) {
           }
         }
 
-        /* 3. Dispatch Mouse Events */
+        /* 3. Dispatch Mouse Events
+         * While a window is actively being resized by the WM grip, do not
+         * forward raw mouse events to the app. This prevents event-queue flood
+         * (mouse move spam) that can starve/drop WINDOW_RESIZE events. */
+        bool suppress_app_mouse_dispatch = (resize_win != NULL);
 
-        /* 3.1 Apps */
-        if (target == clock_app_get_window())
-          clock_app_handle_event(&ev);
-        if (target == shell_get_window()) {
-          if (shell_handle_event(&ev))
-            target = NULL;
-        }
-        if (target == calculator_app_get_window())
-          calculator_app_handle_event(&ev);
-        if (target == notepad_app_get_window())
-          notepad_app_handle_event(&ev);
-        if (target == calendar_app_get_window())
-          calendar_app_handle_event(&ev);
-        if (target == file_manager_app_get_window())
-          file_manager_app_handle_event(&ev);
-        if (target == image_viewer_app_get_window())
-          image_viewer_app_handle_event(&ev);
-        if (target == sysinfo_app_get_window())
-          sysinfo_app_handle_event(&ev);
-        if (target == run_dialog_app_get_window())
-          run_dialog_app_handle_event(&ev);
-        if (target == task_manager_app_get_window())
-          task_manager_app_handle_event(&ev);
-        if (target == paint_app_get_window())
-          paint_app_handle_event(&ev);
-        if (target == demo3d_app_get_window())
-          demo3d_app_handle_event(&ev);
-        if (target == minesweeper_app_get_window())
-          minesweeper_app_handle_event(&ev);
-        if (target == tic_tac_toe_app_get_window())
-          tic_tac_toe_app_handle_event(&ev);
+        if (!suppress_app_mouse_dispatch) {
+          /* 3.1 Apps */
+          if (target == clock_app_get_window())
+            clock_app_handle_event(&ev);
+          if (target == shell_get_window()) {
+            if (shell_handle_event(&ev))
+              target = NULL;
+          }
+          if (target == calculator_app_get_window())
+            calculator_app_handle_event(&ev);
+          if (target == notepad_app_get_window())
+            notepad_app_handle_event(&ev);
+          if (target == calendar_app_get_window())
+            calendar_app_handle_event(&ev);
+          if (target == file_manager_app_get_window())
+            file_manager_app_handle_event(&ev);
+          if (target == image_viewer_app_get_window())
+            image_viewer_app_handle_event(&ev);
+          if (target == sysinfo_app_get_window())
+            sysinfo_app_handle_event(&ev);
+          if (target == run_dialog_app_get_window())
+            run_dialog_app_handle_event(&ev);
+          if (target == task_manager_app_get_window())
+            task_manager_app_handle_event(&ev);
+          if (target == paint_app_get_window())
+            paint_app_handle_event(&ev);
+          if (target == demo3d_app_get_window())
+            demo3d_app_handle_event(&ev);
+          if (target == minesweeper_app_get_window())
+            minesweeper_app_handle_event(&ev);
+          if (target == tic_tac_toe_app_get_window())
+            tic_tac_toe_app_handle_event(&ev);
 
-        /* 3.2 FlyUI based windows (Login, Net, Start, Popups) */
-        struct {
-          void operator()(window_t *win, flyui_context_t *ctx,
-                          input_event_t &ev) {
-            if (win && ctx) {
-              fly_event_t fev;
-              fev.mx = ev.mouse_x - win->x;
-              fev.my = ev.mouse_y - win->y;
-              fev.keycode = 0;
-              fev.type = FLY_EVENT_NONE;
-              if (ev.type == INPUT_MOUSE_MOVE)
-                fev.type = FLY_EVENT_MOUSE_MOVE;
-              else if (ev.type == INPUT_MOUSE_CLICK)
-                fev.type =
-                    ev.pressed ? FLY_EVENT_MOUSE_DOWN : FLY_EVENT_MOUSE_UP;
+          /* 3.2 FlyUI based windows (Login, Net, Start, Popups) */
+          struct {
+            void operator()(window_t *win, flyui_context_t *ctx,
+                            input_event_t &ev) {
+              if (win && ctx) {
+                fly_event_t fev;
+                fev.mx = ev.mouse_x - win->x;
+                fev.my = ev.mouse_y - win->y;
+                fev.keycode = 0;
+                fev.type = FLY_EVENT_NONE;
+                if (ev.type == INPUT_MOUSE_MOVE)
+                  fev.type = FLY_EVENT_MOUSE_MOVE;
+                else if (ev.type == INPUT_MOUSE_CLICK)
+                  fev.type =
+                      ev.pressed ? FLY_EVENT_MOUSE_DOWN : FLY_EVENT_MOUSE_UP;
 
-              if (fev.type != FLY_EVENT_NONE) {
-                flyui_dispatch_event(ctx, &fev);
-                if (fev.type != FLY_EVENT_MOUSE_MOVE) {
-                  flyui_render(ctx);
-                  wm_mark_dirty();
+                if (fev.type != FLY_EVENT_NONE) {
+                  flyui_dispatch_event(ctx, &fev);
+                  if (fev.type != FLY_EVENT_MOUSE_MOVE) {
+                    flyui_render(ctx);
+                    wm_mark_dirty();
+                  }
                 }
               }
             }
+          } dispatch_flyui_fn;
+
+          if (target == login_win)
+            dispatch_flyui_fn(login_win, login_ctx, ev);
+          if (target == popup_win)
+            dispatch_flyui_fn(popup_win, popup_ctx, ev);
+          if (target == net_win)
+            dispatch_flyui_fn(net_win, net_ctx, ev);
+          if (target == start_menu_win)
+            dispatch_flyui_fn(start_menu_win, start_menu_ctx, ev);
+
+          if (target == taskbar_win && taskbar_ctx && !drag_win) {
+            dispatch_flyui_fn(taskbar_win, taskbar_ctx, ev);
           }
-        } dispatch_flyui_fn;
+          if (target == desktop_win && desktop_ctx && !drag_win) {
+            dispatch_flyui_fn(desktop_win, desktop_ctx, ev);
+          }
 
-        if (target == login_win)
-          dispatch_flyui_fn(login_win, login_ctx, ev);
-        if (target == popup_win)
-          dispatch_flyui_fn(popup_win, popup_ctx, ev);
-        if (target == net_win)
-          dispatch_flyui_fn(net_win, net_ctx, ev);
-        if (target == start_menu_win)
-          dispatch_flyui_fn(start_menu_win, start_menu_ctx, ev);
-
-        if (target == taskbar_win && taskbar_ctx && !drag_win) {
-          dispatch_flyui_fn(taskbar_win, taskbar_ctx, ev);
-        }
-        if (target == desktop_win && desktop_ctx && !drag_win) {
-          dispatch_flyui_fn(desktop_win, desktop_ctx, ev);
-        }
-
-        /* 3.3 Generic Dispatch for Standalone Apps */
-        /* If window has an owner task and wasn't handled by hardcoded internal
-         * handlers, dispatch to its task event queue. */
-        if (target && target->owner && target != clock_app_get_window() &&
-            target != shell_get_window() &&
-            target != calculator_app_get_window() &&
-            target != notepad_app_get_window() &&
-            target != calendar_app_get_window() &&
-            target != file_manager_app_get_window() &&
-            target != image_viewer_app_get_window() &&
-            target != sysinfo_app_get_window() &&
-            target != run_dialog_app_get_window() &&
-            target != task_manager_app_get_window() &&
-            target != paint_app_get_window() &&
-            target != demo3d_app_get_window() &&
-            target != minesweeper_app_get_window() &&
-            target != tic_tac_toe_app_get_window() && target != login_win &&
-            target != popup_win && target != net_win &&
-            target != start_menu_win && target != taskbar_win &&
-            target != desktop_win) {
-          window_push_event(target, &ev);
+          /* 3.3 Generic Dispatch for Standalone Apps */
+          /* If window has an owner task and wasn't handled by hardcoded internal
+           * handlers, dispatch to its task event queue. */
+          if (target && target->owner && target != clock_app_get_window() &&
+              target != shell_get_window() &&
+              target != calculator_app_get_window() &&
+              target != notepad_app_get_window() &&
+              target != calendar_app_get_window() &&
+              target != file_manager_app_get_window() &&
+              target != image_viewer_app_get_window() &&
+              target != sysinfo_app_get_window() &&
+              target != run_dialog_app_get_window() &&
+              target != task_manager_app_get_window() &&
+              target != paint_app_get_window() &&
+              target != demo3d_app_get_window() &&
+              target != minesweeper_app_get_window() &&
+              target != tic_tac_toe_app_get_window() && target != login_win &&
+              target != popup_win && target != net_win &&
+              target != start_menu_win && target != taskbar_win &&
+              target != desktop_win) {
+            window_push_event(target, &ev);
+          }
         }
 
         /* Close start menu when clicking outside it */

@@ -83,6 +83,19 @@ int main() {
     p_time_t current_t;
     p_get_time(&current_t);
 
+    int polled_w = 0;
+    int polled_h = 0;
+    p_wm_get_size(win, &polled_w, &polled_h);
+    if (polled_w < 120)
+      polled_w = 120;
+    if (polled_h < 80)
+      polled_h = 80;
+    if (polled_w != g_w || polled_h != g_h) {
+      g_w = polled_w;
+      g_h = polled_h;
+      need_redraw = 1;
+    }
+
     if (current_t.second != last_t.second) {
       last_t = current_t;
       format_time(&current_t, time_str);

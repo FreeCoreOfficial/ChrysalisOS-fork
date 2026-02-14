@@ -175,6 +175,19 @@ int main() {
   p_input_event_t ev;
   int running = 1;
   while (running) {
+    int polled_w = 0;
+    int polled_h = 0;
+    p_wm_get_size(win, &polled_w, &polled_h);
+    if (polled_w < 120)
+      polled_w = 120;
+    if (polled_h < 80)
+      polled_h = 80;
+    if (polled_w != win_w || polled_h != win_h) {
+      apply_resize(polled_w, polled_h);
+      draw_screen(win);
+      p_wm_mark_dirty();
+    }
+
     if (p_get_event(&ev)) {
       if (ev.type == P_INPUT_WINDOW_RESIZE) {
         apply_resize(ev.mouse_x, ev.mouse_y);
