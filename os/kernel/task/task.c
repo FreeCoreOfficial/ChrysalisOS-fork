@@ -18,6 +18,7 @@
 #include <stdint.h>
 
 #include "../include/task.h"
+#include "../mm/paging.h"
 #include "../time/timer.h"
 
 /* Freestanding-friendly tiny helpers */
@@ -48,6 +49,12 @@ extern void _pcb_set_current(int tid);
 
 /* helper: initial eflags for new tasks (IF=1) */
 static inline uint32_t initial_eflags(void) { return 0x202; }
+
+static inline uint32_t task_read_cr3(void) {
+  uint32_t cr3;
+  asm volatile("mov %%cr3, %0" : "=r"(cr3));
+  return cr3;
+}
 
 /* Every task starts in this trampoline so return from entry is always handled.
    This mirrors Linux-style "if task function returns -> do_exit". */
@@ -114,6 +121,10 @@ void schedule(void) {
   }
 
   if (context_switch) {
+    if (next->cr3 && next->cr3 != task_read_cr3()) {
+      paging_load_directory(next->cr3);
+    }
+
     /* CRITICAL: Update current_task pointer BEFORE switching stacks. */
     current_task = next;
 
@@ -124,6 +135,10 @@ void schedule(void) {
        It also re-enables interrupts via sti before ret. */
     context_switch(&prev->kstack_ptr, &next->kstack_ptr);
   } else {
+    if (next->cr3 && next->cr3 != task_read_cr3()) {
+      paging_load_directory(next->cr3);
+    }
+
     /* No real context switch available */
     current_task = next;
     _pcb_set_current(next->pid);
@@ -198,6 +213,7 @@ void task_init(void) {
   asm volatile("movl %%esp, %0" : "=r"(cur_esp));
 
   main_task.kstack_ptr = (uint32_t *)cur_esp;
+  main_task.cr3 = task_read_cr3();
 
   current_task = &main_task;
   task_list = &main_task;
@@ -227,6 +243,7 @@ task_t *task_create(void (*entry)(void), int pid) {
   t->pid = (pid == 0) ? (int)next_pid++ : pid;
   t->entry_noarg = entry;
   t->state = TASK_READY;
+  t->cr3 = current_task ? current_task->cr3 : task_read_cr3();
 
   /* prepare stack in embedded kstack */
   uint32_t *sp = (uint32_t *)((uintptr_t)t->kstack + sizeof(t->kstack));

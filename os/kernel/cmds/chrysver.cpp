@@ -13,6 +13,6 @@ extern "C" void cmd_chrysver(const char* args)
     terminal_writestring("\n\n");
 
     terminal_writestring(" (C) 2026 mihai209\n");
-    terminal_writestring(" Licensed under the GNU GPL v3\n");
+    terminal_writestring(" Licensed under the MIT License\n");
     terminal_writestring("========================================\n");
 }

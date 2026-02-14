@@ -1,5 +1,5 @@
 KERNEL_CODENAME = "mosquito-with-violin"
-LICENSE = "GPL-3.0-or-later"
+LICENSE = "MIT"
 CHRYVER= "chrysver-0.2.1"
 GITHUB= "https://github.com/mihai209/chrysalisos"
 

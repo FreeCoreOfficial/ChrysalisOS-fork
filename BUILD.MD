@@ -134,6 +134,6 @@ If the installer shows a black screen, ensure the `multiboot2_header.c` was comp
 
 ## License
 
-Chrysalis OS is released under the **GNU GPL v3**.
+Chrysalis OS is released under the **MIT License**.
 
 Happy building!

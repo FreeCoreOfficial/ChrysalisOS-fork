@@ -170,7 +170,7 @@ Clear documentation is as valuable as working code.
 
 ## License & Attribution
 
-Chrysalis OS is released under the **GNU GPL v3**.
+Chrysalis OS is released under the **MIT License**.
 
 You may:
 

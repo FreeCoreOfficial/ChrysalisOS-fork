@@ -1,7 +1,7 @@
 {
   "author": "Mihai209",
   "private": true,
-  "license": "GPL-3.0-or-later",
+  "license": "MIT",
   "name": "chrysalis-os",
   "version": "0.2.1",
   "os-codename": "Ethereal",
@@ -15,7 +15,7 @@
   "repository": {
     "url": "https://github.com/mihai209/ChrysalisOS",
     "website": "https://chrysalisos.netlify.app",
-    "repo-license": "GPL-3.0-or-later"
+    "repo-license": "MIT"
   },
   "packageManager": "npm@10.8.2",
   "chrysalisOS-pkg": {

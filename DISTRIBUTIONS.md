@@ -25,16 +25,13 @@ Distributions may differ in:
 
 ---
 
-## Legal Requirements (GNU GPL v3)
+## Legal Requirements (MIT License)
 
-Because Chrysalis OS uses the GNU GPL v3:
+Because Chrysalis OS uses the MIT License:
 
 You **must**:
 - Preserve the original copyright notice
 - Acknowledge Chrysalis OS as the upstream base
-- Preserve GPL license notices in source and binaries
-- Provide corresponding source code when distributing binaries
-- Keep derivative distributions under GPL-compatible terms
 
 You **may**:
 - Rebrand the OS
@@ -42,7 +39,7 @@ You **may**:
 - Distribute binaries or source
 - Use it commercially
 
-Copyleft rules apply for distributed derivatives.
+There is no copyleft, no viral clause, no forced openness.
 
 ---
 
@@ -79,7 +76,7 @@ There is no mandatory compatibility layer.
 A clean distribution should include:
 
 - `DISTRO.md` – explains what makes your distro unique
-- `LICENSE` – includes GNU GPL v3 license text
+- `LICENSE` – includes MIT license text
 - `CREDITS.md` – acknowledges Chrysalis OS
 - Optional: `ROADMAP.md`
 

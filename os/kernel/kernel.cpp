@@ -2,9 +2,10 @@
  * Chrysalis OS
  * Copyright (c) 2026 mihai209
  *
- * Licensed under the GNU General Public License v3.0.
- * You may use, modify, and redistribute this software
- * under the terms of the GPL.
+ * Licensed under the MIT License.
+ * You may use, modify, and redistribute this software,
+ * provided that the original author is credited and
+ * this notice is preserved.
  */
 
 // kernel/kernel.cpp
@@ -846,15 +847,15 @@ extern "C" void kernel_main(uint32_t magic, uint32_t addr) {
 //
 // LICENSE & OWNERSHIP:
 //
-// - Chrysalis OS is released under the GNU GPL v3.
+// - Chrysalis OS is released under the MIT License.
 // - You have full freedom to:
 //     * modify
 //     * fork
 //     * redistribute
 //     * rebrand
 //     * ship commercially or non-commercially
-// - Distributions must preserve copyright + GPL notices and provide source
-//   under GPL terms.
+// - The ONLY requirement is to preserve the MIT license notice and copyright
+//   attribution to the original owner.
 //
 // You own your fork. Do whatever you want — responsibly.
 //
@@ -921,6 +922,6 @@ extern "C" void kernel_main(uint32_t magic, uint32_t addr) {
 //
 // Chrysalis OS aims to be a foundation, not a cage.
 // Build your own distro. Replace everything if you want.
-// Keep GPL compliance in redistributed builds.
+// Just keep the MIT notice — the rest is yours.
 //
 // End of file
