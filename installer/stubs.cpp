@@ -12,6 +12,7 @@ static const int VGA_HEIGHT = 25;
 static int terminal_row = 0;
 static int terminal_column = 0;
 static uint8_t terminal_color = 0x07; // Light Grey on Black
+static int serial_vga_mirror_enabled = 1;
 
 void terminal_putentryat(char c, uint8_t color, int x, int y) {
   const int index = y * VGA_WIDTH + x;
@@ -173,6 +174,10 @@ void terminal_printf(const char *fmt, ...) {
   va_end(args);
 }
 
+void serial_set_vga_mirror(int enabled) {
+  serial_vga_mirror_enabled = enabled ? 1 : 0;
+}
+
 extern void serial_write(char c);
 extern void serial_write_string(const char *s);
 
@@ -249,6 +254,11 @@ void serial(const char *fmt, ...) {
     f1++;
   }
   va_end(args_serial);
+
+  if (!serial_vga_mirror_enabled) {
+    va_end(args);
+    return;
+  }
 
   // 2. Output to VGA
   va_list args_vga;

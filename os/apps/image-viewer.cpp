@@ -9,20 +9,24 @@ int main() {
     p_exit(1);
   }
 
-  /* Draw background and text */
-  p_draw_rect_fill(win, 0, 0, 400, 300, 0x333333);
-  p_draw_text(win, 10, 10, "Loading...", 0xFFFFFF);
+  char launch_path[256];
+  const char *bmp_path = "/system/apps/icons/img.bmp";
+  int arg_len = p_get_launch_arg(launch_path, sizeof(launch_path));
+  if (arg_len > 0 && launch_path[0]) {
+    bmp_path = launch_path;
+  }
 
-  /* Load BMP image */
-  // Note: We need a sample BMP in the ISO. We don't have one user-accessible
-  // yet except in /system/apps/icons? Or we can try to load one of the icons,
-  // or the wallpaper if accessible. Let's try to load a known existing file.
-  // The Installer puts background.tga, but we only support BMP.
-  // Icons are BMP.
-  if (p_draw_bmp(win, 0, 0, "/system/apps/icons/img.bmp") != 0) {
-    p_draw_text(win, 10, 30, "img.bmp not found!", 0xFF0000);
+  /* Draw background and status */
+  p_draw_rect_fill(win, 0, 0, 400, 300, 0x333333);
+  p_draw_text(win, 10, 10, "Loading BMP:", 0xFFFFFF);
+  p_draw_text(win, 10, 24, bmp_path, 0xAAAAAA);
+
+  if (p_draw_bmp(win, 0, 0, bmp_path) != 0) {
+    p_draw_text(win, 10, 44, "Failed to load BMP:", 0xFF3333);
+    p_draw_text(win, 10, 58, bmp_path, 0xFF7777);
   } else {
-    p_draw_text(win, 10, 280, "Image Loaded", 0x00FF00);
+    p_draw_text(win, 10, 280, "Image loaded:", 0x00FF00);
+    p_draw_text(win, 100, 280, bmp_path, 0x99FF99);
   }
 
   p_wm_mark_dirty();

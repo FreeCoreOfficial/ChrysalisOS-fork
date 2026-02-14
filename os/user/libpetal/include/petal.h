@@ -47,6 +47,8 @@ int p_get_event(p_input_event_t *ev);
 void p_sleep(uint32_t ms);
 void p_yield();
 void p_get_time(p_time_t *t);
+int p_get_launch_arg(char *buf, uint32_t size);
+int p_exec_command_capture(const char *line, char *out, uint32_t out_cap);
 
 int p_open(const char *path, int flags);
 int p_read(int fd, void *buf, uint32_t size);

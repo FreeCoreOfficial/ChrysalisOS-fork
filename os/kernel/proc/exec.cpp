@@ -95,7 +95,6 @@ static uint8_t *read_executable(const char *path, size_t *out_size) {
 
 extern "C" int execve(const char *filename, char *const argv[],
                       char *const envp[]) {
-  (void)argv;
   (void)envp;
 
   /* Hook for Chrysalis Script Interpreter (/bin/cs) */
@@ -181,6 +180,11 @@ extern "C" int execve(const char *filename, char *const argv[],
   task_t *t = task_create(entry_point, 0);
   if (t) {
     t->is_user_app = 1;
+    t->launch_arg[0] = 0;
+    if (argv && argv[1]) {
+      strncpy(t->launch_arg, argv[1], sizeof(t->launch_arg) - 1);
+      t->launch_arg[sizeof(t->launch_arg) - 1] = 0;
+    }
   }
 
   return 0;

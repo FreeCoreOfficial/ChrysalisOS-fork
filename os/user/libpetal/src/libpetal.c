@@ -115,6 +115,15 @@ void p_get_time(p_time_t *t) {
   }
 }
 
+int p_get_launch_arg(char *buf, uint32_t size) {
+  return syscall2(SYS_GET_LAUNCH_ARG, (uint32_t)(uintptr_t)buf, size);
+}
+
+int p_exec_command_capture(const char *line, char *out, uint32_t out_cap) {
+  return syscall3(SYS_CMD_EXEC_CAPTURE, (uint32_t)(uintptr_t)line,
+                  (uint32_t)(uintptr_t)out, out_cap);
+}
+
 int p_open(const char *path, int flags) {
   return syscall2(SYS_OPEN, (uint32_t)(uintptr_t)path, (uint32_t)flags);
 }

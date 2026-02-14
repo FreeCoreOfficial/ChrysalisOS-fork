@@ -77,6 +77,7 @@ int fat32_create_file_alloc(const char *path, uint32_t size);
 int fat32_write_file_offset(const char *path, const void *data, uint32_t size,
                             uint32_t offset, int verify);
 void serial(const char *fmt, ...);
+void serial_set_vga_mirror(int enabled);
 void ata_init(void);
 void ata_set_skip_cache_flush(int enabled);
 void *kmalloc(size_t size);
@@ -191,6 +192,216 @@ static void build_mbr(uint8_t *mbr, const uint8_t *boot_img, uint32_t start_lba,
   p[15] = (uint8_t)((count >> 24) & 0xFF);
   mbr[510] = 0x55;
   mbr[511] = 0xAA;
+}
+
+static const int UI_SCREEN_W = 80;
+static const int UI_SCREEN_H = 25;
+static const int UI_BAR_X = 12;
+static const int UI_BAR_Y = 13;
+static const int UI_BAR_W = 56;
+static int ui_progress_anim_tick = 0;
+static int ui_last_percent = -1;
+
+static const uint32_t UI_DELAY_MAJOR_ITERS = 3500000U;
+static const uint32_t UI_DELAY_MINOR_ITERS = 700000U;
+
+static int ui_clamp_int(int value, int min_v, int max_v) {
+  if (value < min_v)
+    return min_v;
+  if (value > max_v)
+    return max_v;
+  return value;
+}
+
+static void ui_progress_delay(uint32_t iters) {
+  volatile uint32_t spin = 0;
+  while (spin < iters) {
+    asm volatile("pause");
+    spin++;
+  }
+}
+
+static void ui_fill_rect_textmode(int x, int y, int w, int h, uint8_t color) {
+  if (w <= 0 || h <= 0)
+    return;
+
+  if (x < 0) {
+    w += x;
+    x = 0;
+  }
+  if (y < 0) {
+    h += y;
+    y = 0;
+  }
+
+  if (x >= UI_SCREEN_W || y >= UI_SCREEN_H)
+    return;
+  if (x + w > UI_SCREEN_W)
+    w = UI_SCREEN_W - x;
+  if (y + h > UI_SCREEN_H)
+    h = UI_SCREEN_H - y;
+
+  if (w <= 0 || h <= 0)
+    return;
+
+  for (int yy = 0; yy < h; yy++) {
+    for (int xx = 0; xx < w; xx++) {
+      terminal_putentryat(' ', color, x + xx, y + yy);
+    }
+  }
+}
+
+static void ui_write_at(int x, int y, uint8_t color, const char *text) {
+  if (!text || y < 0 || y >= UI_SCREEN_H || x >= UI_SCREEN_W)
+    return;
+
+  size_t i = 0;
+  int px = x;
+  if (px < 0) {
+    i = (size_t)(-px);
+    px = 0;
+  }
+
+  while (text[i] && px < UI_SCREEN_W) {
+    terminal_putentryat(text[i], color, px, y);
+    px++;
+    i++;
+  }
+}
+
+static void ui_write_line(int x, int y, int w, uint8_t color, const char *text) {
+  ui_fill_rect_textmode(x, y, w, 1, color);
+  ui_write_at(x, y, color, text);
+}
+
+static void ui_u32_to_dec(uint32_t value, char *out, size_t out_sz) {
+  if (!out || out_sz == 0)
+    return;
+
+  char tmp[16];
+  int i = 0;
+  if (value == 0) {
+    tmp[i++] = '0';
+  } else {
+    while (value && i < (int)sizeof(tmp)) {
+      tmp[i++] = (char)('0' + (value % 10));
+      value /= 10;
+    }
+  }
+
+  int n = i;
+  if (n > (int)out_sz - 1)
+    n = (int)out_sz - 1;
+
+  for (int j = 0; j < n; j++) {
+    out[j] = tmp[i - 1 - j];
+  }
+  out[n] = 0;
+}
+
+static void ui_make_progress_text(int percent, char *out, size_t out_sz) {
+  if (!out || out_sz == 0)
+    return;
+
+  char num[8];
+  ui_u32_to_dec((uint32_t)percent, num, sizeof(num));
+
+  size_t p = 0;
+  const char *prefix = "Progress: ";
+  while (*prefix && p + 1 < out_sz) {
+    out[p++] = *prefix++;
+  }
+  for (size_t i = 0; num[i] && p + 1 < out_sz; i++) {
+    out[p++] = num[i];
+  }
+  if (p + 1 < out_sz)
+    out[p++] = '%';
+  out[p] = 0;
+}
+
+static void ui_draw_progress_frame(bool upgrade_mode) {
+  terminal_set_color(0x1F);
+  terminal_clear();
+
+  terminal_set_color(0x70);
+  for (int x = 0; x < UI_SCREEN_W; x++)
+    terminal_putentryat(' ', 0x70, x, 0);
+
+  if (upgrade_mode) {
+    ui_write_at(1, 0, 0x70, " Chrysalis OS Upgrade in progress...                 [Installer]");
+  } else {
+    ui_write_at(1, 0, 0x70, " Chrysalis OS Installation in progress...            [Installer]");
+  }
+
+  terminal_set_color(0x1F);
+  ui_fill_rect_textmode(0, 1, UI_SCREEN_W, UI_SCREEN_H - 1, 0x1F);
+
+  ui_write_line(4, 4, 72, 0x1F, "Please wait while setup installs Chrysalis OS.");
+  ui_write_line(4, 5, 72, 0x1F, "Do not power off your computer.");
+  ui_write_line(4, 8, 72, 0x1F, "Stage:");
+  ui_write_line(4, 9, 72, 0x1F, "Detail:");
+  ui_write_line(4, 11, 72, 0x1F, "Progress: 0%");
+
+  ui_fill_rect_textmode(UI_BAR_X - 2, UI_BAR_Y - 1, UI_BAR_W + 4, 3, 0x17);
+  terminal_putentryat('[', 0x70, UI_BAR_X - 1, UI_BAR_Y);
+  for (int i = 0; i < UI_BAR_W; i++) {
+    terminal_putentryat('-', 0x17, UI_BAR_X + i, UI_BAR_Y);
+  }
+  terminal_putentryat(']', 0x70, UI_BAR_X + UI_BAR_W, UI_BAR_Y);
+  ui_write_at(UI_BAR_X - 2, UI_BAR_Y + 1, 0x1F, "0%");
+  ui_write_at(UI_BAR_X + UI_BAR_W - 2, UI_BAR_Y + 1, 0x1F, "100%");
+
+  ui_write_line(4, 23, 72, 0x1F, "Please wait...");
+  ui_progress_anim_tick = 0;
+}
+
+static void ui_progress_update(int percent, const char *stage, const char *detail) {
+  int pct = ui_clamp_int(percent, 0, 100);
+  int changed_percent = (pct != ui_last_percent);
+  int filled = (pct * UI_BAR_W) / 100;
+
+  ui_fill_rect_textmode(12, 8, 64, 1, 0x1F);
+  ui_fill_rect_textmode(12, 9, 64, 1, 0x1F);
+  ui_write_at(12, 8, 0x1F, stage ? stage : "");
+  ui_write_at(12, 9, 0x1F, detail ? detail : "");
+
+  char progress_text[32];
+  ui_make_progress_text(pct, progress_text, sizeof(progress_text));
+  ui_write_line(4, 11, 72, 0x1F, progress_text);
+
+  terminal_putentryat('[', 0x70, UI_BAR_X - 1, UI_BAR_Y);
+  terminal_putentryat(']', 0x70, UI_BAR_X + UI_BAR_W, UI_BAR_Y);
+  for (int i = 0; i < UI_BAR_W; i++) {
+    if (i < filled) {
+      terminal_putentryat('=', 0x1B, UI_BAR_X + i, UI_BAR_Y);
+    } else {
+      terminal_putentryat('-', 0x17, UI_BAR_X + i, UI_BAR_Y);
+    }
+  }
+
+  if (filled > 0) {
+    int hi = ui_progress_anim_tick % filled;
+    terminal_putentryat('=', 0x3F, UI_BAR_X + hi, UI_BAR_Y);
+  }
+  ui_progress_anim_tick++;
+  ui_last_percent = pct;
+
+  if (changed_percent) {
+    ui_progress_delay(UI_DELAY_MAJOR_ITERS);
+  } else {
+    ui_progress_delay(UI_DELAY_MINOR_ITERS);
+  }
+}
+
+static int installer_count_modules(uint32_t addr) {
+  int module_count = 0;
+  struct multiboot2_tag *tag = (struct multiboot2_tag *)(uintptr_t)(addr + 8);
+  while (tag->type != MULTIBOOT2_TAG_TYPE_END) {
+    if (tag->type == MULTIBOOT2_TAG_TYPE_MODULE)
+      module_count++;
+    tag = (struct multiboot2_tag *)((uint8_t *)tag + ((tag->size + 7) & ~7));
+  }
+  return module_count;
 }
 
 /* Keyboard polling for menu */
@@ -460,23 +671,20 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
 
   bool upgrade_mode = (choice == '2');
 
-  // Clear for progress
-  terminal_clear();
-  terminal_set_color(0x70);
-  for (int x = 0; x < 80; x++)
-    terminal_putentryat(' ', 0x70, x, 0);
-  terminal_printf(" Chrysalis OS %s in progress...",
-                  upgrade_mode ? "Upgrade" : "Installation");
-  terminal_set_color(0x1F);
-  terminal_printf("\n\n");
+  serial_set_vga_mirror(0);
+  ui_draw_progress_frame(upgrade_mode);
+  ui_progress_update(0, "Preparing installer", "Initializing subsystems...");
 
   /* 1. Initialize Subsystems */
   kmalloc_init();
+  ui_progress_update(2, "Initializing hardware",
+                     "Bringing up ATA controller...");
 
   serial("[INSTALLER] Initializing ATA...\n");
   ata_init();
   /* Keep cache flush enabled for verified writes */
   ata_set_skip_cache_flush(0);
+  ui_progress_update(6, "Initializing hardware", "Target disk ready.");
 
   /* 2. Format / Prepare Target Disk */
   ata_set_allow_mbr_write(1);
@@ -487,6 +695,8 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
     total_sectors = 262144; // Default 128MB
 
   if (!upgrade_mode) {
+    ui_progress_update(8, "Preparing target disk",
+                       "Formatting partition and filesystem...");
     serial("[INSTALLER] Action: Formatting Partition 1 (LBA %d)...\n",
            start_lba);
     if (fat32_format(start_lba, total_sectors - start_lba, "CHRYSALIS") != 0) {
@@ -495,10 +705,13 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
     }
     serial("[INSTALLER] Format Complete.\n");
   } else {
+    ui_progress_update(8, "Preparing target disk",
+                       "Verifying existing filesystem for upgrade...");
     serial("[INSTALLER] Action: UPGRADE (Verifying existing Filesystem at LBA "
            "%d)...\n",
            start_lba);
   }
+  ui_progress_update(20, "Preparing target disk", "Disk phase complete.");
 
   /* 2.1 User Setup (Only for Fresh Install) */
   char username[32];
@@ -506,6 +719,7 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   char hostname[32];
 
   if (!upgrade_mode) {
+    ui_progress_update(20, "User setup", "Collecting account information...");
     terminal_clear();
     terminal_set_color(0x70);
     for (int x = 0; x < 80; x++)
@@ -531,19 +745,16 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
     terminal_printf("\n");
 
     serial("[INSTALLER] User setup: user='%s' host='%s'\n", username, hostname);
+    ui_draw_progress_frame(upgrade_mode);
+    ui_progress_update(30, "User setup", "Account data captured.");
   } else {
     serial("[INSTALLER] Skipping user setup (upgrade mode - preserving "
            "existing users)\n");
+    ui_progress_update(30, "User setup", "Skipped in upgrade mode.");
   }
 
-  terminal_clear();
-  terminal_set_color(0x70);
-  for (int x = 0; x < 80; x++)
-    terminal_putentryat(' ', 0x70, x, 0);
-  terminal_printf(" Chrysalis OS %s in progress...",
-                  upgrade_mode ? "Upgrade" : "Installation");
-  terminal_set_color(0x1F);
-  terminal_printf("\n\n");
+  ui_progress_update(31, "Mounting filesystem",
+                     "Mounting target volume and running checks...");
   if (fat32_init(0, start_lba) != 0) {
     serial("[INSTALLER] Search failed at LBA %d, checking LBA 0...\n",
            start_lba);
@@ -562,6 +773,7 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
     serial("[INSTALLER] Repair Phase: Cleaning root directory duplicates...\n");
     fat32_deduplicate_root();
   }
+  ui_progress_update(38, "Mounting filesystem", "Filesystem checks complete.");
 
   /* Dump BPB layout for debug */
   uint8_t *bpb_dbg = (uint8_t *)kmalloc(512);
@@ -579,6 +791,8 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   }
 
   /* 3. Create Directory Structure */
+  ui_progress_update(39, "Creating directory tree",
+                     "Creating /boot, /system and application folders...");
   serial("[INSTALLER] Creating directories...\n");
   char boot_path[6] = {'/', 'b', 'o', 'o', 't', 0};
   char chrys_path[16] = {'/', 'b', 'o', 'o', 't', '/', 'c', 'h',
@@ -632,6 +846,7 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   if (mr != 0 && !upgrade_mode) {
     serial("[INSTALLER] WARN: mkdir /system/apps failed (err=%d)\n", mr);
   }
+  ui_progress_update(48, "Creating directory tree", "Directory phase complete.");
 
   /* Directory listings disabled to reduce stack usage and avoid instability */
 
@@ -649,12 +864,32 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   void *sel_tga_data = NULL;
   size_t sel_tga_size = 0;
 
+  int module_total = installer_count_modules(addr);
+  if (module_total <= 0)
+    module_total = 1;
+  int module_done = 0;
+  char module_total_num[12];
+  char module_total_msg[64];
+  ui_u32_to_dec((uint32_t)module_total, module_total_num, sizeof(module_total_num));
+  size_t mt = 0;
+  const char *mt_prefix = "Modules to process: ";
+  while (*mt_prefix && mt + 1 < sizeof(module_total_msg))
+    module_total_msg[mt++] = *mt_prefix++;
+  for (size_t i = 0; module_total_num[i] && mt + 1 < sizeof(module_total_msg);
+       i++) {
+    module_total_msg[mt++] = module_total_num[i];
+  }
+  module_total_msg[mt] = 0;
+  ui_progress_update(48, "Scanning installer modules", module_total_msg);
+
   /* Scan multidoob tags (parsed manually here as we need raw addresses) */
   struct multiboot2_tag *tag = (struct multiboot2_tag *)(uintptr_t)(addr + 8);
   while (tag->type != MULTIBOOT2_TAG_TYPE_END) {
     if (tag->type == MULTIBOOT2_TAG_TYPE_MODULE) {
       struct multiboot2_tag_module *mod = (struct multiboot2_tag_module *)tag;
       const char *cmdline = mod->string; /* Correct field name: char string[] */
+      char current_mod_name[64];
+      current_mod_name[0] = 0;
 
       serial("[INSTALLER] Found Module: '%s' start=%x end=%x size=%d\n",
              cmdline, mod->mod_start, mod->mod_end,
@@ -668,13 +903,13 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
         if (cmd_len > 0 && cmdline[cmd_len - 1] == '\0') {
           cmd_len--;
         }
-        char mod_name[64];
-        normalize_module_name_len(cmdline, cmd_len, mod_name, sizeof(mod_name));
-        serial("[INSTALLER] Module name parsed: '%s'\n", mod_name);
+        normalize_module_name_len(cmdline, cmd_len, current_mod_name,
+                                  sizeof(current_mod_name));
+        serial("[INSTALLER] Module name parsed: '%s'\n", current_mod_name);
 
-        int m_kernel = strcmp(mod_name, "kernel.bin");
-        int m_boot = strcmp(mod_name, "boot.img");
-        int m_core = strcmp(mod_name, "core.img");
+        int m_kernel = strcmp(current_mod_name, "kernel.bin");
+        int m_boot = strcmp(current_mod_name, "boot.img");
+        int m_core = strcmp(current_mod_name, "core.img");
         serial("[INSTALLER] mod_name cmp: kernel=%d boot=%d core=%d\n",
                m_kernel, m_boot, m_core);
 
@@ -690,30 +925,30 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
           core_img = (void *)(uintptr_t)mod->mod_start;
           core_img_size = mod->mod_end - mod->mod_start;
           serial("[INSTALLER] Assigned to core.img\n");
-        } else if (strcmp(mod_name, "theme.txt") == 0) {
+        } else if (strcmp(current_mod_name, "theme.txt") == 0) {
           theme_txt_data = (void *)(uintptr_t)mod->mod_start;
           theme_txt_size = mod->mod_end - mod->mod_start;
           serial("[INSTALLER] Assigned to theme.txt\n");
-        } else if (strcmp(mod_name, "background.tga") == 0) {
+        } else if (strcmp(current_mod_name, "background.tga") == 0) {
           bg_tga_data = (void *)(uintptr_t)mod->mod_start;
           bg_tga_size = mod->mod_end - mod->mod_start;
           serial("[INSTALLER] Assigned to background.tga\n");
-        } else if (strcmp(mod_name, "select_c.tga") == 0) {
+        } else if (strcmp(current_mod_name, "select_c.tga") == 0) {
           sel_tga_data = (void *)(uintptr_t)mod->mod_start;
           sel_tga_size = mod->mod_end - mod->mod_start;
           serial("[INSTALLER] Assigned to select_c.tga\n");
-        } else if (has_extension(mod_name, ".bmp")) {
+        } else if (has_extension(current_mod_name, ".bmp")) {
           char path[64] = "/system/icons/";
-          memcpy(path + 14, mod_name, strlen(mod_name) + 1);
-          serial("[INSTALLER] Dynamic Icon: %s -> %s\n", mod_name, path);
+          memcpy(path + 14, current_mod_name, strlen(current_mod_name) + 1);
+          serial("[INSTALLER] Dynamic Icon: %s -> %s\n", current_mod_name, path);
           fat32_create_file_verified(path, (void *)(uintptr_t)mod->mod_start,
                                      (uint32_t)(mod->mod_end - mod->mod_start),
                                      0);
           kmalloc_reset();
-        } else if (has_extension(mod_name, ".petal")) {
+        } else if (has_extension(current_mod_name, ".petal")) {
           char path[64] = "/system/apps/";
-          memcpy(path + 13, mod_name, strlen(mod_name) + 1);
-          serial("[INSTALLER] Dynamic App: %s -> %s\n", mod_name, path);
+          memcpy(path + 13, current_mod_name, strlen(current_mod_name) + 1);
+          serial("[INSTALLER] Dynamic App: %s -> %s\n", current_mod_name, path);
           fat32_create_file_verified(path, (void *)(uintptr_t)mod->mod_start,
                                      (uint32_t)(mod->mod_end - mod->mod_start),
                                      0);
@@ -723,11 +958,39 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
                  cmdline);
         }
       }
+
+      module_done++;
+      int module_pct = 48 + (module_done * 20) / module_total;
+      if (module_pct > 68)
+        module_pct = 68;
+
+      char module_detail[72];
+      size_t md = 0;
+      const char *md_prefix = "Processing module: ";
+      while (*md_prefix && md + 1 < sizeof(module_detail))
+        module_detail[md++] = *md_prefix++;
+      if (current_mod_name[0]) {
+        for (size_t i = 0; current_mod_name[i] && md + 1 < sizeof(module_detail);
+             i++) {
+          module_detail[md++] = current_mod_name[i];
+        }
+      } else {
+        const char *unknown = "(unnamed)";
+        for (size_t i = 0; unknown[i] && md + 1 < sizeof(module_detail); i++) {
+          module_detail[md++] = unknown[i];
+        }
+      }
+      module_detail[md] = 0;
+      ui_progress_update(module_pct, "Scanning installer modules", module_detail);
     }
     tag = (struct multiboot2_tag *)((uint8_t *)tag + ((tag->size + 7) & ~7));
   }
+  ui_progress_update(68, "Scanning installer modules",
+                     "Module scan and dynamic installs complete.");
 
   /* 4.1 Install GRUB boot code + core.img */
+  ui_progress_update(69, "Installing bootloader",
+                     "Preparing GRUB boot records...");
   serial("[INSTALLER] GRUB assets: boot_img=%x size=%d core_img=%x size=%d\n",
          (uint32_t)(uintptr_t)boot_img, (int)boot_img_size,
          (uint32_t)(uintptr_t)core_img, (int)core_img_size);
@@ -756,6 +1019,7 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   serial("[INSTALLER] Writing GRUB core.img (%d bytes)...\n",
          (int)core_img_size);
   write_sectors(1, core_img, (uint32_t)core_img_size);
+  ui_progress_update(72, "Installing bootloader", "Writing GRUB configuration...");
 
   /* 5. Write GRUB config */
   const char *grub_cfg = "# Load graphical modules\n"
@@ -849,9 +1113,13 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
     fat32_create_file_verified("/boot/grub/themes/chrysalis/select_c.tga",
                                sel_tga_data, (uint32_t)sel_tga_size, 1);
   }
+  ui_progress_update(78, "Installing bootloader",
+                     "GRUB and theme assets installed.");
 
   /* 6. Install Kernel (chunked) */
   if (kernel_data && kernel_size > 0) {
+    ui_progress_update(79, "Installing kernel",
+                       "Writing /boot/chrysalis/kernel.bin...");
     serial("[INSTALLER] Installing Kernel (%d bytes)...\n", (int)kernel_size);
     int r = fat32_create_file_alloc("/boot/chrysalis/kernel.bin", kernel_size);
     if (r != 0) {
@@ -876,6 +1144,11 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
       offset += n;
       serial("[INSTALLER] kernel.bin progress %d/%d\n", (int)offset,
              (int)kernel_size);
+      int kernel_pct = 78 + (int)((offset * 17U) / kernel_size);
+      if (kernel_pct > 95)
+        kernel_pct = 95;
+      ui_progress_update(kernel_pct, "Installing kernel",
+                         "Writing kernel chunks to disk...");
     }
     serial("[INSTALLER] Kernel Installed OK.\n");
     int32_t ksz = fat32_get_file_size("/boot/chrysalis/kernel.bin");
@@ -893,6 +1166,8 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
    * scan. */
 
   /* 7.1 Create User Data (Only for Fresh Install) */
+  ui_progress_update(95, "Finalizing installation",
+                     "Writing user data and verification...");
   if (!upgrade_mode) {
     char users_dir[32] = "/system/users";
     fat32_create_directory_verified(users_dir, 1);
@@ -976,7 +1251,10 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
            c_entries[i].size);
   }
 
+  ui_progress_update(100, "Finalizing installation",
+                     "Installation complete. Opening success screen...");
   serial("\n[INSTALLER] Installation Complete.\n");
+  serial_set_vga_mirror(1);
 
   /* 8. Success Screen */
   while (true) {

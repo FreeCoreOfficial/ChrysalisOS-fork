@@ -181,17 +181,17 @@ extern "C" void terminal_clear() {
 }
 
 extern "C" void terminal_putchar(char c) {
-  /* Global rendering lock for GUI mode */
-  if (!term_rendering_enabled)
-    return;
-
-  /* Handle Output Redirection (Piping) */
+  /* Output capture must win regardless of current render mode/state. */
   if (capture_buf) {
     if (capture_written && *capture_written < capture_max) {
       capture_buf[(*capture_written)++] = c;
     }
     return; /* Do not print to screen when piped */
   }
+
+  /* Global rendering lock for GUI mode */
+  if (!term_rendering_enabled)
+    return;
 
   if (term_mode == TERMINAL_MODE_WINDOW && term_surface) {
     int max_cols = term_w / 8;
@@ -267,19 +267,26 @@ extern "C" void terminal_putchar(char c) {
 }
 
 extern "C" void terminal_writestring(const char *s) {
+  if (!s)
+    return;
+
+  /* Output capture must win in every terminal mode (WINDOW/FB/VGA). */
+  if (capture_buf) {
+    while (*s) {
+      if (capture_written && *capture_written < capture_max) {
+        capture_buf[(*capture_written)++] = *s;
+      }
+      s++;
+    }
+    return;
+  }
+
   if (term_mode == TERMINAL_MODE_WINDOW) {
     int max_cols = term_w / 8;
     int max_rows = term_h / 16;
     while (*s) {
       char c = *s++;
-      /* Priority 1: Output Redirection (Piping) */
-      if (capture_buf) {
-        if (capture_written && *capture_written < capture_max) {
-          capture_buf[(*capture_written)++] = c;
-        }
-        continue;
-      }
-      /* Priority 2: Visual Rendering */
+      /* Visual rendering */
       if (term_rendering_enabled) {
         if (c == '\n') {
           row++;

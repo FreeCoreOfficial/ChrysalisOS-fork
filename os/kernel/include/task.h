@@ -35,6 +35,7 @@ typedef struct task {
   int pid;
   void (*entry_noarg)(void); /* saved entry point; used by task trampoline */
   uint8_t is_user_app;       /* dynamically loaded .petal task */
+  char launch_arg[256];      /* argv[1] passed by execve for standalone apps */
   uint32_t
       *kstack_ptr; /* pointer la frame-ul salvat (folosit de context_switch) */
   uint32_t cr3;    /* optional: pagina director (setează CR3 la switch) */

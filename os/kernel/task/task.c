@@ -344,5 +344,3 @@ void task_exit(int code) {
   for (;;)
     asm volatile("hlt");
 }
-
-/* End of task/task.c fallback */

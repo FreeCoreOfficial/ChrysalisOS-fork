@@ -13,6 +13,8 @@ __attribute__((section(".text._start"))) void _start();
 static char screen[ROWS][COLS + 1];
 static int cursor_x = 0;
 static int cursor_y = 0;
+static char cmdline[256];
+static int cmd_len = 0;
 
 static void clear_screen() {
   for (int y = 0; y < ROWS; y++) {
@@ -30,10 +32,12 @@ static void draw_screen(void *win) {
   }
 }
 
-static void putchar(char c) {
+static void ks_putchar(char c) {
   if (c == '\n') {
     cursor_x = 0;
     cursor_y++;
+  } else if (c == '\r') {
+    cursor_x = 0;
   } else {
     if (cursor_x < COLS) {
       screen[cursor_y][cursor_x++] = c;
@@ -54,10 +58,36 @@ static void putchar(char c) {
   }
 }
 
-static void print(const char *s) {
+static void print_str(const char *s) {
   while (*s) {
-    putchar(*s++);
+    ks_putchar(*s++);
   }
+}
+
+static void exec_current_command() {
+  char output[2048];
+
+  cmdline[cmd_len] = '\0';
+  ks_putchar('\n');
+
+  if (cmd_len > 0) {
+    int n = p_exec_command_capture(cmdline, output, sizeof(output));
+    if (n > 0) {
+      if (n >= (int)sizeof(output))
+        n = (int)sizeof(output) - 1;
+      output[n] = 0;
+      print_str(output);
+      if (n > 0 && output[n - 1] != '\n') {
+        ks_putchar('\n');
+      }
+    } else if (n < 0) {
+      print_str("Command execution error.\n");
+    }
+  }
+
+  cmd_len = 0;
+  cmdline[0] = '\0';
+  print_str("> ");
 }
 
 void _start() {
@@ -70,8 +100,10 @@ void _start() {
   }
 
   clear_screen();
-  print("ChrysalisOS Konsole v0.1\n");
-  print("> ");
+  cmdline[0] = '\0';
+  cmd_len = 0;
+  print_str("ChrysalisOS Konsole v0.2\n");
+  print_str("> ");
   draw_screen(win);
   p_wm_mark_dirty();
 
@@ -80,17 +112,23 @@ void _start() {
   while (running) {
     if (p_get_event(&ev)) {
       if (ev.type == P_INPUT_KEYBOARD && ev.pressed) {
-        if (ev.keycode == 0x01) { /* ESC */
+        if (ev.keycode == 0x01 || ev.keycode == 0x1B) { /* ESC */
           running = 0;
-        } else if (ev.keycode == '\b') {
-          if (cursor_x > 2) { /* Don't delete prompt */
+        } else if (ev.keycode == '\b' || ev.keycode == 0x08) {
+          if (cmd_len > 0) {
+            cmd_len--;
+            cmdline[cmd_len] = '\0';
             cursor_x--;
             screen[cursor_y][cursor_x] = ' ';
           }
         } else if (ev.keycode == '\n') {
-          print("\nCommand not found.\n> ");
+          exec_current_command();
         } else if (ev.keycode >= 32 && ev.keycode < 127) {
-          putchar((char)ev.keycode);
+          if (cmd_len < (int)sizeof(cmdline) - 1 && cursor_x < COLS) {
+            char c = (char)ev.keycode;
+            cmdline[cmd_len++] = c;
+            ks_putchar(c);
+          }
         }
         draw_screen(win);
         p_wm_mark_dirty();

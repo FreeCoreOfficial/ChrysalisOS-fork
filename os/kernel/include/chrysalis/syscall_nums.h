@@ -30,5 +30,7 @@
 #define SYS_SLEEP 31
 #define SYS_YIELD 32
 #define SYS_GET_TIME 40
+#define SYS_GET_LAUNCH_ARG 41
+#define SYS_CMD_EXEC_CAPTURE 42
 
 #endif

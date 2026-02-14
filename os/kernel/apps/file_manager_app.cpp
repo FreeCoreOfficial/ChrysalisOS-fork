@@ -1,8 +1,11 @@
 #include "file_manager_app.h"
 extern "C" void serial(const char *fmt, ...);
 extern "C" int exec_from_path(const char *path, char *const argv[]);
+extern "C" int execve(const char *filename, char *const argv[],
+                      char *const envp[]);
 #include "../cmds/fat.h"
 #include "../string.h"
+#include "../terminal.h"
 #include "../time/timer.h"
 #include "../ui/flyui/draw.h"
 #include "../ui/wm/wm.h"
@@ -346,7 +349,16 @@ bool file_manager_app_handle_event(input_event_t *ev) {
             if (has_ext_ci(files[idx].name, ".petal")) {
               exec_from_path(fullpath, NULL);
             } else if (has_ext_ci(files[idx].name, ".bmp")) {
-              image_viewer_app_create(fullpath);
+              char *viewer_argv[] = {(char *)"/system/apps/image-viewer.petal",
+                                     fullpath, nullptr};
+              int rc = execve("/system/apps/image-viewer.petal", viewer_argv,
+                              nullptr);
+              if (rc < 0) {
+                terminal_printf("[FM] Failed to launch image-viewer for '%s'\n",
+                                fullpath);
+                serial("[FM] Failed to launch image-viewer for '%s'\n",
+                       fullpath);
+              }
             } else {
               notepad_app_open(fullpath);
             }

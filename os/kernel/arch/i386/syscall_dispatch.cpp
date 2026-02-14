@@ -4,6 +4,7 @@
 #include "../../include/chrysalis/syscall_nums.h"
 #include "../../input/input.h"
 #include "../../mem/kmalloc.h"
+#include "../../cmds/command_exec.h"
 #include "../../sched/pcb.h"
 #include "../../terminal.h"
 #include "../../time/clock.h"
@@ -244,6 +245,29 @@ int syscall_dispatch(uint32_t num, uint32_t a1, uint32_t a2, uint32_t a3,
     time_get_local(&t);
     /* Pack time into 32-bit: HH:MM:SS */
     return (uint32_t)((t.hour << 16) | (t.minute << 8) | t.second);
+  }
+
+  case SYS_GET_LAUNCH_ARG: {
+    char *user_buf = (char *)(uintptr_t)a1;
+    uint32_t buf_size = a2;
+    pcb_t *cur = pcb_get_current();
+    if (!user_buf || buf_size == 0 || !cur)
+      return -1;
+
+    uint32_t i = 0;
+    while (i + 1 < buf_size && cur->launch_arg[i]) {
+      user_buf[i] = cur->launch_arg[i];
+      i++;
+    }
+    user_buf[i] = 0;
+    return (int)i;
+  }
+
+  case SYS_CMD_EXEC_CAPTURE: {
+    const char *line = (const char *)(uintptr_t)a1;
+    char *out = (char *)(uintptr_t)a2;
+    uint32_t out_cap = a3;
+    return cmd_exec_capture(line, out, out_cap);
   }
 
   default:

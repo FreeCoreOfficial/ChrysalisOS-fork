@@ -156,6 +156,7 @@ OBJS = \
 	$(BUILD)/cmds/tee.o \
 	$(BUILD)/cmds/sha256.o \
 	$(BUILD)/cmds/sleep.o \
+	$(BUILD)/cmds/command_exec.o \
 	$(BUILD)/cmds/which.o \
 	$(BUILD)/cmds/gcc.o \
 	$(BUILD)/cmds/size.o \
@@ -683,6 +684,9 @@ $(BUILD)/cmds/sha256.o: kernel/cmds/sha256.cpp | dirs
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(BUILD)/cmds/sleep.o: kernel/cmds/sleep.cpp | dirs
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(BUILD)/cmds/command_exec.o: kernel/cmds/command_exec.cpp | dirs
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(BUILD)/cmds/which.o: kernel/cmds/which.cpp | dirs
