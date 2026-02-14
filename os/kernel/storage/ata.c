@@ -3,11 +3,29 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "../arch/i386/io.h"        /* inb/outb/inw/outw */
-#include "../terminal.h"  /* terminal_writestring() for simple debug */
+
+#ifndef ATA_LOG_SERIAL_ONLY
+#define ATA_LOG_SERIAL_ONLY 0
+#endif
+
+#if ATA_LOG_SERIAL_ONLY
+#include "../drivers/serial.h"
+#else
+#include "../terminal.h" /* terminal_writestring() for simple debug */
+#endif
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+static inline void ata_log_write(const char* s)
+{
+#if ATA_LOG_SERIAL_ONLY
+    serial_write_string(s);
+#else
+    terminal_writestring(s);
+#endif
+}
 
 /* Primary bus */
 #define ATA_PRIMARY_IO   0x1F0
@@ -91,10 +109,10 @@ static void ata_dump_hex(const uint8_t* buf, int count)
         out[1] = hex[b & 0xF];
         out[2] = ' ';
         out[3] = 0;
-        terminal_writestring(out);
+        ata_log_write(out);
 
         if ((i + 1) % 16 == 0)
-            terminal_writestring("\n");
+            ata_log_write("\n");
     }
 }
 
@@ -130,7 +148,7 @@ int ata_read_sector_retry(uint32_t lba, uint8_t* buffer, int retries)
     for (int i = 0; i < retries; i++) {
         int r = ata_read_sector(lba, buffer);
         if (r == 0) return 0;
-        terminal_writestring("[ATA] read retry\n");
+        ata_log_write("[ATA] read retry\n");
         ata_soft_reset();
     }
     return -1;
@@ -310,7 +328,7 @@ int ata_write_sector(uint32_t lba, const uint8_t* buffer)
 
     uint8_t status = ata_wait_bsy_clear();
     if (status & ATA_SR_ERR) {
-        terminal_writestring("[ATA] write: ERR after BSY clear\n");
+        ata_log_write("[ATA] write: ERR after BSY clear\n");
         return -3;
     }
 
@@ -318,12 +336,12 @@ int ata_write_sector(uint32_t lba, const uint8_t* buffer)
         if (status & ATA_SR_DRQ) break;
         status = ata_read_status();
         if (status & ATA_SR_ERR) {
-            terminal_writestring("[ATA] write: ERR waiting DRQ\n");
+            ata_log_write("[ATA] write: ERR waiting DRQ\n");
             return -4;
         }
     }
     if (!(status & ATA_SR_DRQ)) {
-        terminal_writestring("[ATA] write: DRQ timeout\n");
+        ata_log_write("[ATA] write: DRQ timeout\n");
         return -5;
     }
 
@@ -351,7 +369,7 @@ int ata_write_sector_retry(uint32_t lba, const uint8_t* buffer, int retries)
     for (int i = 0; i < retries; i++) {
         int r = ata_write_sector(lba, buffer);
         if (r == 0) return 0;
-        terminal_writestring("[ATA] write retry\n");
+        ata_log_write("[ATA] write retry\n");
         ata_soft_reset();
     }
     return -1;
@@ -360,24 +378,24 @@ int ata_write_sector_retry(uint32_t lba, const uint8_t* buffer, int retries)
 /* init + test (reads sector 0 and dumps first 128 bytes) */
 void ata_init(void)
 {
-    terminal_writestring("[ATA] init\n");
+    ata_log_write("[ATA] init\n");
 
     static uint8_t sector[512];
 
     if (ata_read_sector(0, sector) != 0) {
-        terminal_writestring("[ATA] read sector 0 FAILED\n");
+        ata_log_write("[ATA] read sector 0 FAILED\n");
         return;
     }
 
-    terminal_writestring("[ATA] sector 0 read OK\n");
+    ata_log_write("[ATA] sector 0 read OK\n");
 
     ata_dump_hex(sector, 128);
 
     /* semnătura MBR */
     if (sector[510] == 0x55 && sector[511] == 0xAA)
-        terminal_writestring("\n[ATA] MBR signature OK (55 AA)\n");
+        ata_log_write("\n[ATA] MBR signature OK (55 AA)\n");
     else
-        terminal_writestring("\n[ATA] MBR signature MISSING\n");
+        ata_log_write("\n[ATA] MBR signature MISSING\n");
 }
 
 #ifdef __cplusplus

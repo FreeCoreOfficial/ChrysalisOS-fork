@@ -12,7 +12,7 @@ static const int VGA_HEIGHT = 25;
 static int terminal_row = 0;
 static int terminal_column = 0;
 static uint8_t terminal_color = 0x07; // Light Grey on Black
-static int serial_vga_mirror_enabled = 1;
+static int serial_vga_mirror_enabled = 0;
 
 void terminal_putentryat(char c, uint8_t color, int x, int y) {
   const int index = y * VGA_WIDTH + x;

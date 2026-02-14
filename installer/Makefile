@@ -22,10 +22,10 @@ OBJS = \
 	$(BUILD)/kernel_installer.o \
 	$(BUILD)/installer.o \
 	$(BUILD)/disk_shim.o \
+	$(BUILD)/ata_installer.o \
 	$(BUILD)/kmalloc_simple.o \
 	$(BUILD)/partitions_stub.o \
 	$(BUILD)/stubs.o \
-	../os/build/ata.o \
 	../os/build/fat_fs.o \
 	../os/build/cmd_fat.o \
 	../os/build/serial.o \
@@ -74,6 +74,12 @@ $(BUILD)/disk_shim.o: disk_shim.cpp
 	@mkdir -p $(BUILD)
 	@echo "[BUILD] disk_shim.cpp"
 	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# ATA driver (installer-specific: serial-only logs, no VGA spam)
+$(BUILD)/ata_installer.o: ../os/kernel/storage/ata.c
+	@mkdir -p $(BUILD)
+	@echo "[BUILD] ata.c (installer serial-only logs)"
+	$(CC) $(CFLAGS) -DATA_LOG_SERIAL_ONLY=1 -c $< -o $@
 
 # Simple kmalloc for installer (no PMM)
 $(BUILD)/kmalloc_simple.o: kmalloc_simple.cpp

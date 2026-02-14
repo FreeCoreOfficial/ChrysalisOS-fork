@@ -93,6 +93,10 @@ int disk_read_sector(uint32_t lba, uint8_t *buffer);
 void ata_set_allow_mbr_write(int allow);
 }
 
+/* Forward declarations for menu/input helpers used below */
+static uint8_t kbd_getscancode();
+static char kbd_getchar();
+
 static bool has_extension(const char *name, const char *ext) {
   size_t nl = strlen(name);
   size_t el = strlen(ext);
@@ -164,32 +168,514 @@ static void write_sectors(uint32_t lba, const void *data, uint32_t bytes) {
   kfree(tmp);
 }
 
-static void build_mbr(uint8_t *mbr, const uint8_t *boot_img, uint32_t start_lba,
+enum installer_os_hint_t {
+  INSTALLER_OS_NONE = 0,
+  INSTALLER_OS_CHRYSALIS = 1,
+  INSTALLER_OS_WINDOWS = 2,
+  INSTALLER_OS_LINUX = 3,
+  INSTALLER_OS_EFI = 4,
+  INSTALLER_OS_OTHER = 5
+};
+
+struct installer_partition_info_t {
+  bool present;
+  uint8_t bootable;
+  uint8_t type;
+  uint32_t lba;
+  uint32_t count;
+  int os_hint;
+};
+
+static int g_install_target_part_index = -1;
+static uint32_t g_install_target_lba = 2048;
+static uint32_t g_install_target_count = 0;
+static int g_install_target_os_hint = INSTALLER_OS_NONE;
+
+static const uint32_t INSTALLER_DEFAULT_START_LBA = 2048;
+static const uint32_t INSTALLER_MIN_PARTITION_SECTORS = 131072; /* 64 MiB */
+
+static uint32_t installer_read_u32_le(const uint8_t *p) {
+  return ((uint32_t)p[0]) | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
+         ((uint32_t)p[3] << 24);
+}
+
+static void installer_write_u32_le(uint8_t *p, uint32_t v) {
+  p[0] = (uint8_t)(v & 0xFF);
+  p[1] = (uint8_t)((v >> 8) & 0xFF);
+  p[2] = (uint8_t)((v >> 16) & 0xFF);
+  p[3] = (uint8_t)((v >> 24) & 0xFF);
+}
+
+static uint32_t installer_part_size_mb(uint32_t sectors) {
+  return (sectors * 512U) / (1024U * 1024U);
+}
+
+static const char *installer_part_type_name(uint8_t type) {
+  switch (type) {
+  case 0x01:
+    return "FAT12";
+  case 0x04:
+  case 0x06:
+    return "FAT16";
+  case 0x05:
+  case 0x0F:
+  case 0x85:
+    return "Extended";
+  case 0x07:
+    return "NTFS/exFAT";
+  case 0x0B:
+  case 0x0C:
+    return "FAT32";
+  case 0x82:
+    return "Linux Swap";
+  case 0x83:
+    return "Linux";
+  case 0x8E:
+    return "Linux LVM";
+  case 0xA5:
+    return "BSD";
+  case 0xAF:
+    return "Apple HFS";
+  case 0xEE:
+    return "GPT Protective";
+  case 0xEF:
+    return "EFI System";
+  default:
+    return "Unknown";
+  }
+}
+
+static const char *installer_os_hint_name(int hint) {
+  switch (hint) {
+  case INSTALLER_OS_CHRYSALIS:
+    return "Chrysalis";
+  case INSTALLER_OS_WINDOWS:
+    return "Windows";
+  case INSTALLER_OS_LINUX:
+    return "Linux";
+  case INSTALLER_OS_EFI:
+    return "EFI/Boot";
+  case INSTALLER_OS_OTHER:
+    return "Other";
+  default:
+    return "None";
+  }
+}
+
+static bool installer_fat32_boot_sector_is_valid(uint32_t lba) {
+  uint8_t sec[512];
+  if (disk_read_sector(lba, sec) != 0)
+    return false;
+  if (sec[510] != 0x55 || sec[511] != 0xAA)
+    return false;
+
+  uint16_t bps = (uint16_t)sec[11] | ((uint16_t)sec[12] << 8);
+  uint8_t spc = sec[13];
+  uint16_t reserved = (uint16_t)sec[14] | ((uint16_t)sec[15] << 8);
+  uint8_t fats = sec[16];
+  uint32_t spf32 = installer_read_u32_le(sec + 36);
+
+  if (bps != 512)
+    return false;
+  if (spc == 0 || reserved == 0 || fats == 0 || spf32 == 0)
+    return false;
+
+  return true;
+}
+
+static int installer_detect_os_hint(const installer_partition_info_t &part) {
+  if (!part.present || part.count == 0)
+    return INSTALLER_OS_NONE;
+
+  if (part.type == 0xEF || part.type == 0xEE)
+    return INSTALLER_OS_EFI;
+  if (part.type == 0x83 || part.type == 0x82 || part.type == 0x8E)
+    return INSTALLER_OS_LINUX;
+
+  uint8_t sec[512];
+  if ((part.type == 0x07 || part.type == 0x17) &&
+      disk_read_sector(part.lba, sec) == 0) {
+    if (memcmp(sec + 3, "NTFS    ", 8) == 0)
+      return INSTALLER_OS_WINDOWS;
+  }
+
+  if (part.type == 0x0B || part.type == 0x0C) {
+    if (!installer_fat32_boot_sector_is_valid(part.lba)) {
+      return INSTALLER_OS_NONE;
+    }
+    if (fat32_init(0, part.lba) == 0) {
+      fat32_set_mounted(part.lba, 'a');
+      if (fat32_get_file_size("/boot/chrysalis/kernel.bin") > 0)
+        return INSTALLER_OS_CHRYSALIS;
+      if (fat32_get_file_size("/EFI/Microsoft/Boot/bootmgfw.efi") > 0)
+        return INSTALLER_OS_WINDOWS;
+      return INSTALLER_OS_OTHER;
+    }
+  }
+
+  return INSTALLER_OS_OTHER;
+}
+
+static int installer_scan_partitions(installer_partition_info_t out_parts[4],
+                                     bool *out_has_valid_mbr, int *out_present,
+                                     int *out_other_os, int *out_chrysalis) {
+  if (out_has_valid_mbr)
+    *out_has_valid_mbr = false;
+  if (out_present)
+    *out_present = 0;
+  if (out_other_os)
+    *out_other_os = 0;
+  if (out_chrysalis)
+    *out_chrysalis = 0;
+
+  for (int i = 0; i < 4; i++) {
+    out_parts[i].present = false;
+    out_parts[i].bootable = 0;
+    out_parts[i].type = 0;
+    out_parts[i].lba = 0;
+    out_parts[i].count = 0;
+    out_parts[i].os_hint = INSTALLER_OS_NONE;
+  }
+
+  uint8_t mbr[512];
+  if (disk_read_sector(0, mbr) != 0) {
+    ata_init();
+    if (disk_read_sector(0, mbr) != 0)
+      return -1;
+  }
+
+  if (mbr[510] != 0x55 || mbr[511] != 0xAA)
+    return 0;
+
+  if (out_has_valid_mbr)
+    *out_has_valid_mbr = true;
+
+  for (int i = 0; i < 4; i++) {
+    int off = 446 + i * 16;
+    uint8_t type = mbr[off + 4];
+    uint32_t lba = installer_read_u32_le(mbr + off + 8);
+    uint32_t cnt = installer_read_u32_le(mbr + off + 12);
+
+    if (type == 0 || cnt == 0)
+      continue;
+
+    out_parts[i].present = true;
+    out_parts[i].bootable = (mbr[off] & 0x80) ? 1 : 0;
+    out_parts[i].type = type;
+    out_parts[i].lba = lba;
+    out_parts[i].count = cnt;
+    out_parts[i].os_hint = installer_detect_os_hint(out_parts[i]);
+
+    if (out_present)
+      (*out_present)++;
+    if (out_parts[i].os_hint == INSTALLER_OS_CHRYSALIS) {
+      if (out_chrysalis)
+        (*out_chrysalis)++;
+    } else if (out_parts[i].os_hint != INSTALLER_OS_NONE) {
+      if (out_other_os)
+        (*out_other_os)++;
+    }
+  }
+
+  return 0;
+}
+
+static bool installer_confirm_yes_no(const char *line1, const char *line2) {
+  terminal_printf("\n%s\n", line1 ? line1 : "");
+  if (line2 && line2[0])
+    terminal_printf("%s\n", line2);
+  terminal_printf("Type [Y]es or [N]o: ");
+
+  while (true) {
+    char c = kbd_getchar();
+    if (c == 'y' || c == 'Y') {
+      terminal_printf("yes\n");
+      return true;
+    }
+    if (c == 'n' || c == 'N' || c == 27) {
+      terminal_printf("no\n");
+      return false;
+    }
+  }
+}
+
+static int installer_create_single_fat32_layout(uint32_t total_sectors) {
+  if (total_sectors <= INSTALLER_DEFAULT_START_LBA + 8192)
+    return -1;
+
+  uint8_t mbr[512];
+  memset(mbr, 0, sizeof(mbr));
+
+  uint8_t *p = mbr + 446;
+  uint32_t count = total_sectors - INSTALLER_DEFAULT_START_LBA;
+
+  p[0] = 0x80;
+  p[4] = 0x0C;
+  installer_write_u32_le(p + 8, INSTALLER_DEFAULT_START_LBA);
+  installer_write_u32_le(p + 12, count);
+
+  mbr[510] = 0x55;
+  mbr[511] = 0xAA;
+
+  ata_set_allow_mbr_write(1);
+  int wr = disk_write_sector(0, mbr);
+  ata_set_allow_mbr_write(0);
+  if (wr != 0)
+    return -1;
+
+  uint8_t zero[512];
+  memset(zero, 0, sizeof(zero));
+  uint32_t wipe_count = (count > 64) ? 64 : count;
+  for (uint32_t i = 0; i < wipe_count; i++) {
+    if (disk_write_sector(INSTALLER_DEFAULT_START_LBA + i, zero) != 0)
+      break;
+  }
+  return 0;
+}
+
+static int
+installer_auto_select_partition(const installer_partition_info_t parts[4],
+                                bool upgrade_mode) {
+  int best_idx = -1;
+  uint32_t best_count = 0;
+
+  if (upgrade_mode) {
+    for (int i = 0; i < 4; i++) {
+      if (parts[i].present && parts[i].os_hint == INSTALLER_OS_CHRYSALIS)
+        return i;
+    }
+  }
+
+  for (int i = 0; i < 4; i++) {
+    if (!parts[i].present)
+      continue;
+    if (parts[i].type == 0x05 || parts[i].type == 0x0F || parts[i].type == 0x85)
+      continue;
+    if (parts[i].count > best_count) {
+      best_count = parts[i].count;
+      best_idx = i;
+    }
+  }
+  return best_idx;
+}
+
+static void installer_draw_partition_manager(
+    const installer_partition_info_t parts[4], bool has_valid_mbr,
+    uint32_t total_sectors, int selected_index, bool upgrade_mode,
+    int other_os_count, int chrysalis_count, bool for_install_flow) {
+  terminal_set_color(0x1F);
+  terminal_clear();
+
+  terminal_set_color(0x70);
+  for (int x = 0; x < 80; x++)
+    terminal_putentryat(' ', 0x70, x, 0);
+  terminal_printf(" Partition Manager                                         "
+                  "        [Installer]");
+
+  terminal_set_color(0x1F);
+  terminal_printf("\n\n");
+  terminal_printf("    Disk capacity: %u sectors (%u MB)\n", total_sectors,
+                  installer_part_size_mb(total_sectors));
+  terminal_printf("    Mode: %s\n\n",
+                  upgrade_mode ? "Upgrade" : "Fresh Install");
+
+  if (!has_valid_mbr) {
+    terminal_printf("    No valid MBR found. You can create a new layout.\n\n");
+  } else {
+    for (int i = 0; i < 4; i++) {
+      if (!parts[i].present) {
+        terminal_printf("    [%d] <empty>\n", i + 1);
+        continue;
+      }
+      terminal_printf("    [%d] %c type=%s  start=%u  size=%uMB  os=%s%s\n",
+                      i + 1, (parts[i].bootable ? '*' : ' '),
+                      installer_part_type_name(parts[i].type), parts[i].lba,
+                      installer_part_size_mb(parts[i].count),
+                      installer_os_hint_name(parts[i].os_hint),
+                      (selected_index == i) ? "  <target>" : "");
+    }
+    terminal_printf("\n");
+  }
+
+  terminal_printf("    OS detection: Chrysalis=%d, Other=%d\n", chrysalis_count,
+                  other_os_count);
+  if (selected_index >= 0 && selected_index < 4 &&
+      parts[selected_index].present) {
+    terminal_printf("    Current target: p%d (LBA %u, %u MB)\n",
+                    selected_index + 1, parts[selected_index].lba,
+                    installer_part_size_mb(parts[selected_index].count));
+  }
+  terminal_printf("\n");
+
+  terminal_printf("    [1-4] Select partition");
+  if (for_install_flow)
+    terminal_printf("   [A] Auto");
+  terminal_printf("\n");
+  if (!upgrade_mode)
+    terminal_printf(
+        "    [C] Create single FAT32 layout (wipe partition table)\n");
+  terminal_printf("    [R] Rescan   [B] Back\n");
+}
+
+static int installer_partition_manager_select(bool upgrade_mode,
+                                              bool for_install_flow,
+                                              int *out_index, uint32_t *out_lba,
+                                              uint32_t *out_count,
+                                              int *out_os_hint) {
+  uint32_t total_sectors = disk_get_capacity();
+  if (total_sectors == 0)
+    total_sectors = 262144;
+
+  int selected = -1;
+  if (out_index && *out_index >= 0 && *out_index < 4)
+    selected = *out_index;
+
+  while (true) {
+    installer_partition_info_t parts[4];
+    bool has_valid_mbr = false;
+    int present_count = 0;
+    int other_os_count = 0;
+    int chrysalis_count = 0;
+    int rc = installer_scan_partitions(parts, &has_valid_mbr, &present_count,
+                                       &other_os_count, &chrysalis_count);
+    if (rc != 0) {
+      terminal_set_color(0x1F);
+      terminal_clear();
+      terminal_printf("Partition scan failed.\n");
+      terminal_printf("Press [B] to go back or [R] to retry.\n");
+      while (true) {
+        char c = kbd_getchar();
+        if (c == 'b' || c == 'B' || c == 27)
+          return -1;
+        if (c == 'r' || c == 'R')
+          break;
+      }
+      continue;
+    }
+
+    if (selected >= 0 && selected < 4 && !parts[selected].present)
+      selected = -1;
+    if (selected < 0)
+      selected = installer_auto_select_partition(parts, upgrade_mode);
+
+    installer_draw_partition_manager(parts, has_valid_mbr, total_sectors,
+                                     selected, upgrade_mode, other_os_count,
+                                     chrysalis_count, for_install_flow);
+    char c = kbd_getchar();
+
+    if (c == 'r' || c == 'R')
+      continue;
+    if (c == 'b' || c == 'B' || c == 27)
+      return -1;
+
+    if ((c == 'a' || c == 'A') && for_install_flow) {
+      int auto_idx = installer_auto_select_partition(parts, upgrade_mode);
+      if (auto_idx >= 0 && parts[auto_idx].present) {
+        selected = auto_idx;
+      }
+    } else if ((c == 'c' || c == 'C') && !upgrade_mode) {
+      if (!installer_confirm_yes_no(
+              "This will overwrite the MBR partition table.",
+              "All existing partition entries may be lost. Continue?")) {
+        continue;
+      }
+      if (installer_create_single_fat32_layout(total_sectors) != 0) {
+        terminal_printf("\nFailed to create partition layout.\n");
+      } else {
+        serial("[INSTALLER] Created single FAT32 partition layout.\n");
+      }
+      continue;
+    } else if (c >= '1' && c <= '4') {
+      int idx = (int)(c - '1');
+      if (!parts[idx].present) {
+        terminal_printf("\nPartition slot p%d is empty.\n", idx + 1);
+        continue;
+      }
+      if (parts[idx].type == 0x05 || parts[idx].type == 0x0F ||
+          parts[idx].type == 0x85 || parts[idx].type == 0xEE) {
+        terminal_printf("\nPartition p%d cannot be used as install target.\n",
+                        idx + 1);
+        continue;
+      }
+      selected = idx;
+    } else {
+      continue;
+    }
+
+    if (selected < 0 || selected >= 4 || !parts[selected].present)
+      continue;
+
+    if (for_install_flow &&
+        parts[selected].count < INSTALLER_MIN_PARTITION_SECTORS) {
+      if (!installer_confirm_yes_no(
+              "Selected partition is very small (<64 MiB).",
+              "Install may fail. Continue anyway?")) {
+        continue;
+      }
+    }
+
+    if (for_install_flow && upgrade_mode &&
+        parts[selected].os_hint != INSTALLER_OS_CHRYSALIS) {
+      if (!installer_confirm_yes_no(
+              "Warning: selected partition does not look like Chrysalis OS.",
+              "Upgrade may fail or damage data. Continue anyway?")) {
+        continue;
+      }
+    }
+
+    if (for_install_flow && !upgrade_mode &&
+        parts[selected].os_hint != INSTALLER_OS_NONE &&
+        parts[selected].os_hint != INSTALLER_OS_CHRYSALIS) {
+      if (!installer_confirm_yes_no(
+              "Warning: another OS/data was detected on this partition.",
+              "Fresh install will format it. Continue?")) {
+        continue;
+      }
+    }
+
+    if (out_index)
+      *out_index = selected;
+    if (out_lba)
+      *out_lba = parts[selected].lba;
+    if (out_count)
+      *out_count = parts[selected].count;
+    if (out_os_hint)
+      *out_os_hint = parts[selected].os_hint;
+    return 0;
+  }
+}
+
+static void build_mbr(uint8_t *mbr, const uint8_t *boot_img, int target_index,
+                      uint32_t start_lba, uint32_t part_sectors,
                       uint32_t total_sectors) {
   memset(mbr, 0, 512);
   if (boot_img) {
     memcpy(mbr, boot_img, 446); /* boot code only */
   }
-  /* Partition entry 0 */
-  uint8_t *p = mbr + 446;
+
+  uint8_t cur_mbr[512];
+  if (disk_read_sector(0, cur_mbr) == 0 && cur_mbr[510] == 0x55 &&
+      cur_mbr[511] == 0xAA) {
+    memcpy(mbr + 446, cur_mbr + 446, 64);
+  }
+
+  int idx = target_index;
+  if (idx < 0 || idx > 3)
+    idx = 0;
+
+  uint8_t *p = mbr + 446 + (idx * 16);
+  uint32_t count = part_sectors;
+  if (count == 0) {
+    count = (total_sectors > start_lba) ? (total_sectors - start_lba) : 0;
+  }
+
+  for (int i = 0; i < 4; i++) {
+    mbr[446 + i * 16] = 0;
+  }
   p[0] = 0x80; /* bootable */
-  p[1] = 0;
-  p[2] = 0;
-  p[3] = 0;    /* CHS start (unused) */
   p[4] = 0x0C; /* FAT32 LBA */
-  p[5] = 0;
-  p[6] = 0;
-  p[7] = 0; /* CHS end (unused) */
-  p[8] = (uint8_t)(start_lba & 0xFF);
-  p[9] = (uint8_t)((start_lba >> 8) & 0xFF);
-  p[10] = (uint8_t)((start_lba >> 16) & 0xFF);
-  p[11] = (uint8_t)((start_lba >> 24) & 0xFF);
-  uint32_t count =
-      (total_sectors > start_lba) ? (total_sectors - start_lba) : 0;
-  p[12] = (uint8_t)(count & 0xFF);
-  p[13] = (uint8_t)((count >> 8) & 0xFF);
-  p[14] = (uint8_t)((count >> 16) & 0xFF);
-  p[15] = (uint8_t)((count >> 24) & 0xFF);
+  installer_write_u32_le(p + 8, start_lba);
+  installer_write_u32_le(p + 12, count);
   mbr[510] = 0x55;
   mbr[511] = 0xAA;
 }
@@ -269,7 +755,8 @@ static void ui_write_at(int x, int y, uint8_t color, const char *text) {
   }
 }
 
-static void ui_write_line(int x, int y, int w, uint8_t color, const char *text) {
+static void ui_write_line(int x, int y, int w, uint8_t color,
+                          const char *text) {
   ui_fill_rect_textmode(x, y, w, 1, color);
   ui_write_at(x, y, color, text);
 }
@@ -328,15 +815,20 @@ static void ui_draw_progress_frame(bool upgrade_mode) {
     terminal_putentryat(' ', 0x70, x, 0);
 
   if (upgrade_mode) {
-    ui_write_at(1, 0, 0x70, " Chrysalis OS Upgrade in progress...                 [Installer]");
+    ui_write_at(
+        1, 0, 0x70,
+        " Chrysalis OS Upgrade in progress...                 [Installer]");
   } else {
-    ui_write_at(1, 0, 0x70, " Chrysalis OS Installation in progress...            [Installer]");
+    ui_write_at(
+        1, 0, 0x70,
+        " Chrysalis OS Installation in progress...            [Installer]");
   }
 
   terminal_set_color(0x1F);
   ui_fill_rect_textmode(0, 1, UI_SCREEN_W, UI_SCREEN_H - 1, 0x1F);
 
-  ui_write_line(4, 4, 72, 0x1F, "Please wait while setup installs Chrysalis OS.");
+  ui_write_line(4, 4, 72, 0x1F,
+                "Please wait while setup installs Chrysalis OS.");
   ui_write_line(4, 5, 72, 0x1F, "Do not power off your computer.");
   ui_write_line(4, 8, 72, 0x1F, "Stage:");
   ui_write_line(4, 9, 72, 0x1F, "Detail:");
@@ -355,7 +847,8 @@ static void ui_draw_progress_frame(bool upgrade_mode) {
   ui_progress_anim_tick = 0;
 }
 
-static void ui_progress_update(int percent, const char *stage, const char *detail) {
+static void ui_progress_update(int percent, const char *stage,
+                               const char *detail) {
   int pct = ui_clamp_int(percent, 0, 100);
   int changed_percent = (pct != ui_last_percent);
   int filled = (pct * UI_BAR_W) / 100;
@@ -607,24 +1100,30 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
 
   terminal_set_color(0x1F);
   terminal_printf("\n\n\n");
-  terminal_printf(
-      "    ************************************************************\n");
-  terminal_printf(
-      "    *                                                          *\n");
-  terminal_printf(
-      "    *              Welcome to Chrysalis OS Setup               *\n");
-  terminal_printf(
-      "    *                                                          *\n");
-  terminal_printf(
-      "    ************************************************************\n\n");
-
-  terminal_printf("    This program will install or upgrade Chrysalis OS on "
+  terminal_printf("Welcome to Chrysalis OS Setup\n");
+  terminal_printf("This program will install or upgrade Chrysalis OS on "
                   "your computer.\n\n");
+  installer_partition_info_t detected_parts[4];
+  bool has_valid_mbr = false;
+  int present_count = 0;
+  int other_os_count = 0;
+  int chrysalis_count = 0;
+  if (installer_scan_partitions(detected_parts, &has_valid_mbr, &present_count,
+                                &other_os_count, &chrysalis_count) == 0) {
+    terminal_printf(
+        "    Detected partitions: %d  (Chrysalis: %d, Other OS: %d)\n\n",
+        present_count, chrysalis_count, other_os_count);
+  } else {
+    terminal_printf(
+        "    Detected partitions: scan failed (disk not ready yet)\n\n");
+  }
   terminal_printf("    Please choose an option:\n\n");
   terminal_printf(
       "    [1] Fresh Install  - Wipes the disk and installs a new system.\n");
   terminal_printf("    [2] Upgrade        - Keeps your files and updates "
                   "system components.\n");
+  terminal_printf(
+      "    [P] Partition Mgr  - Detect other OS and choose install target.\n");
   terminal_printf("    [0] Shutdown       - Shuts down the system.\n");
   terminal_printf("    [J] Recovery Shell - Opens a command shell.\n\n");
   terminal_printf("\n\n\n\n\n\n\n\n\n");
@@ -633,13 +1132,13 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   terminal_set_color(0x70);
   for (int x = 0; x < 80; x++)
     terminal_putentryat(' ', 0x70, x, 24);
-  terminal_printf(" [1,2,0,J] Select Option    [F3] Exit");
+  terminal_printf(" [1,2,P,0,J] Select Option    [F3] Exit");
 
   terminal_set_color(0x1F);
 
   char choice = 0;
   while (choice != '1' && choice != '2' && choice != '0' && choice != 'J' &&
-         choice != 'j') {
+         choice != 'j' && choice != 'p' && choice != 'P') {
     choice = kbd_getchar();
   }
 
@@ -651,25 +1150,49 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
 
   if (choice == 'J' || choice == 'j') {
     recovery_shell();
-    // After exit, restart main (recursive or loop? safer to just return to
-    // allow main loop if structure supports it, but here we are in main. Let's
-    // restart main logic by using a goto or loop.) Actually easier to just
-    // recursively call installer_main or jump to start. Jumping to start of
-    // installer_main is hard without a label. Let's just return, and in the
-    // loader we define what happens? No, the loader hangs. I should put the
-    // menu in a loop. For now, let's just loop back to menu by recursive call
-    // (stack depth is fine for a few tries) or better: refactor main to have a
-    // loop. Refactoring is cleaner. I will wrap the menu in a `while(true)`
+    installer_main(magic, addr);
+    return;
+  }
 
-    // Since I can't easily refactor the whole function in this block,
-    // I will use `installer_main(magic, addr); return;` which is recursion.
-    // It's safe enough for a recovery shell option.
+  if (choice == 'P' || choice == 'p') {
+    int idx = g_install_target_part_index;
+    uint32_t lba = g_install_target_lba;
+    uint32_t cnt = g_install_target_count;
+    int hint = g_install_target_os_hint;
+    if (installer_partition_manager_select(false, false, &idx, &lba, &cnt,
+                                           &hint) == 0) {
+      g_install_target_part_index = idx;
+      g_install_target_lba = lba;
+      g_install_target_count = cnt;
+      g_install_target_os_hint = hint;
+      serial("[INSTALLER] Manual target set: p%d lba=%u sectors=%u os=%s\n",
+             idx + 1, lba, cnt, installer_os_hint_name(hint));
+    }
     installer_main(magic, addr);
     return;
   }
   serial("> Choice: %c selected.\n\n", choice);
 
   bool upgrade_mode = (choice == '2');
+
+  int target_part_index = g_install_target_part_index;
+  uint32_t start_lba = g_install_target_lba;
+  uint32_t target_part_sectors = g_install_target_count;
+  int target_os_hint = g_install_target_os_hint;
+  if (installer_partition_manager_select(upgrade_mode, true, &target_part_index,
+                                         &start_lba, &target_part_sectors,
+                                         &target_os_hint) != 0) {
+    installer_main(magic, addr);
+    return;
+  }
+  g_install_target_part_index = target_part_index;
+  g_install_target_lba = start_lba;
+  g_install_target_count = target_part_sectors;
+  g_install_target_os_hint = target_os_hint;
+
+  serial("[INSTALLER] Selected target p%d: lba=%u sectors=%u os=%s\n",
+         target_part_index + 1, start_lba, target_part_sectors,
+         installer_os_hint_name(target_os_hint));
 
   serial_set_vga_mirror(0);
   ui_draw_progress_frame(upgrade_mode);
@@ -687,19 +1210,19 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   ui_progress_update(6, "Initializing hardware", "Target disk ready.");
 
   /* 2. Format / Prepare Target Disk */
-  ata_set_allow_mbr_write(1);
-
-  uint32_t start_lba = 2048;
   uint32_t total_sectors = disk_get_capacity();
   if (total_sectors == 0)
     total_sectors = 262144; // Default 128MB
+  if (target_part_sectors == 0)
+    target_part_sectors =
+        (total_sectors > start_lba) ? (total_sectors - start_lba) : 0;
 
   if (!upgrade_mode) {
     ui_progress_update(8, "Preparing target disk",
                        "Formatting partition and filesystem...");
-    serial("[INSTALLER] Action: Formatting Partition 1 (LBA %d)...\n",
-           start_lba);
-    if (fat32_format(start_lba, total_sectors - start_lba, "CHRYSALIS") != 0) {
+    serial("[INSTALLER] Action: Formatting p%d (LBA %u, sectors=%u)...\n",
+           target_part_index + 1, start_lba, target_part_sectors);
+    if (fat32_format(start_lba, target_part_sectors, "CHRYSALIS") != 0) {
       serial("[INSTALLER] ERROR: Formatting failed!\n");
       return;
     }
@@ -708,8 +1231,8 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
     ui_progress_update(8, "Preparing target disk",
                        "Verifying existing filesystem for upgrade...");
     serial("[INSTALLER] Action: UPGRADE (Verifying existing Filesystem at LBA "
-           "%d)...\n",
-           start_lba);
+           "%u, p%d)...\n",
+           start_lba, target_part_index + 1);
   }
   ui_progress_update(20, "Preparing target disk", "Disk phase complete.");
 
@@ -846,7 +1369,8 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   if (mr != 0 && !upgrade_mode) {
     serial("[INSTALLER] WARN: mkdir /system/apps failed (err=%d)\n", mr);
   }
-  ui_progress_update(48, "Creating directory tree", "Directory phase complete.");
+  ui_progress_update(48, "Creating directory tree",
+                     "Directory phase complete.");
 
   /* Directory listings disabled to reduce stack usage and avoid instability */
 
@@ -870,7 +1394,8 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   int module_done = 0;
   char module_total_num[12];
   char module_total_msg[64];
-  ui_u32_to_dec((uint32_t)module_total, module_total_num, sizeof(module_total_num));
+  ui_u32_to_dec((uint32_t)module_total, module_total_num,
+                sizeof(module_total_num));
   size_t mt = 0;
   const char *mt_prefix = "Modules to process: ";
   while (*mt_prefix && mt + 1 < sizeof(module_total_msg))
@@ -940,7 +1465,8 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
         } else if (has_extension(current_mod_name, ".bmp")) {
           char path[64] = "/system/icons/";
           memcpy(path + 14, current_mod_name, strlen(current_mod_name) + 1);
-          serial("[INSTALLER] Dynamic Icon: %s -> %s\n", current_mod_name, path);
+          serial("[INSTALLER] Dynamic Icon: %s -> %s\n", current_mod_name,
+                 path);
           fat32_create_file_verified(path, (void *)(uintptr_t)mod->mod_start,
                                      (uint32_t)(mod->mod_end - mod->mod_start),
                                      0);
@@ -970,8 +1496,8 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
       while (*md_prefix && md + 1 < sizeof(module_detail))
         module_detail[md++] = *md_prefix++;
       if (current_mod_name[0]) {
-        for (size_t i = 0; current_mod_name[i] && md + 1 < sizeof(module_detail);
-             i++) {
+        for (size_t i = 0;
+             current_mod_name[i] && md + 1 < sizeof(module_detail); i++) {
           module_detail[md++] = current_mod_name[i];
         }
       } else {
@@ -981,7 +1507,8 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
         }
       }
       module_detail[md] = 0;
-      ui_progress_update(module_pct, "Scanning installer modules", module_detail);
+      ui_progress_update(module_pct, "Scanning installer modules",
+                         module_detail);
     }
     tag = (struct multiboot2_tag *)((uint8_t *)tag + ((tag->size + 7) & ~7));
   }
@@ -1012,14 +1539,23 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
     serial("[INSTALLER] ERROR: no memory for MBR\n");
     return;
   }
-  build_mbr(mbr, (const uint8_t *)boot_img, start_lba, total_sectors);
-  disk_write_sector(0, mbr);
+  build_mbr(mbr, (const uint8_t *)boot_img, target_part_index, start_lba,
+            target_part_sectors, total_sectors);
+  ata_set_allow_mbr_write(1);
+  int mwr = disk_write_sector(0, mbr);
+  ata_set_allow_mbr_write(0);
+  if (mwr != 0) {
+    serial("[INSTALLER] ERROR: failed to write MBR sector\n");
+    kfree(mbr);
+    return;
+  }
   kfree(mbr);
 
   serial("[INSTALLER] Writing GRUB core.img (%d bytes)...\n",
          (int)core_img_size);
   write_sectors(1, core_img, (uint32_t)core_img_size);
-  ui_progress_update(72, "Installing bootloader", "Writing GRUB configuration...");
+  ui_progress_update(72, "Installing bootloader",
+                     "Writing GRUB configuration...");
 
   /* 5. Write GRUB config */
   const char *grub_cfg = "# Load graphical modules\n"
@@ -1254,7 +1790,6 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   ui_progress_update(100, "Finalizing installation",
                      "Installation complete. Opening success screen...");
   serial("\n[INSTALLER] Installation Complete.\n");
-  serial_set_vga_mirror(1);
 
   /* 8. Success Screen */
   while (true) {
