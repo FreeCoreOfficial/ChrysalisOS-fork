@@ -655,3 +655,25 @@ void wm_render(void) {
   wm_dirty = false;
   terminal_clear_dirty();
 }
+
+void wm_cleanup_task_windows(void *task_ptr) {
+  if (!task_ptr)
+    return;
+  /* Iterate and destroy all windows owned by this task */
+  while (true) {
+    bool found = false;
+    window_t *cur = windows_list;
+    while (cur) {
+      if (cur->owner == task_ptr) {
+        serial("[WM] Cleanup: Destroying window id=%d for task %x\n", cur->id,
+               task_ptr);
+        wm_destroy_window(cur);
+        found = true;
+        break; /* Restart loop as list changed */
+      }
+      cur = cur->next;
+    }
+    if (!found)
+      break;
+  }
+}

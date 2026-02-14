@@ -9,6 +9,7 @@ void timer_init(uint32_t frequency);
 
 /* raw tick counter */
 uint64_t timer_ticks(void);
+uint64_t timer_ticks_no_cli(void);
 
 /* uptime helpers (SAFE, no 64-bit division) */
 uint32_t timer_uptime_seconds(void);

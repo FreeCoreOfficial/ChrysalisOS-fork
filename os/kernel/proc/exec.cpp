@@ -136,6 +136,11 @@ extern "C" int execve(const char *filename, char *const argv[],
   terminal_printf("[EXEC] ELF Loaded. Entry=0x%x, Segments=%d\n", ehdr->e_entry,
                   ehdr->e_phnum);
 
+  /* Current runtime shares one kernel page directory across tasks, so all
+     .petal apps overlap at 0x08048000. Kill older user apps before loading a
+     new one to avoid cross-task code/data corruption. */
+  task_kill_user_apps();
+
   /* Load Segments */
   Elf32_Phdr *phdr = (Elf32_Phdr *)(file_data + ehdr->e_phoff);
   for (int i = 0; i < ehdr->e_phnum; i++) {
@@ -173,7 +178,10 @@ extern "C" int execve(const char *filename, char *const argv[],
 
   /* Create background task */
   serial("[EXEC] Spawning task for %s at 0x%x\n", filename, entry_point);
-  task_create(entry_point, 0);
+  task_t *t = task_create(entry_point, 0);
+  if (t) {
+    t->is_user_app = 1;
+  }
 
   return 0;
 }

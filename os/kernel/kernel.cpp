@@ -124,51 +124,7 @@ static void parse_cmdline(const char *cmdline) {
     g_boot_gui = true;
   }
 }
-
-// ===== TASK SUBSYSTEM FALLBACK (in-file, no external headers) =====
-//
-// This block provides a *safe* in-file fallback implementation of the minimal
-// task API used by kernel_main. Symbols are marked weak so a full task
-// implementation (in kernel/task/*.o) will override them at link time.
-//
-// The fallback purpose:
-//  - avoid compiler errors due to missing headers/signatures
-//  - keep TASKS disabled by default so we don't attempt context switching
-//    without a verified arch switch.S.
-
-#define KSTACK_SIZE 8192
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-typedef struct task {
-  int pid;
-  uint32_t *kstack_ptr;
-  uint32_t cr3;
-  uint8_t kstack[KSTACK_SIZE] __attribute__((aligned(16)));
-  struct task *next;
-} task_t;
-
-// Weak stubs: if you have a real implementation in task/*.o these get replaced.
-__attribute__((weak)) void task_init(void) { /* fallback: no-op */ }
-__attribute__((weak)) void task_init_scheduler(void) { task_init(); }
-
-// Old API used by kernel.cpp: task_create(const char* name, void(*entry))
-__attribute__((weak)) task_t *task_create(const char * /*name*/,
-                                          void (*entry)(void)) {
-  (void)entry; /* fallback does not create real tasks */
-  return (task_t *)0;
-}
-
-// yield / aliases
-__attribute__((weak)) void task_yield(void) { /* fallback: no-op */ }
-// also provide yield() symbol (sometimes used)
-__attribute__((weak)) void yield(void) { task_yield(); }
-
-#ifdef __cplusplus
-} // extern "C"
-#endif
+#include "include/task.h"
 
 // ===== AHCI / Driver Support Glue =====
 extern "C" {
@@ -820,23 +776,9 @@ extern "C" void kernel_main(uint32_t magic, uint32_t addr) {
       "[sched] tasks created; scheduler disabled by default\n");
   terminal_writestring("[sched] call scheduler_start() manually when ready\n");
 
-  /* Initialize scheduler structures but DO NOT start scheduling automatically.
-     This prevents an immediate context switch into untested stacks. */
-  scheduler_init(2);
-
-  /* Create tasks (we log failures but do NOT panic automatically). */
-  int r;
-  r = pcb_create(task_a, NULL);
-  if (r < 0) {
-    terminal_printf("[sched] pcb_create(taskA) -> %d\n", r);
-    serial_write_string("[sched] pcb_create(taskA) failed\r\n");
-  }
-
-  r = pcb_create(task_b, NULL);
-  if (r < 0) {
-    terminal_printf("[sched] pcb_create(taskB) -> %d\n", r);
-    serial_write_string("[sched] pcb_create(taskB) failed\r\n");
-  }
+  /* Create tasks */
+  task_create_name("taskA", task_a);
+  task_create_name("taskB", task_b);
 
   terminal_writestring("[sched] scheduler initialized and tasks created "
                        "(scheduler NOT started)\n");

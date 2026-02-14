@@ -814,7 +814,8 @@ static void desktop_draw(fly_widget_t *w, surface_t *surf, int x, int y) {
   fly_draw_rect_vgradient(surf, 0, 0, w->w, w->h, 0xFF435A6F, 0xFF202B36);
 
   /* Subtle watermark */
-  fly_draw_text(surf, w->w - 180, w->h - 30, "Chrysalis OS v0.2 beta", 0x20FFFFFF);
+  fly_draw_text(surf, w->w - 180, w->h - 30, "Chrysalis OS v0.2 beta",
+                0x20FFFFFF);
 }
 
 static void create_desktop() {
@@ -1296,6 +1297,29 @@ extern "C" int cmd_launch(int argc, char **argv) {
         }
         if (target == desktop_win && desktop_ctx && !drag_win) {
           dispatch_flyui_fn(desktop_win, desktop_ctx, ev);
+        }
+
+        /* 3.3 Generic Dispatch for Standalone Apps */
+        /* If window has an owner task and wasn't handled by hardcoded internal
+         * handlers, dispatch to its task event queue. */
+        if (target && target->owner && target != clock_app_get_window() &&
+            target != shell_get_window() &&
+            target != calculator_app_get_window() &&
+            target != notepad_app_get_window() &&
+            target != calendar_app_get_window() &&
+            target != file_manager_app_get_window() &&
+            target != image_viewer_app_get_window() &&
+            target != sysinfo_app_get_window() &&
+            target != run_dialog_app_get_window() &&
+            target != task_manager_app_get_window() &&
+            target != paint_app_get_window() &&
+            target != demo3d_app_get_window() &&
+            target != minesweeper_app_get_window() &&
+            target != tic_tac_toe_app_get_window() && target != login_win &&
+            target != popup_win && target != net_win &&
+            target != start_menu_win && target != taskbar_win &&
+            target != desktop_win) {
+          window_push_event(target, &ev);
         }
 
         /* Close start menu when clicking outside it */

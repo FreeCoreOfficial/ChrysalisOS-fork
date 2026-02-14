@@ -26,6 +26,12 @@ typedef struct {
   int32_t mouse_y;
 } p_input_event_t;
 
+typedef struct {
+  uint8_t hour;
+  uint8_t minute;
+  uint8_t second;
+} p_time_t;
+
 /* System Calls */
 void p_exit(int code);
 void p_write(const char *s);
@@ -35,10 +41,16 @@ void p_wm_mark_dirty();
 
 void p_draw_rect_fill(void *win, int x, int y, int w, int h, uint32_t color);
 void p_draw_text(void *win, int x, int y, const char *text, uint32_t color);
+int p_draw_bmp(void *win, int x, int y, const char *path);
 int p_get_event(p_input_event_t *ev);
 
 void p_sleep(uint32_t ms);
 void p_yield();
+void p_get_time(p_time_t *t);
+
+int p_open(const char *path, int flags);
+int p_read(int fd, void *buf, uint32_t size);
+void p_close(int fd);
 
 #ifdef __cplusplus
 }

@@ -12,12 +12,7 @@ typedef struct {
 static int button_contains(button_t *btn, int px, int py);
 static void button_draw(void *win, button_t *btn);
 
-/* Force C linkage for the entry point */
-extern "C" {
-__attribute__((section(".text._start"))) void _start();
-}
-
-void _start() {
+int main() {
   p_write("[APP] ClickMe started\n");
   /* Create main window */
   void *win = p_wm_create_window(300, 200, 100, 100, "Click Me!");
@@ -118,7 +113,7 @@ void _start() {
     p_wm_destroy_window(popup);
   }
   p_wm_destroy_window(win);
-  p_exit(0);
+  return 0;
 }
 
 /* Check if point is inside button */

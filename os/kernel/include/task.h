@@ -33,6 +33,8 @@ typedef enum {
 
 typedef struct task {
   int pid;
+  void (*entry_noarg)(void); /* saved entry point; used by task trampoline */
+  uint8_t is_user_app;       /* dynamically loaded .petal task */
   uint32_t
       *kstack_ptr; /* pointer la frame-ul salvat (folosit de context_switch) */
   uint32_t cr3;    /* optional: pagina director (setează CR3 la switch) */
@@ -51,19 +53,29 @@ typedef struct task {
 
   uint8_t kstack[KSTACK_SIZE] __attribute__((aligned(16)));
   struct task *next; /* pentru scheduler circular simplu */
+
+  /* New fields for state-aware scheduler */
+  uint64_t sleep_until;
 } task_t;
 
 /* Helper to push event to task queue */
 void task_push_event(task_t *t, input_event_t *ev);
 /* Helper to pop event from task queue */
 int task_pop_event(task_t *t, input_event_t *ev);
+void task_kill_user_apps(void);
 #endif
 
 /* API minim */
 task_t *task_create(void (*entry)(void), int pid);
+task_t *task_create_name(const char *name, void (*entry)(void));
+
 void task_init_scheduler(void);
-void yield(void); /* forțează context switch */
+void task_init(void);
+
+void yield(void);      /* forțează context switch */
+void task_yield(void); /* alias for yield */
 void schedule(void);
+void task_exit(int code);
 extern task_t *current_task;
 
 #ifdef __cplusplus

@@ -90,9 +90,37 @@ void p_draw_text(void *win, int x, int y, const char *text, uint32_t color) {
            (uint32_t)y, (uint32_t)(uintptr_t)text, color);
 }
 
+int p_draw_bmp(void *win, int x, int y, const char *path) {
+  /* x and y are currently ignored by the kernel implementation which draws at
+     0,0, but we pass them for future compatibility */
+  (void)x;
+  (void)y;
+  return syscall2(SYS_FLY_DRAW_BMP, (uint32_t)(uintptr_t)win,
+                  (uint32_t)(uintptr_t)path);
+}
+
 int p_get_event(p_input_event_t *ev) {
   return syscall1(SYS_GET_EVENT, (uint32_t)(uintptr_t)ev);
 }
 
 void p_sleep(uint32_t ms) { syscall1(SYS_SLEEP, ms); }
 void p_yield() { syscall0(SYS_YIELD); }
+
+void p_get_time(p_time_t *t) {
+  uint32_t ret = (uint32_t)syscall0(SYS_GET_TIME);
+  if (t) {
+    t->hour = (uint8_t)(ret >> 16);
+    t->minute = (uint8_t)(ret >> 8);
+    t->second = (uint8_t)(ret & 0xFF);
+  }
+}
+
+int p_open(const char *path, int flags) {
+  return syscall2(SYS_OPEN, (uint32_t)(uintptr_t)path, (uint32_t)flags);
+}
+
+int p_read(int fd, void *buf, uint32_t size) {
+  return syscall3(SYS_READ, (uint32_t)fd, (uint32_t)(uintptr_t)buf, size);
+}
+
+void p_close(int fd) { syscall1(SYS_CLOSE, (uint32_t)fd); }

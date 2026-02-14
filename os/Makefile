@@ -836,12 +836,14 @@ PETAL_APPS = $(patsubst apps/%.cpp, $(ISO)/system/apps/%.petal, $(PETAL_APPS_SRC
 
 PETAL_CXXFLAGS = $(CXXFLAGS) -fno-pic -Iuser/libpetal/include
 PETAL_HEADERS = user/libpetal/include/petal.h
-PETAL_LDFLAGS = -m elf_i386 -static -T user/app.ld -e _start
 
-$(ISO)/system/apps/%.petal: apps/%.cpp $(BUILD)/user/libpetal.o $(PETAL_HEADERS) | dirs
+$(BUILD)/user/start.o: user/libpetal/src/start.asm | dirs
+	$(AS) -f elf32 $< -o $@
+
+$(ISO)/system/apps/%.petal: apps/%.cpp $(BUILD)/user/libpetal.o $(BUILD)/user/start.o $(PETAL_HEADERS) | dirs
 	@mkdir -p $(dir $@)
 	$(CXX) $(PETAL_CXXFLAGS) -c $< -o $(BUILD)/apps/$*.o
-	$(LD) $(PETAL_LDFLAGS) $(BUILD)/apps/$*.o $(BUILD)/user/libpetal.o -o $@
+	$(LD) $(PETAL_LDFLAGS) $(BUILD)/user/start.o $(BUILD)/apps/$*.o $(BUILD)/user/libpetal.o -o $@
 
 petal_apps: $(PETAL_APPS)
 

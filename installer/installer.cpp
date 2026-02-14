@@ -92,21 +92,13 @@ int disk_read_sector(uint32_t lba, uint8_t *buffer);
 void ata_set_allow_mbr_write(int allow);
 }
 
-/* Icon filenames (BMP) */
-#define ICON_COUNT 16
-static const char *g_icon_files[ICON_COUNT] = {
-    "start.bmp", "term.bmp",  "files.bmp", "img.bmp",  "note.bmp", "paint.bmp",
-    "calc.bmp",  "clock.bmp", "calc.bmp",  "task.bmp", "info.bmp", "3D.bmp",
-    "mine.bmp",  "net.bmp",   "x0.bmp",    "run.bmp",
-};
-
-/* Petal app filenames */
-#define PETAL_COUNT 3
-static const char *g_petal_files[PETAL_COUNT] = {
-    "calc.petal",
-    "hello.petal",
-    "clickme.petal",
-};
+static bool has_extension(const char *name, const char *ext) {
+  size_t nl = strlen(name);
+  size_t el = strlen(ext);
+  if (nl < el)
+    return false;
+  return strcmp(name + nl - el, ext) == 0;
+}
 
 static void normalize_module_name_len(const char *cmdline, size_t cmdline_len,
                                       char *out, size_t out_sz) {
@@ -650,16 +642,12 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   size_t boot_img_size = 0;
   void *core_img = NULL;
   size_t core_img_size = 0;
-  void *icon_data[ICON_COUNT] = {0};
-  size_t icon_sizes[ICON_COUNT] = {0};
   void *theme_txt_data = NULL;
   size_t theme_txt_size = 0;
   void *bg_tga_data = NULL;
   size_t bg_tga_size = 0;
   void *sel_tga_data = NULL;
   size_t sel_tga_size = 0;
-  void *petal_data[PETAL_COUNT] = {0};
-  size_t petal_sizes[PETAL_COUNT] = {0};
 
   /* Scan multidoob tags (parsed manually here as we need raw addresses) */
   struct multiboot2_tag *tag = (struct multiboot2_tag *)(uintptr_t)(addr + 8);
@@ -714,29 +702,26 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
           sel_tga_data = (void *)(uintptr_t)mod->mod_start;
           sel_tga_size = mod->mod_end - mod->mod_start;
           serial("[INSTALLER] Assigned to select_c.tga\n");
+        } else if (has_extension(mod_name, ".bmp")) {
+          char path[64] = "/system/icons/";
+          memcpy(path + 14, mod_name, strlen(mod_name) + 1);
+          serial("[INSTALLER] Dynamic Icon: %s -> %s\n", mod_name, path);
+          fat32_create_file_verified(path, (void *)(uintptr_t)mod->mod_start,
+                                     (uint32_t)(mod->mod_end - mod->mod_start),
+                                     0);
+          kmalloc_reset();
+        } else if (has_extension(mod_name, ".petal")) {
+          char path[64] = "/system/apps/";
+          memcpy(path + 13, mod_name, strlen(mod_name) + 1);
+          serial("[INSTALLER] Dynamic App: %s -> %s\n", mod_name, path);
+          fat32_create_file_verified(path, (void *)(uintptr_t)mod->mod_start,
+                                     (uint32_t)(mod->mod_end - mod->mod_start),
+                                     0);
+          kmalloc_reset();
         } else {
-          /* Try BMP icons */
-          for (int i = 0; i < ICON_COUNT; i++) {
-            if (strcmp(mod_name, g_icon_files[i]) == 0) {
-              icon_data[i] = (void *)(uintptr_t)mod->mod_start;
-              icon_sizes[i] = mod->mod_end - mod->mod_start;
-              serial("[INSTALLER] Assigned to %s\n", g_icon_files[i]);
-              goto mod_done;
-            }
-          }
-          /* Try Petal apps */
-          for (int i = 0; i < PETAL_COUNT; i++) {
-            if (strcmp(mod_name, g_petal_files[i]) == 0) {
-              petal_data[i] = (void *)(uintptr_t)mod->mod_start;
-              petal_sizes[i] = mod->mod_end - mod->mod_start;
-              serial("[INSTALLER] Assigned to %s\n", g_petal_files[i]);
-              goto mod_done;
-            }
-          }
           serial("[INSTALLER] Module '%s' did not match any expected file.\n",
                  cmdline);
         }
-      mod_done:;
       }
     }
     tag = (struct multiboot2_tag *)((uint8_t *)tag + ((tag->size + 7) & ~7));
@@ -904,92 +889,8 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
     return;
   }
 
-  /* 7. Install Icons (BMP files) */
-  serial("[INSTALLER] Installing Icons (BMP)...\n");
-  int icons_written = 0;
-  for (int i = 0; i < ICON_COUNT; i++) {
-    if (!icon_data[i] || icon_sizes[i] == 0)
-      continue;
-    char path[48];
-    /* "/system/icons/<name>" */
-    path[0] = '/';
-    path[1] = 's';
-    path[2] = 'y';
-    path[3] = 's';
-    path[4] = 't';
-    path[5] = 'e';
-    path[6] = 'm';
-    path[7] = '/';
-    path[8] = 'i';
-    path[9] = 'c';
-    path[10] = 'o';
-    path[11] = 'n';
-    path[12] = 's';
-    path[13] = '/';
-    const char *nm = g_icon_files[i];
-    int j = 0;
-    while (nm[j] && (14 + j) < (int)sizeof(path) - 1) {
-      path[14 + j] = nm[j];
-      j++;
-    }
-    path[14 + j] = 0;
-
-    serial("[INSTALLER] icon %s (%d bytes) -> %s\n", nm, (int)icon_sizes[i],
-           path);
-    int r = fat32_create_file_verified(path, icon_data[i],
-                                       (uint32_t)icon_sizes[i], 0);
-    if (r != 0) {
-      serial("[INSTALLER] ERROR: icon write failed (%s err=%d)\n", nm, r);
-      return;
-    }
-    icons_written++;
-    kmalloc_reset();
-  }
-  serial("[INSTALLER] Icons Installed OK (%d files).\n", icons_written);
-
-  serial("[INSTALLER] Icons Installed OK (%d files).\n", icons_written);
-
-  /* 7.2 Install Petal Apps */
-  serial("[INSTALLER] Installing Petal Apps...\n");
-  int petals_written = 0;
-  for (int i = 0; i < PETAL_COUNT; i++) {
-    if (!petal_data[i] || petal_sizes[i] == 0)
-      continue;
-    char path[48];
-    /* "/system/apps/<name>" */
-    path[0] = '/';
-    path[1] = 's';
-    path[2] = 'y';
-    path[3] = 's';
-    path[4] = 't';
-    path[5] = 'e';
-    path[6] = 'm';
-    path[7] = '/';
-    path[8] = 'a';
-    path[9] = 'p';
-    path[10] = 'p';
-    path[11] = 's';
-    path[12] = '/';
-    const char *nm = g_petal_files[i];
-    int j = 0;
-    while (nm[j] && (13 + j) < (int)sizeof(path) - 1) {
-      path[13 + j] = nm[j];
-      j++;
-    }
-    path[13 + j] = 0;
-
-    serial("[INSTALLER] petal %s (%d bytes) -> %s\n", nm, (int)petal_sizes[i],
-           path);
-    int r = fat32_create_file_verified(path, petal_data[i],
-                                       (uint32_t)petal_sizes[i], 0);
-    if (r != 0) {
-      serial("[INSTALLER] ERROR: petal write failed (%s err=%d)\n", nm, r);
-      return;
-    }
-    petals_written++;
-    kmalloc_reset();
-  }
-  serial("[INSTALLER] Petal Apps Installed OK (%d files).\n", petals_written);
+  /* Files (.bmp and .petal) are now installed dynamically during the module
+   * scan. */
 
   /* 7.1 Create User Data (Only for Fresh Install) */
   if (!upgrade_mode) {

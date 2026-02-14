@@ -6,6 +6,7 @@
 #include "../../mem/kmalloc.h"
 #include "../../sched/pcb.h"
 #include "../../terminal.h"
+#include "../../time/clock.h"
 #include "../../time/timer.h"
 #include "../../toolchain/cc.h"
 #include "../../ui/flyui/draw.h"
@@ -125,7 +126,7 @@ int syscall_dispatch(uint32_t num, uint32_t a1, uint32_t a2, uint32_t a3,
 
   case SYS_EXIT:
     terminal_printf("[syscall] process exit code=%d\n", a1);
-    schedule();
+    task_exit((int)a1);
     return 0;
 
   case SYS_WM_CREATE_WINDOW: {
@@ -166,16 +167,18 @@ int syscall_dispatch(uint32_t num, uint32_t a1, uint32_t a2, uint32_t a3,
     input_event_t *out_ev = (input_event_t *)(uintptr_t)a1;
     pcb_t *cur = pcb_get_current();
 
-    /* Prefer process-specific events (routed/translated) */
+    /*
+     * Standalone apps should ONLY receive events pushed to their specific
+     * task queue by the Window Manager. Stealing from the global input_pop
+     * starves the main GUI loop and causes freezes.
+     */
     if (cur) {
       if (task_pop_event(cur, out_ev))
         return 1;
     }
 
-    if (input_pop(out_ev))
-      return 1;
-    /* If no event, yield to allow others to run (important in tight loops) */
-    schedule();
+    /* If no event, yield to allow others to run */
+    yield();
     return 0;
   }
 
@@ -201,6 +204,46 @@ int syscall_dispatch(uint32_t num, uint32_t a1, uint32_t a2, uint32_t a3,
       fly_draw_rect_fill(win->surface, a2, a3, a4, (uint16_t)a5, a6);
     }
     return 0;
+  }
+
+  case SYS_FLY_DRAW_BMP: {
+    window_t *win = (window_t *)(uintptr_t)a1;
+    const char *path = (const char *)(uintptr_t)a2;
+    if (win && win->surface && path) {
+      /* Use internal BMP loader to draw directly to window surface */
+      /* Note: We need a way to draw at X,Y offset? fly_load_bmp_to_surface
+         loads to the *whole* surface generally, or we need a helper to load
+         to a temp surface and blit.
+
+         Existing fly_load_bmp_to_surface(surface, path) overwrites surface
+         content. If we want to position it, we need a blit.
+
+         For now, for image-viewer, we will just load it to the window surface
+         directly. Ideally: sys_draw_bmp(win, path, x, y). But we don't have a
+         direct "load file to X,Y of surface" helper exposed easily yet.
+
+         Let's assume we want to load full image to 0,0 or stretch?
+         Actually, let's look at `fly_load_bmp_to_surface` again. It iterates
+         through file and writes to surface pixels. It does bound checking. If
+         we want to support offset, we should probably add `x, y` args to
+         `fly_load_bmp_to_surface` or creating a new helper.
+
+         Alternative: `p_load_bmp` returns a handle (surface ID) and we have
+         `p_draw_surface`. But we only have `SYS_FLY_DRAW_BMP` slot for now.
+
+         Let's invoke `fly_load_bmp_to_surface` for now. It draws at 0,0.
+      */
+      extern int fly_load_bmp_to_surface(surface_t * surf, const char *path);
+      return fly_load_bmp_to_surface(win->surface, path);
+    }
+    return -1;
+  }
+
+  case SYS_GET_TIME: {
+    datetime t;
+    time_get_local(&t);
+    /* Pack time into 32-bit: HH:MM:SS */
+    return (uint32_t)((t.hour << 16) | (t.minute << 8) | t.second);
   }
 
   default:

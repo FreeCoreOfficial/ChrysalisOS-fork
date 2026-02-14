@@ -158,24 +158,14 @@ installer.iso: $(BUILD)/installer.elf
 	@echo 'menuentry "Chrysalis OS - Installer" {' >> $(ISO)/boot/grub/grub.cfg
 	@echo '  multiboot2 /boot/installer.elf' >> $(ISO)/boot/grub/grub.cfg
 	@echo '  module2 /boot/chrysalis/kernel.bin kernel.bin' >> $(ISO)/boot/grub/grub.cfg
-	@echo '  module2 /icons/start.bmp start.bmp' >> $(ISO)/boot/grub/grub.cfg
-	@echo '  module2 /icons/term.bmp term.bmp' >> $(ISO)/boot/grub/grub.cfg
-	@echo '  module2 /icons/files.bmp files.bmp' >> $(ISO)/boot/grub/grub.cfg
-	@echo '  module2 /icons/img.bmp img.bmp' >> $(ISO)/boot/grub/grub.cfg
-	@echo '  module2 /icons/note.bmp note.bmp' >> $(ISO)/boot/grub/grub.cfg
-	@echo '  module2 /icons/paint.bmp paint.bmp' >> $(ISO)/boot/grub/grub.cfg
-	@echo '  module2 /icons/calc.bmp calc.bmp' >> $(ISO)/boot/grub/grub.cfg
-	@echo '  module2 /icons/clock.bmp clock.bmp' >> $(ISO)/boot/grub/grub.cfg
-	@echo '  module2 /icons/task.bmp task.bmp' >> $(ISO)/boot/grub/grub.cfg
-	@echo '  module2 /icons/info.bmp info.bmp' >> $(ISO)/boot/grub/grub.cfg
-	@echo '  module2 /icons/3D.bmp 3D.bmp' >> $(ISO)/boot/grub/grub.cfg
-	@echo '  module2 /icons/mine.bmp mine.bmp' >> $(ISO)/boot/grub/grub.cfg
-	@echo '  module2 /icons/net.bmp net.bmp' >> $(ISO)/boot/grub/grub.cfg
-	@echo '  module2 /icons/x0.bmp x0.bmp' >> $(ISO)/boot/grub/grub.cfg
-	@echo '  module2 /icons/run.bmp run.bmp' >> $(ISO)/boot/grub/grub.cfg
-	@echo '  module2 /system/apps/calc.petal calc.petal' >> $(ISO)/boot/grub/grub.cfg
-	@echo '  module2 /system/apps/hello.petal hello.petal' >> $(ISO)/boot/grub/grub.cfg
-	@echo '  module2 /system/apps/clickme.petal clickme.petal' >> $(ISO)/boot/grub/grub.cfg
+	@for f in $(ISO)/icons/*.bmp; do \
+		nm=$$(basename $$f); \
+		echo "  module2 /icons/$$nm $$nm" >> $(ISO)/boot/grub/grub.cfg; \
+	done
+	@for f in $(ISO)/system/apps/*.petal; do \
+		nm=$$(basename $$f); \
+		echo "  module2 /system/apps/$$nm $$nm" >> $(ISO)/boot/grub/grub.cfg; \
+	done
 	@echo '  module2 /boot/grub/boot.img boot.img' >> $(ISO)/boot/grub/grub.cfg
 	@echo '  module2 /boot/grub/core.img core.img' >> $(ISO)/boot/grub/grub.cfg
 	@echo '  module2 /boot/grub/themes/chrysalis/background.tga background.tga' >> $(ISO)/boot/grub/grub.cfg

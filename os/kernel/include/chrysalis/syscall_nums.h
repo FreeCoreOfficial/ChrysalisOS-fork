@@ -23,10 +23,12 @@
 #define SYS_FLY_DRAW_RECT_FILL 20
 #define SYS_FLY_DRAW_TEXT 21
 #define SYS_FLY_DRAW_SURFACE 22
+#define SYS_FLY_DRAW_BMP 23
 
 /* Event Syscalls */
 #define SYS_GET_EVENT 30
 #define SYS_SLEEP 31
 #define SYS_YIELD 32
+#define SYS_GET_TIME 40
 
 #endif

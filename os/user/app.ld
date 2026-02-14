@@ -5,24 +5,26 @@ SECTIONS
     /* Mapped address for apps */
     . = 0x08048000;
 
-    .text : ALIGN(4K)
+    .text : ALIGN(4096)
     {
-        /* Force _start to the very beginning of the usable code */
-        KEEP(*(.text._start))
+        *(.text._start)
         *(.text*)
+        *(.gnu.linkonce.t*)
     }
 
-    .rodata : ALIGN(4K)
+    .rodata : ALIGN(4096)
     {
         *(.rodata*)
+        *(.gnu.linkonce.r*)
     }
 
-    .data : ALIGN(4K)
+    .data : ALIGN(4096)
     {
         *(.data*)
+        *(.gnu.linkonce.d*)
     }
 
-    .bss : ALIGN(4K)
+    .bss : ALIGN(4096)
     {
         *(.bss*)
         *(COMMON)
@@ -32,5 +34,6 @@ SECTIONS
     {
         *(.comment)
         *(.eh_frame)
+        *(.note.gnu.build-id)
     }
 }

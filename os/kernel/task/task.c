@@ -13,10 +13,12 @@
  * attempting an invalid context switch if you don't have switch.S implemented.
  */
 
+#include "../terminal.h"
 #include <stddef.h>
 #include <stdint.h>
 
 #include "../include/task.h"
+#include "../time/timer.h"
 
 /* Freestanding-friendly tiny helpers */
 static void *k_memset(void *s, int c, size_t n) {
@@ -47,6 +49,26 @@ extern void _pcb_set_current(int tid);
 /* helper: initial eflags for new tasks (IF=1) */
 static inline uint32_t initial_eflags(void) { return 0x202; }
 
+/* Every task starts in this trampoline so return from entry is always handled.
+   This mirrors Linux-style "if task function returns -> do_exit". */
+static __attribute__((noreturn)) void task_entry_trampoline(void) {
+  void (*entry)(void) = NULL;
+  if (current_task) {
+    entry = current_task->entry_noarg;
+  }
+
+  if (!entry) {
+    terminal_writestring("[TASK] Null entry in trampoline. Exiting task.\n");
+    task_exit(-1);
+  }
+
+  entry();
+  task_exit(0);
+
+  for (;;)
+    asm volatile("hlt");
+}
+
 /* Minimal schedule(): cooperative round-robin.
  * If context_switch is provided (non-NULL weak symbol), call it with addresses
  * of prev->kstack_ptr and next->kstack_ptr. If not present, only advance the
@@ -56,26 +78,56 @@ void schedule(void) {
   if (!current_task || !task_list)
     return;
 
+  /* Interrupts MUST be disabled during the entire scheduling process
+     to prevent race conditions (e.g. if we update current_task and then
+     an IRQ happens before we context_switch). */
+  asm volatile("cli");
+
+  uint64_t now = timer_ticks_no_cli();
   task_t *prev = current_task;
   task_t *next = prev->next;
-  if (!next || next == prev)
+
+  /* Check all tasks once for a ready one */
+  while (next != prev) {
+    if (next->state == TASK_SLEEPING && now >= next->sleep_until) {
+      next->state = TASK_READY;
+    }
+
+    if (next->state == TASK_READY || next->state == TASK_RUNNING) {
+      break;
+    }
+    next = next->next;
+  }
+
+  if (next == prev) {
+    /* Only current task is potentially ready. Check if it should wake up. */
+    if (prev->state == TASK_SLEEPING && now >= prev->sleep_until) {
+      prev->state = TASK_READY;
+    }
+    if (prev->state != TASK_READY && prev->state != TASK_RUNNING) {
+      /* Everything is sleeping, just stay here for now. */
+      asm volatile("sti");
+      return;
+    }
+    asm volatile("sti");
     return;
+  }
 
   if (context_switch) {
-    /* CRITICAL: Update current_task pointer BEFORE switching stacks.
-       Otherwise, the new task will run with 'current_task' pointing to the OLD
-       task. This causes stack corruption if the new task yields. */
+    /* CRITICAL: Update current_task pointer BEFORE switching stacks. */
     current_task = next;
 
     /* Also update legacy PCB system ID if compatible */
     _pcb_set_current(next->pid);
 
-    /* Pass addresses-of-fields so assembly can read/write the saved ESP */
+    /* context_switch.S will save context and LOAD new stack.
+       It also re-enables interrupts via sti before ret. */
     context_switch(&prev->kstack_ptr, &next->kstack_ptr);
   } else {
-    /* No real context switch available: advance pointer for bookkeeping only */
+    /* No real context switch available */
     current_task = next;
     _pcb_set_current(next->pid);
+    asm volatile("sti");
   }
 }
 
@@ -103,6 +155,22 @@ int task_pop_event(task_t *t, input_event_t *ev) {
   return 1;
 }
 
+void task_kill_user_apps(void) {
+  if (!task_list)
+    return;
+
+  extern void wm_cleanup_task_windows(void *task_ptr);
+
+  task_t *t = task_list;
+  do {
+    if (t != current_task && t->is_user_app && t->state != TASK_ZOMBIE) {
+      wm_cleanup_task_windows(t);
+      t->state = TASK_ZOMBIE;
+    }
+    t = t->next;
+  } while (t && t != task_list);
+}
+
 /* Initialize scheduler by capturing current stack into a static main task */
 void task_init(void) {
   if (current_task)
@@ -113,6 +181,7 @@ void task_init(void) {
 
   main_task.pid = next_pid++;
   main_task.next = &main_task;
+  main_task.state = TASK_READY;
 
   /* capture current ESP */
   uint32_t cur_esp;
@@ -146,12 +215,14 @@ task_t *task_create(void (*entry)(void), int pid) {
   k_memset(t, 0, sizeof(*t));
 
   t->pid = (pid == 0) ? (int)next_pid++ : pid;
+  t->entry_noarg = entry;
+  t->state = TASK_READY;
 
   /* prepare stack in embedded kstack */
   uint32_t *sp = (uint32_t *)((uintptr_t)t->kstack + sizeof(t->kstack));
 
-  /* push return EIP (so ret -> entry) */
-  sp = push32(sp, (uint32_t)entry);
+  /* push return EIP (so ret -> task trampoline) */
+  sp = push32(sp, (uint32_t)(uintptr_t)task_entry_trampoline);
 
   /* push EFLAGS (popfl will restore) */
   sp = push32(sp, initial_eflags());
@@ -187,6 +258,9 @@ task_t *task_create(void (*entry)(void), int pid) {
     task_list->next = t;
   }
 
+  /* Log task creation for debugging */
+  terminal_printf("[TASK] Created task PID=%d at %x\n", t->pid, entry);
+
   return t;
 }
 
@@ -213,10 +287,62 @@ task_t *task_create_old(const char *name, void (*entry)(void))
 #endif
 
 /* Free a task (simple) */
+/* Free a task (simple) */
 void task_free(task_t *t) {
   if (!t)
     return;
   kfree(t);
+}
+
+/* Exit current task: remove from list and free */
+void task_exit(int code) {
+  (void)code; /* Exit code not really used yet */
+
+  /* If only one task (or none), we can't really exit without halting */
+  if (!current_task || !task_list || task_list->next == task_list) {
+    terminal_writestring("[TASK] Last task exiting, halting.\n");
+    for (;;)
+      asm volatile("hlt");
+  }
+
+  /* Remove current_task from circular list */
+  task_t *prev = current_task;
+  while (prev->next != current_task) {
+    prev = prev->next;
+  }
+
+  /* prev->next was current_task, now make it current_task->next */
+  prev->next = current_task->next;
+
+  task_t *to_free = current_task;
+
+  /* safe book-keeping */
+  if (task_list == to_free) {
+    task_list = prev; /* move head if we delete head */
+  }
+
+  /* Schedule next task immediately */
+  /* We manually move current_task to next so schedule() picks it up
+     without trying to save the old (freed) context */
+  current_task = prev; /* schedule() will start searching from prev->next */
+
+  /* We can't free the stack we are running on if we want to call schedule()
+     safely... but for this simple kernel we'll hack it:
+     we mark it ZOMBIE and let a reaper (or nothing) free it,
+     OR we just leak it for now to be safe.
+     Better: set state ZOMBIE and schedule away. */
+
+  /* Cleanup any windows owned by this task */
+  extern void wm_cleanup_task_windows(void *task_ptr);
+  wm_cleanup_task_windows(to_free);
+
+  to_free->state = TASK_ZOMBIE;
+
+  schedule();
+
+  /* Should never return */
+  for (;;)
+    asm volatile("hlt");
 }
 
 /* End of task/task.c fallback */
