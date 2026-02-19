@@ -968,7 +968,12 @@ icons:
 	@echo "[ICONS] Generating icons BMPs..."
 	cd ../tools/icons && python3 mkicons.py
 	@mkdir -p $(ISO)/icons
+	@mkdir -p $(ISO)/system
 	cp ../tools/icons/out/*.bmp $(ISO)/icons/
+	@if [ -f ../tools/icons/out/bg.bmp ]; then \
+		cp ../tools/icons/out/bg.bmp $(ISO)/system/bg.bmp; \
+		echo "[ICONS] Wallpaper copied to $(ISO)/system/bg.bmp"; \
+	else echo "WARN: bg.bmp not found in tools/icons/out/"; fi
 
 iso: all iso/boot/grub/grub.cfg icons
 	@mkdir -p $(ISO)/boot/grub

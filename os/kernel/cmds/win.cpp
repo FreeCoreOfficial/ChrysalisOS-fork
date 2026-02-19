@@ -810,8 +810,8 @@ static void start_btn_click(fly_widget_t *w) {
 static void desktop_draw(fly_widget_t *w, surface_t *surf, int x, int y) {
   (void)x;
   (void)y;
-  /* Dark aesthetic blue gradient */
-  fly_draw_rect_vgradient(surf, 0, 0, w->w, w->h, 0xFF435A6F, 0xFF202B36);
+  /* Dark aesthetic blue gradient - REMOVED for wallpaper visibility */
+  /* fly_draw_rect_vgradient(surf, 0, 0, w->w, w->h, 0xFF435A6F, 0xFF202B36); */
 
   /* Subtle watermark */
   fly_draw_text(surf, w->w - 180, w->h - 30, "Chrysalis OS v0.2 beta",
@@ -830,8 +830,12 @@ static void create_desktop() {
   if (!s)
     return;
 
+  /* Clear to transparent so wallpaper shows through */
+  surface_clear(s, 0);
+
   desktop_ctx = flyui_init(s);
   fly_widget_t *root = fly_panel_create(w, h);
+  root->bg_color = 0; /* Fully transparent background */
   root->on_draw = desktop_draw;
   flyui_set_root(desktop_ctx, root);
 
@@ -1305,8 +1309,8 @@ extern "C" int cmd_launch(int argc, char **argv) {
           }
 
           /* 3.3 Generic Dispatch for Standalone Apps */
-          /* If window has an owner task and wasn't handled by hardcoded internal
-           * handlers, dispatch to its task event queue. */
+          /* If window has an owner task and wasn't handled by hardcoded
+           * internal handlers, dispatch to its task event queue. */
           if (target && target->owner && target != clock_app_get_window() &&
               target != shell_get_window() &&
               target != calculator_app_get_window() &&

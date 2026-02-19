@@ -1387,6 +1387,8 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   size_t bg_tga_size = 0;
   void *sel_tga_data = NULL;
   size_t sel_tga_size = 0;
+  void *bg_bmp_data = NULL;
+  size_t bg_bmp_size = 0;
 
   int module_total = installer_count_modules(addr);
   if (module_total <= 0)
@@ -1462,6 +1464,10 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
           sel_tga_data = (void *)(uintptr_t)mod->mod_start;
           sel_tga_size = mod->mod_end - mod->mod_start;
           serial("[INSTALLER] Assigned to select_c.tga\n");
+        } else if (strcmp(current_mod_name, "bg.bmp") == 0) {
+          bg_bmp_data = (void *)(uintptr_t)mod->mod_start;
+          bg_bmp_size = mod->mod_end - mod->mod_start;
+          serial("[INSTALLER] Assigned to bg.bmp (desktop wallpaper)\n");
         } else if (has_extension(current_mod_name, ".bmp")) {
           char path[64] = "/system/icons/";
           memcpy(path + 14, current_mod_name, strlen(current_mod_name) + 1);
@@ -1598,6 +1604,7 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
                          "  module2 /system/icons/net.bmp net.bmp\n"
                          "  module2 /system/icons/x0.bmp x0.bmp\n"
                          "  module2 /system/icons/run.bmp run.bmp\n"
+                         "  module2 /system/bg.bmp bg.bmp\n"
                          "  boot\n"
                          "}\n"
                          "menuentry \"Chrysalis OS (Text Mode)\" {\n"
@@ -1617,6 +1624,7 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
                          "  module2 /system/icons/net.bmp net.bmp\n"
                          "  module2 /system/icons/x0.bmp x0.bmp\n"
                          "  module2 /system/icons/run.bmp run.bmp\n"
+                         "  module2 /system/bg.bmp bg.bmp\n"
                          "  boot\n"
                          "}\n"
                          "menuentry \"Chrysalis OS (Text Mode, PIC Safe)\" {\n"
@@ -1651,6 +1659,17 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   }
   ui_progress_update(78, "Installing bootloader",
                      "GRUB and theme assets installed.");
+
+  /* 4.2 Install desktop wallpaper */
+  if (bg_bmp_data && bg_bmp_size > 0) {
+    serial("[INSTALLER] Installing desktop wallpaper /system/bg.bmp (%d bytes)...\n",
+           (int)bg_bmp_size);
+    fat32_create_file_verified("/system/bg.bmp", bg_bmp_data,
+                               (uint32_t)bg_bmp_size, 1);
+    serial("[INSTALLER] bg.bmp installed OK.\n");
+  } else {
+    serial("[INSTALLER] WARN: bg.bmp module not found, desktop will use solid color.\n");
+  }
 
   /* 6. Install Kernel (chunked) */
   if (kernel_data && kernel_size > 0) {

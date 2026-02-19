@@ -35,3 +35,18 @@ for _, path in icons:
     print("wrote", out_path)
 
 print("icons bmp generated")
+
+# --- Wallpaper ---
+WALLPAPER_SRC = "../background/wallpaper.png"
+WALLPAPER_OUT = os.path.join(OUT_DIR, "bg.bmp")
+WALLPAPER_W = 1024
+WALLPAPER_H = 768
+
+try:
+    wp = Image.open(WALLPAPER_SRC).convert("RGB")  # RGB, fara alpha (BMP 24-bit)
+    wp = wp.resize((WALLPAPER_W, WALLPAPER_H), Image.LANCZOS)
+    wp.save(WALLPAPER_OUT, format="BMP")
+    print("wrote", WALLPAPER_OUT)
+    print("wallpaper bmp generated")
+except FileNotFoundError:
+    print(f"WARN: wallpaper not found at {WALLPAPER_SRC}, skipping.")

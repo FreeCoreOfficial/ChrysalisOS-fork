@@ -143,6 +143,11 @@ installer.iso: $(BUILD)/installer.elf
 	@if [ -d ../os/iso/icons ]; then cp ../os/iso/icons/*.bmp $(ISO)/icons/; else echo "WARNING: icons bmp not found!"; fi
 	@mkdir -p $(ISO)/system/apps
 	@if [ -d ../os/iso/system/apps ]; then cp ../os/iso/system/apps/*.petal $(ISO)/system/apps/; else echo "WARNING: petal apps not found!"; fi
+	@mkdir -p $(ISO)/system
+	@if [ -f ../os/iso/system/bg.bmp ]; then \
+		cp ../os/iso/system/bg.bmp $(ISO)/system/bg.bmp; \
+		echo "[ISO] Wallpaper bg.bmp copied to installer ISO"; \
+	else echo "WARNING: bg.bmp not found in os/iso/system/ (run 'make icons' in os/ first!)"; fi
 	@# Build GRUB core image + include boot.img + embed config
 	@if [ -f /usr/lib/grub/i386-pc/boot.img ]; then cp /usr/lib/grub/i386-pc/boot.img $(ISO)/boot/grub/; else echo "WARNING: boot.img not found!"; fi
 	@echo 'search --file --set=root /boot/grub/grub.cfg' > $(ISO)/boot/grub/grub_embed.cfg
@@ -172,6 +177,9 @@ installer.iso: $(BUILD)/installer.elf
 		nm=$$(basename $$f); \
 		echo "  module2 /system/apps/$$nm $$nm" >> $(ISO)/boot/grub/grub.cfg; \
 	done
+	@if [ -f $(ISO)/system/bg.bmp ]; then \
+		echo '  module2 /system/bg.bmp bg.bmp' >> $(ISO)/boot/grub/grub.cfg; \
+	fi
 	@echo '  module2 /boot/grub/boot.img boot.img' >> $(ISO)/boot/grub/grub.cfg
 	@echo '  module2 /boot/grub/core.img core.img' >> $(ISO)/boot/grub/grub.cfg
 	@echo '  module2 /boot/grub/themes/chrysalis/background.tga background.tga' >> $(ISO)/boot/grub/grub.cfg
