@@ -242,7 +242,9 @@ OBJS = \
 	$(BUILD)/crypto/sha256.o \
 	$(BUILD)/crypto/aes.o \
 	$(BUILD)/crypto/prng.o \
-	$(BUILD)/ethernet/drivers/rtl8139.o
+	$(BUILD)/ethernet/drivers/rtl8139.o \
+	$(BUILD)/firewall/firewall.o \
+	$(BUILD)/firewall/bridge.o
 
 
 
@@ -277,6 +279,7 @@ dirs: $(BUILD)
 	mkdir -p ${BUILD}/ethernet/drivers
 	mkdir -p ${BUILD}/crypto
 	mkdir -p ${BUILD}/chryspkg
+	mkdir -p ${BUILD}/firewall
 	mkdir -p ${BUILD}/user
 	mkdir -p ${BUILD}/storage/ahci
 	mkdir -p $(ISO)/system/apps
@@ -700,6 +703,14 @@ $(BUILD)/cmds/gcc.o: kernel/cmds/gcc.cpp | dirs
 
 $(BUILD)/chryspkg/chryspkg.o: kernel/chryspkg/chryspkg.c | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/firewall/firewall.o: kernel/firewall/firewall.cpp | dirs
+	@mkdir -p $(BUILD)/firewall
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(BUILD)/firewall/bridge.o: kernel/firewall/bridge.cpp | dirs
+	@mkdir -p $(BUILD)/firewall
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(BUILD)/hardware/pci.o: kernel/hardware/pci.cpp
 	@mkdir -p $(BUILD)/hardware

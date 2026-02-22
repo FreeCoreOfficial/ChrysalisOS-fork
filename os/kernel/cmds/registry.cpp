@@ -60,6 +60,8 @@
 #include "which.h"
 #include "win.h"
 #include "write.h"
+
+extern "C" int cmd_bridge(int argc, char **argv);
 // Minimal freestanding helpers (no libc)
 
 /*
@@ -312,6 +314,9 @@ static int wrap_cmd_exec(int argc, char **argv) {
     return -1;
   return execve(argv[1], argv + 1, nullptr);
 }
+static int wrap_cmd_bridge(int argc, char **argv) {
+  return wrap_new_int(cmd_bridge, argc, argv);
+}
 
 /* ----- Final command table ----- */
 /* Command typedef (from registry.h) assumed: typedef struct { const char* name;
@@ -379,6 +384,7 @@ Command command_table[] = {
     {"hexdump", wrap_cmd_hexdump},
     {"grep", wrap_cmd_grep},
     {"gcc", wrap_cmd_gcc},
+    {"bridge", wrap_cmd_bridge},
 };
 
 int command_count = sizeof(command_table) / sizeof(Command);

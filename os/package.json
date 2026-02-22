@@ -42,7 +42,7 @@
     "// --- QEMU Emulation --- //": "",
     "run": "qemu-system-i386 -cdrom chrysalis.iso -vga std",
     "run:serial": "qemu-system-i386 -cdrom chrysalis.iso -serial stdio",
-    "run:hdd": "clear && qemu-system-i386 -audiodev pa,id=snd0 -machine pcspk-audiodev=snd0 -m 512 -smp 2 -boot order=c -serial stdio -drive file=hdd.img,format=raw,if=none,id=disk0 -device ahci,id=ahci -device ide-hd,drive=disk0,bus=ahci.0 -netdev user,id=net0 -device e1000,netdev=net0 -vga std",
+    "run:hdd": "clear && qemu-system-i386 -audiodev pa,id=snd0 -machine pcspk-audiodev=snd0 -m 512 -smp 2 -boot order=c -serial stdio -drive file=hdd.img,format=raw,if=none,id=disk0 -device ahci,id=ahci -device ide-hd,drive=disk0,bus=ahci.0 -netdev user,id=net0,hostfwd=tcp::2222-:22 -device e1000,netdev=net0 -vga std",
     "run:debug": "qemu-system-i386 -cdrom chrysalis.iso -serial stdio -d int,cpu_reset",
     "run:gdb": "qemu-system-i386 -cdrom chrysalis.iso -s -S",
     "// --- Tools & Utilities --- //": "",
