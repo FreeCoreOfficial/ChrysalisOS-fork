@@ -68,6 +68,7 @@
 #include "panic.h"
 #include "panic_sys.h"
 #include "shell/shell.h"
+#include "services/services.h"
 #include "smp/multiboot.h"
 #include "smp/smp.h"
 #include "storage/ahci/ahci.h"
@@ -681,6 +682,12 @@ extern "C" void kernel_main(uint32_t magic, uint32_t addr) {
   /* Initialize Users (load from disk now that FS is ready) */
   terminal_writestring("[kernel] initializing users...\n");
   user_init();
+
+  if (!g_boot_gui) {
+    services_set_gui_ready(0);
+    terminal_writestring("[services] starting services...\n");
+    services_start();
+  }
 
   terminal_writestring("Sleeping 1 second...\n");
   sleep(1000);

@@ -265,6 +265,41 @@ void file_manager_app_create(void) {
   app_register("File Manager", fm_win);
 }
 
+void file_manager_app_open_path(const char *path) {
+  if (!path || !path[0])
+    return;
+
+  if (!fm_win) {
+    file_manager_app_create();
+  } else {
+    wm_restore_window(fm_win);
+    wm_focus_window(fm_win);
+  }
+
+  fat_automount();
+  if (fat32_directory_exists(path)) {
+    strncpy(current_path, path, sizeof(current_path) - 1);
+    current_path[sizeof(current_path) - 1] = 0;
+  } else {
+    /* If a file path was provided, navigate to its parent */
+    strncpy(current_path, path, sizeof(current_path) - 1);
+    current_path[sizeof(current_path) - 1] = 0;
+    char *last = strrchr(current_path, '/');
+    if (last && last != current_path) {
+      *last = 0;
+    } else {
+      strcpy(current_path, "/");
+    }
+  }
+
+  refresh_files();
+  selected_idx = -1;
+  if (fm_win && fm_win->surface) {
+    draw_fm(fm_win->surface);
+    wm_mark_dirty();
+  }
+}
+
 bool file_manager_app_handle_event(input_event_t *ev) {
   if (!fm_win)
     return false;

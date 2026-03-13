@@ -1324,6 +1324,8 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   char system_path[8] = {'/', 's', 'y', 's', 't', 'e', 'm', 0};
   char icons_dir[14] = {'/', 's', 'y', 's', 't', 'e', 'm',
                         '/', 'i', 'c', 'o', 'n', 's', 0};
+  char services_dir[18] = {'/', 's', 'y', 's', 't', 'e', 'm',
+                           '/', 's', 'e', 'r', 'v', 'i', 'c', 'e', 's', 0};
   char themes_dir[18] = {'/', 'b', 'o', 'o', 't', '/', 'g', 'r', 'u',
                          'b', '/', 't', 'h', 'e', 'm', 'e', 's', 0};
   char theme_dir[28] = {'/', 'b', 'o', 'o', 't', '/', 'g', 'r', 'u', 'b',
@@ -1355,6 +1357,10 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   if (mr != 0 && !upgrade_mode) {
     serial("[INSTALLER] WARN: mkdir /system/icons failed (err=%d)\n", mr);
   }
+  mr = fat32_create_directory_verified(services_dir, 1);
+  if (mr != 0 && !upgrade_mode) {
+    serial("[INSTALLER] WARN: mkdir /system/services failed (err=%d)\n", mr);
+  }
   mr = fat32_create_directory_verified(themes_dir, 1);
   if (mr != 0 && !upgrade_mode) {
     serial("[INSTALLER] WARN: mkdir /boot/grub/themes failed (err=%d)\n", mr);
@@ -1373,6 +1379,26 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
                      "Directory phase complete.");
 
   /* Directory listings disabled to reduce stack usage and avoid instability */
+
+  /* 3.1 Default services (only if missing) */
+  if (fat32_get_file_size("/system/services/konsole.srv") < 0) {
+    const char *svc =
+        "Exec=/system/apps/konsole.petal\n"
+        "Args=\n"
+        "Enabled=1\n"
+        "RequiresGUI=1\n";
+    fat32_create_file_verified("/system/services/konsole.srv", svc,
+                               (uint32_t)strlen(svc), 0);
+  }
+  if (fat32_get_file_size("/system/services/clock.srv") < 0) {
+    const char *svc =
+        "Exec=/system/apps/clock.petal\n"
+        "Args=\n"
+        "Enabled=1\n"
+        "RequiresGUI=1\n";
+    fat32_create_file_verified("/system/services/clock.srv", svc,
+                               (uint32_t)strlen(svc), 0);
+  }
 
   /* 4. Locate Source Files (Multiboot Modules) */
   void *kernel_data = NULL;
@@ -1470,16 +1496,27 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
           serial("[INSTALLER] Assigned to bg.bmp (desktop wallpaper)\n");
         } else if (has_extension(current_mod_name, ".bmp")) {
           char path[64] = "/system/icons/";
-          memcpy(path + 14, current_mod_name, strlen(current_mod_name) + 1);
+          size_t off = strlen(path);
+          memcpy(path + off, current_mod_name, strlen(current_mod_name) + 1);
           serial("[INSTALLER] Dynamic Icon: %s -> %s\n", current_mod_name,
                  path);
           fat32_create_file_verified(path, (void *)(uintptr_t)mod->mod_start,
                                      (uint32_t)(mod->mod_end - mod->mod_start),
                                      0);
           kmalloc_reset();
+        } else if (has_extension(current_mod_name, ".srv")) {
+          char path[64] = "/system/services/";
+          size_t off = strlen(path);
+          memcpy(path + off, current_mod_name, strlen(current_mod_name) + 1);
+          serial("[INSTALLER] Service file: %s -> %s\n", current_mod_name, path);
+          fat32_create_file_verified(path, (void *)(uintptr_t)mod->mod_start,
+                                     (uint32_t)(mod->mod_end - mod->mod_start),
+                                     0);
+          kmalloc_reset();
         } else if (has_extension(current_mod_name, ".petal")) {
           char path[64] = "/system/apps/";
-          memcpy(path + 13, current_mod_name, strlen(current_mod_name) + 1);
+          size_t off = strlen(path);
+          memcpy(path + off, current_mod_name, strlen(current_mod_name) + 1);
           serial("[INSTALLER] Dynamic App: %s -> %s\n", current_mod_name, path);
           fat32_create_file_verified(path, (void *)(uintptr_t)mod->mod_start,
                                      (uint32_t)(mod->mod_end - mod->mod_start),

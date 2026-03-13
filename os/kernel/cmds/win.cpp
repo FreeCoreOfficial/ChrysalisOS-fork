@@ -2,12 +2,14 @@
 #include "../apps/app_manager.h"
 #include "../apps/apps.h"
 #include "../apps/icons/icons.h"
+#include "../cmds/fat.h"
 #include "../drivers/keyboard.h"
 #include "../ethernet/net.h"
 #include "../ethernet/net_device.h"
 #include "../hardware/apic.h"
 #include "../input/input.h"
 #include "../shell/shell.h"
+#include "../services/services.h"
 #include "../storage/io_sched.h"
 #include "../string.h"
 #include "../terminal.h"
@@ -26,6 +28,9 @@
 
 extern "C" void serial(const char *fmt, ...);
 extern "C" void yield();
+extern "C" int exec_from_path(const char *path, char *const argv[]);
+extern "C" int execve(const char *filename, char *const argv[],
+                      char *const envp[]);
 
 /* Window control metrics */
 #define WM_TITLEBAR_H 28
@@ -54,6 +59,44 @@ static int taskbar_last_min = -1;
 static bool start_menu_just_toggled = false;
 
 #define TASKBAR_H 36
+
+/* Desktop Files */
+#define DESKTOP_PATH "/desktop"
+#define DESKTOP_LAYOUT "/desktop/.layout"
+#define DESKTOP_MAX_ITEMS 64
+#define DESKTOP_ICON_SIZE 48
+#define DESKTOP_CELL_W 88
+#define DESKTOP_CELL_H 96
+#define DESKTOP_TEXT_H 14
+#define DESKTOP_PADDING_X 12
+#define DESKTOP_PADDING_Y 12
+
+typedef struct {
+  char name[256];
+  char path[256];
+  uint8_t is_dir;
+  int x;
+  int y;
+  int w;
+  int h;
+  int icon_id;
+} desktop_item_t;
+
+static desktop_item_t desktop_items[DESKTOP_MAX_ITEMS];
+static int desktop_item_count = 0;
+static int desktop_selected_idx = -1;
+static int desktop_drag_idx = -1;
+static int desktop_drag_off_x = 0;
+static int desktop_drag_off_y = 0;
+static bool desktop_dragging = false;
+static int desktop_drag_start_x = 0;
+static int desktop_drag_start_y = 0;
+static uint64_t desktop_last_click_ms = 0;
+static int desktop_last_click_idx = -1;
+
+static void desktop_render(void);
+static void desktop_refresh(bool keep_positions);
+static bool desktop_handle_event(input_event_t *ev);
 
 /* Icon Button Logic */
 /* Obsolete icon_btn_data_t removed */
@@ -107,6 +150,17 @@ static uint32_t shade_color(uint32_t c, int delta) {
     b = 255;
   return ((uint32_t)a << 24) | ((uint32_t)r << 16) | ((uint32_t)g << 8) |
          (uint32_t)b;
+}
+
+static void append_str(char *dst, size_t cap, const char *src) {
+  if (!dst || !src || cap == 0)
+    return;
+  size_t len = strlen(dst);
+  size_t i = 0;
+  while (src[i] && (len + 1) < cap) {
+    dst[len++] = src[i++];
+  }
+  dst[len] = 0;
 }
 
 static void start_menu_bg_draw(fly_widget_t *w, surface_t *surf, int x, int y) {
@@ -807,15 +861,411 @@ static void start_btn_click(fly_widget_t *w) {
 
 /* create_taskbar_btn removed */
 
-static void desktop_draw(fly_widget_t *w, surface_t *surf, int x, int y) {
-  (void)x;
-  (void)y;
-  /* Dark aesthetic blue gradient - REMOVED for wallpaper visibility */
-  /* fly_draw_rect_vgradient(surf, 0, 0, w->w, w->h, 0xFF435A6F, 0xFF202B36); */
+static char lower_ascii(char c) {
+  if (c >= 'A' && c <= 'Z')
+    return (char)(c + 32);
+  return c;
+}
 
-  /* Subtle watermark */
-  fly_draw_text(surf, w->w - 180, w->h - 30, "Chrysalis OS v0.2 beta",
+static bool has_ext_ci(const char *name, const char *ext) {
+  if (!name || !ext)
+    return false;
+  size_t nlen = strlen(name);
+  size_t elen = strlen(ext);
+  if (nlen < elen)
+    return false;
+  const char *p = name + (nlen - elen);
+  for (size_t i = 0; i < elen; i++) {
+    if (lower_ascii(p[i]) != lower_ascii(ext[i]))
+      return false;
+  }
+  return true;
+}
+
+static void desktop_build_path(char *out, size_t cap, const char *name) {
+  if (!out || cap == 0)
+    return;
+  strncpy(out, DESKTOP_PATH, cap);
+  out[cap - 1] = 0;
+  size_t len = strlen(out);
+  if (len + 1 < cap && out[len - 1] != '/') {
+    out[len++] = '/';
+    out[len] = 0;
+  }
+  append_str(out, cap, name);
+}
+
+static int desktop_icon_for(const desktop_item_t *it) {
+  if (!it)
+    return ICON_FILES;
+  if (it->is_dir)
+    return ICON_FILES;
+  if (has_ext_ci(it->name, ".bmp"))
+    return ICON_IMG;
+  if (has_ext_ci(it->name, ".petal"))
+    return ICON_RUN;
+  if (has_ext_ci(it->name, ".txt"))
+    return ICON_NOTE;
+  return ICON_NOTE;
+}
+
+static void desktop_draw_icon(surface_t *surf, int x, int y, int size,
+                              int icon_id) {
+  const icon_image_t *ic = icon_get((uint16_t)icon_id);
+  if (!ic || !ic->pixels)
+    return;
+  int target = size;
+  if (target < 1)
+    target = 1;
+  for (int py = 0; py < target; py++) {
+    for (int px = 0; px < target; px++) {
+      int src_x = (px * ic->w) / target;
+      int src_y = (py * ic->h) / target;
+      if (src_x >= (int)ic->w)
+        src_x = ic->w - 1;
+      if (src_y >= (int)ic->h)
+        src_y = ic->h - 1;
+      uint32_t color = ic->pixels[src_y * ic->w + src_x];
+      uint8_t a = (color >> 24) & 0xFF;
+      if (a > 128) {
+        int sx = x + px;
+        int sy = y + py;
+        if (sx >= 0 && sy >= 0 && sx < (int)surf->width &&
+            sy < (int)surf->height) {
+          surf->pixels[sy * surf->width + sx] = color;
+        }
+      }
+    }
+  }
+}
+
+static int desktop_hit_test(int mx, int my) {
+  for (int i = 0; i < desktop_item_count; i++) {
+    desktop_item_t *it = &desktop_items[i];
+    if (mx >= it->x && mx < it->x + it->w && my >= it->y &&
+        my < it->y + it->h) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+static void desktop_apply_default_layout(void) {
+  if (!desktop_win || !desktop_win->surface)
+    return;
+  int max_w = (int)desktop_win->surface->width;
+  int x = DESKTOP_PADDING_X;
+  int y = DESKTOP_PADDING_Y;
+  for (int i = 0; i < desktop_item_count; i++) {
+    desktop_item_t *it = &desktop_items[i];
+    it->w = DESKTOP_CELL_W;
+    it->h = DESKTOP_CELL_H + DESKTOP_TEXT_H;
+    if (x + it->w > max_w) {
+      x = DESKTOP_PADDING_X;
+      y += it->h + 8;
+    }
+    it->x = x;
+    it->y = y;
+    x += it->w + 8;
+  }
+}
+
+static void desktop_apply_layout_file(void) {
+  char buf[4096];
+  int bytes = fat32_read_file(DESKTOP_LAYOUT, buf, sizeof(buf) - 1);
+  if (bytes <= 0)
+    return;
+  buf[bytes] = 0;
+
+  char *p = buf;
+  while (*p) {
+    char *line = p;
+    while (*p && *p != '\n' && *p != '\r')
+      p++;
+    char saved = *p;
+    *p = 0;
+    if (*line) {
+      char *sep1 = strchr(line, '|');
+      if (sep1) {
+        *sep1 = 0;
+        char *sep2 = strchr(sep1 + 1, '|');
+        if (sep2) {
+          *sep2 = 0;
+          int x = atoi(sep1 + 1);
+          int y = atoi(sep2 + 1);
+          for (int i = 0; i < desktop_item_count; i++) {
+            if (strcmp(desktop_items[i].name, line) == 0) {
+              desktop_items[i].x = x;
+              desktop_items[i].y = y;
+              break;
+            }
+          }
+        }
+      }
+    }
+    *p = saved;
+    while (*p == '\n' || *p == '\r')
+      p++;
+  }
+}
+
+static void desktop_save_layout(void) {
+  char buf[4096];
+  size_t len = 0;
+  for (int i = 0; i < desktop_item_count; i++) {
+    char xs[16];
+    char ys[16];
+    itoa_dec(xs, desktop_items[i].x);
+    itoa_dec(ys, desktop_items[i].y);
+    size_t need = strlen(desktop_items[i].name) + strlen(xs) + strlen(ys) + 4;
+    if (len + need >= sizeof(buf))
+      break;
+    strcpy(buf + len, desktop_items[i].name);
+    len += strlen(desktop_items[i].name);
+    buf[len++] = '|';
+    strcpy(buf + len, xs);
+    len += strlen(xs);
+    buf[len++] = '|';
+    strcpy(buf + len, ys);
+    len += strlen(ys);
+    buf[len++] = '\n';
+    buf[len] = 0;
+  }
+  fat32_create_file(DESKTOP_LAYOUT, buf, (uint32_t)len);
+}
+
+static void desktop_load_items(bool keep_positions) {
+  fat_automount();
+  if (!fat32_directory_exists(DESKTOP_PATH)) {
+    fat32_create_directory(DESKTOP_PATH);
+  }
+
+  fat_file_info_t files[DESKTOP_MAX_ITEMS];
+  int count = fat32_read_directory(DESKTOP_PATH, files, DESKTOP_MAX_ITEMS);
+  desktop_item_count = 0;
+  if (count < 0)
+    return;
+
+  for (int i = 0; i < count && desktop_item_count < DESKTOP_MAX_ITEMS; i++) {
+    if (!files[i].name[0])
+      continue;
+    if (files[i].name[0] == '.')
+      continue;
+    desktop_item_t *it = &desktop_items[desktop_item_count++];
+    strncpy(it->name, files[i].name, sizeof(it->name) - 1);
+    it->name[sizeof(it->name) - 1] = 0;
+    desktop_build_path(it->path, sizeof(it->path), it->name);
+    it->is_dir = files[i].is_dir ? 1 : 0;
+    it->icon_id = desktop_icon_for(it);
+    it->w = DESKTOP_CELL_W;
+    it->h = DESKTOP_CELL_H + DESKTOP_TEXT_H;
+    it->x = DESKTOP_PADDING_X;
+    it->y = DESKTOP_PADDING_Y;
+  }
+
+  desktop_apply_default_layout();
+  desktop_apply_layout_file();
+
+  if (keep_positions) {
+    /* Keep current selection if item still exists */
+    if (desktop_selected_idx >= desktop_item_count) {
+      desktop_selected_idx = -1;
+    }
+  } else {
+    desktop_selected_idx = -1;
+  }
+}
+
+static void desktop_render(void) {
+  if (!desktop_win || !desktop_win->surface)
+    return;
+  surface_t *s = desktop_win->surface;
+  surface_clear(s, 0);
+
+  /* Watermark */
+  fly_draw_text(s, s->width - 180, s->height - 30, "Chrysalis OS v0.2 beta",
                 0x20FFFFFF);
+
+  for (int i = 0; i < desktop_item_count; i++) {
+    desktop_item_t *it = &desktop_items[i];
+    int box_x = it->x;
+    int box_y = it->y;
+    int icon_x = box_x + (it->w - DESKTOP_ICON_SIZE) / 2;
+    int icon_y = box_y + 4;
+
+    if (i == desktop_selected_idx) {
+      fly_draw_rect_fill(s, box_x, box_y, it->w, it->h, 0xFF1C3F6E);
+      fly_draw_rect_outline(s, box_x, box_y, it->w, it->h, 0xFF6FA0FF);
+    }
+
+    desktop_draw_icon(s, icon_x, icon_y, DESKTOP_ICON_SIZE, it->icon_id);
+
+    int text_w = (int)strlen(it->name) * 8;
+    int text_x = box_x + (it->w - text_w) / 2;
+    if (text_x < box_x + 2)
+      text_x = box_x + 2;
+    int text_y = box_y + DESKTOP_ICON_SIZE + 10;
+    fly_draw_text(s, text_x + 1, text_y + 1, it->name, 0xFF000000);
+    fly_draw_text(s, text_x, text_y, it->name, 0xFFFFFFFF);
+  }
+
+  wm_mark_dirty();
+}
+
+static void desktop_refresh(bool keep_positions) {
+  desktop_load_items(keep_positions);
+  desktop_render();
+}
+
+static void desktop_open_item(int idx) {
+  if (idx < 0 || idx >= desktop_item_count)
+    return;
+  desktop_item_t *it = &desktop_items[idx];
+  if (it->is_dir) {
+    file_manager_app_open_path(it->path);
+    return;
+  }
+  if (has_ext_ci(it->name, ".petal")) {
+    exec_from_path(it->path, NULL);
+    return;
+  }
+  if (has_ext_ci(it->name, ".bmp")) {
+    char *viewer_argv[] = {(char *)"/system/apps/image-viewer.petal",
+                           it->path, nullptr};
+    execve("/system/apps/image-viewer.petal", viewer_argv, nullptr);
+    return;
+  }
+  notepad_app_open(it->path);
+}
+
+static void desktop_create_new_folder(void) {
+  char name[256];
+  char path[256];
+  int idx = 0;
+  while (idx < 100) {
+    if (idx == 0) {
+      strcpy(name, "new_folder");
+    } else {
+      strcpy(name, "new_folder");
+      char buf[8];
+      itoa_dec(buf, idx);
+      strcat(name, buf);
+    }
+    name[255] = 0;
+    desktop_build_path(path, sizeof(path), name);
+    if (!fat32_directory_exists(path)) {
+      fat32_create_directory(path);
+      break;
+    }
+    idx++;
+  }
+}
+
+static bool desktop_handle_event(input_event_t *ev) {
+  if (!desktop_win || !desktop_win->surface || !ev)
+    return false;
+
+  int mx = ev->mouse_x - desktop_win->x;
+  int my = ev->mouse_y - desktop_win->y;
+
+  if (ev->type == INPUT_MOUSE_CLICK && ev->pressed) {
+    if (ev->keycode == 1) {
+      int hit = desktop_hit_test(mx, my);
+      if (hit >= 0) {
+        desktop_selected_idx = hit;
+        desktop_drag_idx = hit;
+        desktop_dragging = false;
+        desktop_drag_off_x = mx - desktop_items[hit].x;
+        desktop_drag_off_y = my - desktop_items[hit].y;
+        desktop_drag_start_x = mx;
+        desktop_drag_start_y = my;
+
+        uint64_t now_ms = timer_uptime_ms();
+        bool is_double =
+            (hit == desktop_last_click_idx) &&
+            (now_ms - desktop_last_click_ms) <= 350;
+        desktop_last_click_idx = hit;
+        desktop_last_click_ms = now_ms;
+        if (is_double) {
+          desktop_open_item(hit);
+          desktop_last_click_idx = -1;
+          desktop_last_click_ms = 0;
+        }
+      } else {
+        desktop_selected_idx = -1;
+        uint64_t now_ms = timer_uptime_ms();
+        if (desktop_last_click_idx == -1 &&
+            (now_ms - desktop_last_click_ms) <= 350) {
+          desktop_refresh(true);
+        }
+        desktop_last_click_idx = -1;
+        desktop_last_click_ms = now_ms;
+      }
+      desktop_render();
+      return true;
+    } else if (ev->keycode == 2) {
+      int hit = desktop_hit_test(mx, my);
+      if (hit < 0) {
+        desktop_create_new_folder();
+        desktop_refresh(true);
+        return true;
+      }
+    }
+  }
+
+  if (ev->type == INPUT_MOUSE_CLICK && !ev->pressed && ev->keycode == 1) {
+    if (desktop_dragging && desktop_drag_idx >= 0) {
+      int drop = desktop_hit_test(mx, my);
+      if (drop >= 0 && drop != desktop_drag_idx &&
+          desktop_items[drop].is_dir) {
+        char dst[256];
+        strncpy(dst, desktop_items[drop].path, sizeof(dst) - 1);
+        dst[sizeof(dst) - 1] = 0;
+        size_t len = strlen(dst);
+        if (len + 1 < sizeof(dst) && dst[len - 1] != '/') {
+          dst[len++] = '/';
+          dst[len] = 0;
+        }
+        append_str(dst, sizeof(dst), desktop_items[desktop_drag_idx].name);
+        fat32_rename(desktop_items[desktop_drag_idx].path, dst);
+        desktop_refresh(true);
+      } else {
+        desktop_save_layout();
+      }
+    }
+    desktop_dragging = false;
+    desktop_drag_idx = -1;
+    return true;
+  }
+
+  if (ev->type == INPUT_MOUSE_MOVE && desktop_drag_idx >= 0) {
+    int dx = mx - desktop_drag_start_x;
+    int dy = my - desktop_drag_start_y;
+    if (!desktop_dragging) {
+      if ((dx > 3 || dx < -3) || (dy > 3 || dy < -3)) {
+        desktop_dragging = true;
+      } else {
+        return true;
+      }
+    }
+    desktop_item_t *it = &desktop_items[desktop_drag_idx];
+    int new_x = mx - desktop_drag_off_x;
+    int new_y = my - desktop_drag_off_y;
+    if (new_x < 0)
+      new_x = 0;
+    if (new_y < 0)
+      new_y = 0;
+    if (new_x + it->w > (int)desktop_win->surface->width)
+      new_x = (int)desktop_win->surface->width - it->w;
+    if (new_y + it->h > (int)desktop_win->surface->height)
+      new_y = (int)desktop_win->surface->height - it->h;
+    it->x = new_x;
+    it->y = new_y;
+    desktop_render();
+    return true;
+  }
+
+  return false;
 }
 
 static void create_desktop() {
@@ -833,15 +1283,7 @@ static void create_desktop() {
   /* Clear to transparent so wallpaper shows through */
   surface_clear(s, 0);
 
-  desktop_ctx = flyui_init(s);
-  fly_widget_t *root = fly_panel_create(w, h);
-  root->bg_color = 0; /* Fully transparent background */
-  root->on_draw = desktop_draw;
-  flyui_set_root(desktop_ctx, root);
-
-  /* TODO: Add Desktop Icons here using fly_icon_button_create */
-
-  flyui_render(desktop_ctx);
+  desktop_ctx = NULL;
 
   desktop_win = wm_create_window(s, 0, 0);
   if (desktop_win) {
@@ -851,6 +1293,7 @@ static void create_desktop() {
   }
   /* Desktop is always at the bottom */
   wm_focus_window(desktop_win);
+  desktop_refresh(false);
 }
 static void create_taskbar() {
   gpu_device_t *gpu = gpu_get_primary();
@@ -1047,6 +1490,9 @@ extern "C" int cmd_launch(int argc, char **argv) {
     wm_set_reserved_bottom(TASKBAR_H);
   }
 
+  services_set_gui_ready(1);
+  services_start();
+
   /* 4. Main GUI Loop */
   input_event_t ev;
 
@@ -1231,8 +1677,12 @@ extern "C" int cmd_launch(int argc, char **argv) {
          * forward raw mouse events to the app. This prevents event-queue flood
          * (mouse move spam) that can starve/drop WINDOW_RESIZE events. */
         bool suppress_app_mouse_dispatch = (resize_win != NULL);
+        bool desktop_handled = false;
+        if (target == desktop_win) {
+          desktop_handled = desktop_handle_event(&ev);
+        }
 
-        if (!suppress_app_mouse_dispatch) {
+        if (!suppress_app_mouse_dispatch && !desktop_handled) {
           /* 3.1 Apps */
           if (target == clock_app_get_window())
             clock_app_handle_event(&ev);
@@ -1304,9 +1754,9 @@ extern "C" int cmd_launch(int argc, char **argv) {
           if (target == taskbar_win && taskbar_ctx && !drag_win) {
             dispatch_flyui_fn(taskbar_win, taskbar_ctx, ev);
           }
-          if (target == desktop_win && desktop_ctx && !drag_win) {
-            dispatch_flyui_fn(desktop_win, desktop_ctx, ev);
-          }
+        if (target == desktop_win && desktop_ctx && !drag_win) {
+          dispatch_flyui_fn(desktop_win, desktop_ctx, ev);
+        }
 
           /* 3.3 Generic Dispatch for Standalone Apps */
           /* If window has an owner task and wasn't handled by hardcoded

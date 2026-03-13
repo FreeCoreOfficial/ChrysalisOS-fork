@@ -1,7 +1,7 @@
 #pragma once
 #include <stdint.h>
 
-#define KSTACK_SIZE 8192
+#define KSTACK_SIZE 16384
 
 #include "../fs/vfs/vfs.h"
 #include "../input/input.h"

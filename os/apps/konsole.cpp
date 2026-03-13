@@ -18,6 +18,7 @@ static int cursor_x = 0;
 static int cursor_y = 0;
 static char cmdline[256];
 static int cmd_len = 0;
+static char cmd_output[4096];
 
 static int clampi(int v, int lo, int hi) {
   if (v < lo)
@@ -128,19 +129,17 @@ static void print_str(const char *s) {
 static void print_prompt() { print_str("> "); }
 
 static void exec_current_command() {
-  char output[4096];
-
   cmdline[cmd_len] = '\0';
   ks_putchar('\n');
 
   if (cmd_len > 0) {
-    int n = p_exec_command_capture(cmdline, output, sizeof(output));
+    int n = p_exec_command_capture(cmdline, cmd_output, sizeof(cmd_output));
     if (n > 0) {
-      if (n >= (int)sizeof(output))
-        n = (int)sizeof(output) - 1;
-      output[n] = 0;
-      print_str(output);
-      if (n > 0 && output[n - 1] != '\n') {
+      if (n >= (int)sizeof(cmd_output))
+        n = (int)sizeof(cmd_output) - 1;
+      cmd_output[n] = 0;
+      print_str(cmd_output);
+      if (n > 0 && cmd_output[n - 1] != '\n') {
         ks_putchar('\n');
       }
     } else if (n < 0) {

@@ -1,6 +1,6 @@
-KERNEL_CODENAME = "mosquito-with-violin"
+KERNEL_CODENAME = "rubydium-rare-in-the-mountains"
 LICENSE = "MIT"
-CHRYVER= "chrysver-0.2.1"
+CHRYVER= "chrysver-0.2.4"
 GITHUB= "https://github.com/mihai209/chrysalisos"
 
 
@@ -87,6 +87,7 @@ OBJS = \
 	$(BUILD)/paging.o \
 	$(BUILD)/user.o \
 	$(BUILD)/cmd_login.o \
+	$(BUILD)/services/services.o \
 	$(BUILD)/mem/kmalloc.o \
 	$(BUILD)/mem/kmalloc_init.o \
 	$(BUILD)/mem/buddy.o \
@@ -281,6 +282,7 @@ dirs: $(BUILD)
 	mkdir -p ${BUILD}/chryspkg
 	mkdir -p ${BUILD}/firewall
 	mkdir -p ${BUILD}/user
+	mkdir -p ${BUILD}/services
 	mkdir -p ${BUILD}/storage/ahci
 	mkdir -p $(ISO)/system/apps
 
@@ -465,6 +467,9 @@ $(BUILD)/user.o: kernel/user/user.cpp | dirs
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(BUILD)/cmd_login.o: kernel/cmds/login.cpp | dirs
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(BUILD)/services/services.o: kernel/services/services.cpp | dirs
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(BUILD)/panic.o: kernel/panic.cpp kernel/panic.h | dirs
