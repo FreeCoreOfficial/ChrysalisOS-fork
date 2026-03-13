@@ -1380,26 +1380,6 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
 
   /* Directory listings disabled to reduce stack usage and avoid instability */
 
-  /* 3.1 Default services (only if missing) */
-  if (fat32_get_file_size("/system/services/konsole.srv") < 0) {
-    const char *svc =
-        "Exec=/system/apps/konsole.petal\n"
-        "Args=\n"
-        "Enabled=1\n"
-        "RequiresGUI=1\n";
-    fat32_create_file_verified("/system/services/konsole.srv", svc,
-                               (uint32_t)strlen(svc), 0);
-  }
-  if (fat32_get_file_size("/system/services/clock.srv") < 0) {
-    const char *svc =
-        "Exec=/system/apps/clock.petal\n"
-        "Args=\n"
-        "Enabled=1\n"
-        "RequiresGUI=1\n";
-    fat32_create_file_verified("/system/services/clock.srv", svc,
-                               (uint32_t)strlen(svc), 0);
-  }
-
   /* 4. Locate Source Files (Multiboot Modules) */
   void *kernel_data = NULL;
   size_t kernel_size = 0;

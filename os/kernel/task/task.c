@@ -234,6 +234,19 @@ static inline uint32_t *push32(uint32_t *sp, uint32_t v) {
   return sp;
 }
 
+static void task_set_name(task_t *t, const char *name) {
+  if (!t)
+    return;
+  if (!name)
+    name = "task";
+  int i = 0;
+  while (name[i] && i < (int)sizeof(t->name) - 1) {
+    t->name[i] = name[i];
+    i++;
+  }
+  t->name[i] = 0;
+}
+
 /* Create new task (canonical signature): entry, pid */
 task_t *task_create(void (*entry)(void), int pid) {
   if (!entry)
@@ -249,6 +262,11 @@ task_t *task_create(void (*entry)(void), int pid) {
   t->entry_noarg = entry;
   t->state = TASK_READY;
   t->cr3 = current_task ? current_task->cr3 : task_read_cr3();
+  task_set_name(t, "task");
+  t->last_syscall = 0;
+  t->last_syscall_a1 = 0;
+  t->last_syscall_a2 = 0;
+  t->last_syscall_a3 = 0;
 
   /* prepare stack in embedded kstack */
   uint32_t *sp = (uint32_t *)((uintptr_t)t->kstack + sizeof(t->kstack));
@@ -298,8 +316,10 @@ task_t *task_create(void (*entry)(void), int pid) {
 
 /* Old signature compatibility: task_create(name, entry) */
 task_t *task_create_name(const char *name, void (*entry)(void)) {
-  (void)name;
-  return task_create(entry, 0);
+  task_t *t = task_create(entry, 0);
+  if (t)
+    task_set_name(t, name);
+  return t;
 }
 
 /* Provide old symbol name if some files call task_create("name", entry) */

@@ -138,8 +138,21 @@ extern "C" void isr_handler(registers_t *r) {
   if (current_task) {
     terminal_printf("[ISR] Exception in PID=%d (State=%d)\n", current_task->pid,
                     current_task->state);
+    terminal_printf("[ISR] Task name: %s\n", current_task->name);
     serial_printf("[ISR] Exception in PID=%d (State=%d)\n", current_task->pid,
                   current_task->state);
+    serial_printf("[ISR] Task name: %s\n", current_task->name);
+    if (current_task->last_syscall != 0) {
+      terminal_printf("[ISR] Last syscall=%d a1=0x%x a2=0x%x a3=0x%x\n",
+                      current_task->last_syscall,
+                      current_task->last_syscall_a1,
+                      current_task->last_syscall_a2,
+                      current_task->last_syscall_a3);
+      serial_printf("[ISR] Last syscall=%d a1=0x%x a2=0x%x a3=0x%x\n",
+                    current_task->last_syscall, current_task->last_syscall_a1,
+                    current_task->last_syscall_a2,
+                    current_task->last_syscall_a3);
+    }
   } else {
     terminal_writestring("[ISR] Exception with NO current_task.\n");
   }

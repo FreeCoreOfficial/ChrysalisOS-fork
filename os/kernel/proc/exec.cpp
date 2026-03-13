@@ -94,6 +94,17 @@ static uint8_t *read_executable(const char *path, size_t *out_size) {
   return nullptr;
 }
 
+static const char *basename_ptr(const char *path) {
+  if (!path)
+    return "app";
+  const char *base = path;
+  for (const char *p = path; *p; ++p) {
+    if (*p == '/' || *p == '\\')
+      base = p + 1;
+  }
+  return base;
+}
+
 extern "C" int execve(const char *filename, char *const argv[],
                       char *const envp[]) {
   (void)envp;
@@ -227,6 +238,9 @@ extern "C" int execve(const char *filename, char *const argv[],
     t->is_user_app = 1;
     t->cr3 = as_cr3;
     t->launch_arg[0] = 0;
+    const char *base = basename_ptr(filename);
+    strncpy(t->name, base, sizeof(t->name) - 1);
+    t->name[sizeof(t->name) - 1] = 0;
     if (argv && argv[1]) {
       strncpy(t->launch_arg, argv[1], sizeof(t->launch_arg) - 1);
       t->launch_arg[sizeof(t->launch_arg) - 1] = 0;

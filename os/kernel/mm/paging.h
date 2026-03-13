@@ -83,6 +83,9 @@ void map_kernel_page(uint32_t vaddr, uint32_t phys, uint32_t flags);
 uint32_t* get_pde_for(uint32_t* pagedir, uint32_t vaddr, int create);
 uint32_t* get_pte_for(uint32_t* pagedir, uint32_t vaddr, int create);
 
+/* Kernel page directory (kernel-virtual pointer) */
+extern uint32_t* kernel_page_directory;
+
 #ifdef __cplusplus
 }
 #endif

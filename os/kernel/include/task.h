@@ -33,6 +33,7 @@ typedef enum {
 
 typedef struct task {
   int pid;
+  char name[32];
   void (*entry_noarg)(void); /* saved entry point; used by task trampoline */
   uint8_t is_user_app;       /* dynamically loaded .petal task */
   char launch_arg[256];      /* argv[1] passed by execve for standalone apps */
@@ -41,6 +42,10 @@ typedef struct task {
   uint32_t cr3;    /* optional: pagina director (setează CR3 la switch) */
   uint32_t kernel_stack;
   uint32_t user_stack;
+  uint32_t last_syscall;
+  uint32_t last_syscall_a1;
+  uint32_t last_syscall_a2;
+  uint32_t last_syscall_a3;
 
   /* PCB Compatibility Fields */
   task_state_t state;

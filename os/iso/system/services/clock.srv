@@ -1,5 +1,0 @@
-# ChrysalisOS service
-Exec=/system/apps/clock.petal
-Args=
-Enabled=1
-RequiresGUI=1

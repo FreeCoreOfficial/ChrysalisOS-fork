@@ -15,6 +15,16 @@ static void mem_zero(void *ptr, size_t size) {
     for (size_t i = 0; i < size; i++) p[i] = 0;
 }
 
+static void mem_copy(void *dst, const void *src, size_t size) {
+    uint8_t *d = (uint8_t*)dst;
+    const uint8_t *s = (const uint8_t*)src;
+    for (size_t i = 0; i < size; i++) d[i] = s[i];
+}
+
+#define AHCI_BOUNCE_SECTORS 32
+static uint8_t __attribute__((aligned(4096)))
+    ahci_bounce_buf[AHCI_BOUNCE_SECTORS * 512];
+
 /* Helper: build command header in CLB */
 static void setup_cmd_header(void *clb, int slot, uint8_t flags, uint16_t prdt_len, uint32_t ctba) {
     hba_cmd_header_t *cl = (hba_cmd_header_t*)clb;
@@ -93,7 +103,7 @@ int ahci_send_identify(int port_no, hba_port_t *port, void *out_512) {
 }
 
 /* READ LBA (LBA28) simplified for single PRDT entry (assumes contiguous physical buffer) */
-int ahci_read_lba(int port_no, uint64_t lba, uint32_t count, void *buf) {
+static int ahci_read_lba_raw(int port_no, uint64_t lba, uint32_t count, void *dma_buf) {
     hba_port_t *port = port_states[port_no].port;
     if (!port) {
         serial("[AHCI] read: port %d not initialized\n", port_no);
@@ -107,7 +117,7 @@ int ahci_read_lba(int port_no, uint64_t lba, uint32_t count, void *buf) {
     void *ct = port_states[port_no].cmd_tables[slot];
     uint32_t ct_phys = ahci_virt_to_phys(ct);
     setup_cmd_header(clb, slot, (5<<0), 1, ct_phys); /* Read: Clear W bit */
-    build_prdt_for_buffer(ct, (void*)ahci_virt_to_phys(buf), count * 512);
+    build_prdt_for_buffer(ct, (void*)ahci_virt_to_phys(dma_buf), count * 512);
 
     fis_reg_h2d_t *fis = (fis_reg_h2d_t*)ct;
     mem_zero(fis, sizeof(fis_reg_h2d_t));
@@ -132,7 +142,7 @@ int ahci_read_lba(int port_no, uint64_t lba, uint32_t count, void *buf) {
 }
 
 /* write implementation mirrors read but uses ATA_CMD_WRITE_DMA */
-int ahci_write_lba(int port_no, uint64_t lba, uint32_t count, const void *buf) {
+static int ahci_write_lba_raw(int port_no, uint64_t lba, uint32_t count, const void *dma_buf) {
     hba_port_t *port = port_states[port_no].port;
     if (!port) {
         serial("[AHCI] write: port %d not initialized\n", port_no);
@@ -147,7 +157,7 @@ int ahci_write_lba(int port_no, uint64_t lba, uint32_t count, const void *buf) {
     uint32_t ct_phys = ahci_virt_to_phys(ct);
     setup_cmd_header(clb, slot, (1<<6) | (5<<0), 1, ct_phys); /* Write: Set W bit (bit 6) */
     /* PRDT must point to non-const buffer — cast away const for DMA */
-    build_prdt_for_buffer(ct, (void*)ahci_virt_to_phys((void*)buf), count * 512);
+    build_prdt_for_buffer(ct, (void*)ahci_virt_to_phys((void*)dma_buf), count * 512);
 
     fis_reg_h2d_t *fis = (fis_reg_h2d_t*)ct;
     mem_zero(fis, sizeof(fis_reg_h2d_t));
@@ -168,5 +178,36 @@ int ahci_write_lba(int port_no, uint64_t lba, uint32_t count, const void *buf) {
         return -3;
     }
     serial("[AHCI] write: done port=%d lba=%llu count=%u\n", port_no, (unsigned long long)lba, count);
+    return 0;
+}
+
+/* Public read/write use a DMA-safe bounce buffer to avoid DMA into user/non-contiguous memory. */
+int ahci_read_lba(int port_no, uint64_t lba, uint32_t count, void *buf) {
+    if (count == 0) return 0;
+    uint8_t *out = (uint8_t*)buf;
+    uint32_t done = 0;
+    while (done < count) {
+        uint32_t chunk = count - done;
+        if (chunk > AHCI_BOUNCE_SECTORS) chunk = AHCI_BOUNCE_SECTORS;
+        int r = ahci_read_lba_raw(port_no, lba + done, chunk, ahci_bounce_buf);
+        if (r != 0) return r;
+        mem_copy(out + (done * 512), ahci_bounce_buf, chunk * 512);
+        done += chunk;
+    }
+    return 0;
+}
+
+int ahci_write_lba(int port_no, uint64_t lba, uint32_t count, const void *buf) {
+    if (count == 0) return 0;
+    const uint8_t *in = (const uint8_t*)buf;
+    uint32_t done = 0;
+    while (done < count) {
+        uint32_t chunk = count - done;
+        if (chunk > AHCI_BOUNCE_SECTORS) chunk = AHCI_BOUNCE_SECTORS;
+        mem_copy(ahci_bounce_buf, in + (done * 512), chunk * 512);
+        int r = ahci_write_lba_raw(port_no, lba + done, chunk, ahci_bounce_buf);
+        if (r != 0) return r;
+        done += chunk;
+    }
     return 0;
 }
