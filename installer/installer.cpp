@@ -1887,4 +1887,4 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   }
 }
 
-// String functions provided by string.cpp
+
