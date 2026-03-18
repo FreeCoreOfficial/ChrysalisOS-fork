@@ -823,20 +823,21 @@ extern "C" void kernel_main(uint32_t magic, uint32_t addr) {
     net_poll();                // Poll Network Stack
     ps2_controller_watchdog(); // Scan for PS/2 freezes
 
-    /* NEW: Unified Input Loop */
-    input_event_t ev;
-    while (input_pop(&ev)) {
-      if (ev.type == INPUT_KEYBOARD && ev.pressed) {
-        // Convert keycode to char if needed, or pass raw
-        // For now assuming keycode is ASCII for demo
-        serial("[KERNEL] Input: %c (0x%x)\n", (char)ev.keycode, ev.keycode);
-        shell_handle_char((char)ev.keycode);
-      } else if (ev.type == INPUT_MOUSE_CLICK && ev.pressed) {
-        /* Handle Scroll in Text Mode */
-        if (ev.keycode == 4)
-          fb_cons_scroll(-3); /* Scroll Up */
-        else if (ev.keycode == 5)
-          fb_cons_scroll(3); /* Scroll Down */
+    /* Unified Input Loop (text-mode only). */
+    if (!win_is_gui_running()) {
+      input_event_t ev;
+      while (input_pop(&ev)) {
+        if (ev.type == INPUT_KEYBOARD && ev.pressed) {
+          /* For now assuming keycode is ASCII for demo */
+          serial("[KERNEL] Input: %c (0x%x)\n", (char)ev.keycode, ev.keycode);
+          shell_handle_char((char)ev.keycode);
+        } else if (ev.type == INPUT_MOUSE_CLICK && ev.pressed) {
+          /* Handle Scroll in Text Mode */
+          if (ev.keycode == 4)
+            fb_cons_scroll(-3); /* Scroll Up */
+          else if (ev.keycode == 5)
+            fb_cons_scroll(3); /* Scroll Down */
+        }
       }
     }
 

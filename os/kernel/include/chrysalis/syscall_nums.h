@@ -34,5 +34,6 @@
 #define SYS_GET_TIME 40
 #define SYS_GET_LAUNCH_ARG 41
 #define SYS_CMD_EXEC_CAPTURE 42
+#define SYS_USER_IS_LOGGED 43
 
 #endif

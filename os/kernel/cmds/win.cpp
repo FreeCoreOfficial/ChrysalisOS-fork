@@ -1165,6 +1165,13 @@ static bool desktop_handle_event(input_event_t *ev) {
   if (!desktop_win || !desktop_win->surface || !ev)
     return false;
 
+  if (desktop_item_count < 0 || desktop_item_count > DESKTOP_MAX_ITEMS) {
+    desktop_item_count = 0;
+    desktop_selected_idx = -1;
+    desktop_drag_idx = -1;
+    desktop_dragging = false;
+  }
+
   int mx = ev->mouse_x - desktop_win->x;
   int my = ev->mouse_y - desktop_win->y;
 
@@ -1215,6 +1222,11 @@ static bool desktop_handle_event(input_event_t *ev) {
 
   if (ev->type == INPUT_MOUSE_CLICK && !ev->pressed && ev->keycode == 1) {
     if (desktop_dragging && desktop_drag_idx >= 0) {
+      if (desktop_drag_idx >= desktop_item_count) {
+        desktop_dragging = false;
+        desktop_drag_idx = -1;
+        return true;
+      }
       int drop = desktop_hit_test(mx, my);
       if (drop >= 0 && drop != desktop_drag_idx &&
           desktop_items[drop].is_dir) {
@@ -1239,6 +1251,11 @@ static bool desktop_handle_event(input_event_t *ev) {
   }
 
   if (ev->type == INPUT_MOUSE_MOVE && desktop_drag_idx >= 0) {
+    if (desktop_drag_idx >= desktop_item_count) {
+      desktop_dragging = false;
+      desktop_drag_idx = -1;
+      return true;
+    }
     int dx = mx - desktop_drag_start_x;
     int dy = my - desktop_drag_start_y;
     if (!desktop_dragging) {

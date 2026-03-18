@@ -212,6 +212,7 @@ void task_init(void) {
   main_task.pid = next_pid++;
   main_task.next = &main_task;
   main_task.state = TASK_READY;
+  main_task.abi = TASK_ABI_CHRYSALIS;
 
   /* capture current ESP */
   uint32_t cur_esp;
@@ -261,6 +262,7 @@ task_t *task_create(void (*entry)(void), int pid) {
   t->pid = (pid == 0) ? (int)next_pid++ : pid;
   t->entry_noarg = entry;
   t->state = TASK_READY;
+  t->abi = TASK_ABI_CHRYSALIS;
   t->cr3 = current_task ? current_task->cr3 : task_read_cr3();
   task_set_name(t, "task");
   t->last_syscall = 0;

@@ -1,6 +1,6 @@
-KERNEL_CODENAME = "rubydium-rare-in-the-mountains"
+KERNEL_CODENAME = "free_gold"
 LICENSE = "MIT"
-CHRYVER= "chrysver-0.2.4"
+CHRYVER= "chrysver-0.3.7"
 GITHUB= "https://github.com/mihai209/chrysalisos"
 
 
@@ -21,10 +21,20 @@ CXXFLAGS = $(COMMON_FLAGS) -fno-exceptions -fno-rtti -DKERNEL_CODENAME=\"$(KERNE
 ASFLAGS = -f elf32
 LDFLAGS = -m elf_i386 -T linker.ld
 ZIGFLAGS = -O ReleaseSmall -target x86-freestanding -mcpu=i386 -fno-stack-protector -I kernel
+LIBGCC64 := $(shell $(CC) -m64 -print-libgcc-file-name)
+
+# 64-bit kernel flags (prototype)
+COMMON_FLAGS64 = -ffreestanding -O2 -Wall -Wextra -Ikernel/include -m64 -mno-red-zone -fno-pic -fno-pie
+CFLAGS64 = $(COMMON_FLAGS64) -DKERNEL_CODENAME=\"$(KERNEL_CODENAME)\" -DCHRYVER=\"$(CHRYVER)\" -DLICENSE=\"$(LICENSE)\"
+CXXFLAGS64 = $(COMMON_FLAGS64) -fno-exceptions -fno-rtti -DKERNEL_CODENAME=\"$(KERNEL_CODENAME)\" -DCHRYVER=\"$(CHRYVER)\" -DLICENSE=\"$(LICENSE)\"
+ASFLAGS64 = -f elf64
+LDFLAGS64 = -m elf_x86_64 -T linker64.ld
 
 BUILD = build
+BUILD64 = build64
 ISO = iso
 KERNEL = kernel.bin
+KERNEL64 = kernel64.bin
 
 OBJS = \
 	$(BUILD)/user/libpetal.o \
@@ -72,9 +82,11 @@ OBJS = \
 	$(BUILD)/vga.o \
 	$(BUILD)/timer.o \
 	$(BUILD)/cmd_uptime.o \
+	$(BUILD)/cmd_uname.o \
 	$(BUILD)/cmd_ticks.o \
 	$(BUILD)/cmd_help.o \
 	$(BUILD)/event_queue.o \
+	$(BUILD)/elf64.o \
 	$(BUILD)/ata.o \
 	$(BUILD)/disk.o \
 	$(BUILD)/fat_fs.o \
@@ -108,8 +120,11 @@ OBJS = \
 	$(BUILD)/task/task.o \
 	$(BUILD)/task/sched.o \
 	$(BUILD)/arch/switch.o \
+	$(BUILD)/arch/x86_64/longmode.o \
 	$(BUILD)/sched/pcb.o \
 	$(BUILD)/sched/scheduler.o \
+	$(BUILD)/linux_compat/linux_syscall_i386.o \
+	$(BUILD)/linux_compat/linux_syscall_x86_64.o \
 	$(BUILD)/ram.o \
 	$(BUILD)/tpm.o \
 	$(BUILD)/videomemory.o \
@@ -119,6 +134,7 @@ OBJS = \
 	$(BUILD)/cmd_fortune.o \
 	$(BUILD)/cmd_buildinfo.o \
 	$(BUILD)/cmd_sysfetch.o \
+	$(BUILD)/cmd_sysinfo.o \
 	$(BUILD)/cmd_chrysver.o \
 	$(BUILD)/arch/tss.o \
 	$(BUILD)/arch/tss_flush.o \
@@ -130,6 +146,7 @@ OBJS = \
 	$(BUILD)/elf.o \
 	$(BUILD)/process.o \
 	$(BUILD)/exec.o \
+	$(BUILD)/proc/exec64_stub.o \
 	$(BUILD)/stubs/exec_fallbacks.o \
 	$(BUILD)/cmds/elf.o \
 	$(BUILD)/cmds/elf_debug.o \
@@ -250,18 +267,36 @@ OBJS = \
 	$(BUILD)/firewall/firewall.o \
 	$(BUILD)/firewall/bridge.o
 
+OBJS64 = \
+	$(BUILD64)/arch/multiboot2_header64.o \
+	$(BUILD64)/arch/boot64.o \
+	$(BUILD64)/kernel64.o \
+	$(BUILD64)/arch/idt64.o \
+	$(BUILD64)/arch/isr64.o \
+	$(BUILD64)/arch/paging64.o \
+	$(BUILD64)/arch/syscall64.o \
+	$(BUILD64)/arch/syscall64_entry.o \
+	$(BUILD64)/arch/user64.o \
+	$(BUILD64)/proc/exec64.o \
+	$(BUILD64)/elf/elf64.o \
+	$(BUILD64)/mem/kmalloc.o \
+	$(BUILD64)/string.o \
+
 
 
 # -------------------------
 # TARGETURI PRINCIPALE
 # -------------------------
 
-.PHONY: all iso run clean help consolerun dirs icons petal_apps
+.PHONY: all iso run clean help consolerun dirs dirs64 icons petal_apps
 
-all: $(ISO)/boot/$(KERNEL) petal_apps
+all: $(ISO)/boot/$(KERNEL) $(ISO)/boot/$(KERNEL64) petal_apps
 
 $(BUILD):
 	mkdir -p $(BUILD)
+
+$(BUILD64):
+	mkdir -p $(BUILD64)
 
 dirs: $(BUILD)
 	mkdir -p $(BUILD)/elf
@@ -270,6 +305,7 @@ dirs: $(BUILD)
 	mkdir -p $(BUILD)/cmds
 	mkdir -p $(BUILD)/arch
 	mkdir -p $(BUILD)/arch/i386
+	mkdir -p $(BUILD)/arch/x86_64
 	mkdir -p $(BUILD)/arch/i386/cpu
 	mkdir -p $(BUILD)/arch/i386/apic
 	mkdir -p $(BUILD)/smp
@@ -289,6 +325,12 @@ dirs: $(BUILD)
 	mkdir -p ${BUILD}/storage/ahci
 	mkdir -p $(ISO)/system/apps
 
+dirs64: $(BUILD64)
+	mkdir -p $(BUILD64)/arch
+	mkdir -p $(BUILD64)/proc
+	mkdir -p $(BUILD64)/elf
+	mkdir -p $(BUILD64)/mem
+
 
 
 
@@ -299,6 +341,10 @@ dirs: $(BUILD)
 
 $(BUILD)/boot.o: kernel/boot.asm | dirs
 	$(AS) $(ASFLAGS) $< -o $@
+
+# 64-bit boot stub
+$(BUILD64)/arch/boot64.o: kernel/arch/x86_64/boot64.asm | dirs64
+	$(AS) $(ASFLAGS64) $< -o $@
 
 $(BUILD)/gdt_flush.o: kernel/arch/i386/gdt.asm | dirs
 	$(AS) $(ASFLAGS) $< -o $@
@@ -435,11 +481,52 @@ $(BUILD)/timer.o: kernel/time/timer.c | dirs
 $(BUILD)/cmd_uptime.o: kernel/cmds/uptime.cpp | dirs
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+$(BUILD)/cmd_uname.o: kernel/cmds/uname.cpp | dirs
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
 $(BUILD)/cmd_ticks.o: kernel/cmds/ticks.cpp | dirs
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(BUILD)/cmd_help.o: kernel/cmds/help.cpp | dirs
 	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(BUILD64)/kernel64.o: kernel/kernel64.cpp | dirs64
+	$(CXX) $(CXXFLAGS64) -c $< -o $@
+
+$(BUILD64)/arch/idt64.o: kernel/arch/x86_64/idt64.cpp | dirs64
+	$(CXX) $(CXXFLAGS64) -c $< -o $@
+
+$(BUILD64)/arch/isr64.o: kernel/arch/x86_64/isr64.S | dirs64
+	$(AS) $(ASFLAGS64) $< -o $@
+
+$(BUILD64)/arch/paging64.o: kernel/arch/x86_64/paging64.cpp | dirs64
+	$(CXX) $(CXXFLAGS64) -c $< -o $@
+
+$(BUILD64)/arch/syscall64.o: kernel/arch/x86_64/syscall64.cpp | dirs64
+	$(CXX) $(CXXFLAGS64) -c $< -o $@
+
+$(BUILD64)/arch/syscall64_entry.o: kernel/arch/x86_64/syscall64.S | dirs64
+	$(AS) $(ASFLAGS64) $< -o $@
+
+$(BUILD64)/arch/user64.o: kernel/arch/x86_64/user64.S | dirs64
+	$(AS) $(ASFLAGS64) $< -o $@
+
+$(BUILD64)/proc/exec64.o: kernel/proc/exec64.cpp | dirs64
+	$(CXX) $(CXXFLAGS64) -c $< -o $@
+
+$(BUILD64)/elf/elf64.o: kernel/elf/elf64.c | dirs64
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS64) -c $< -o $@
+
+$(BUILD64)/mem/kmalloc.o: kernel/mem/kmalloc.c | dirs64
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS64) -c $< -o $@
+
+$(BUILD64)/string.o: kernel/string.cpp | dirs64
+	$(CXX) $(CXXFLAGS64) -c $< -o $@
+
+$(BUILD)/elf64.o: kernel/elf/elf64.c | dirs
+	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/event_queue.o: kernel/events/event_queue.c | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -473,6 +560,14 @@ $(BUILD)/cmd_login.o: kernel/cmds/login.cpp | dirs
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(BUILD)/services/services.o: kernel/services/services.cpp | dirs
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(BUILD)/linux_compat/linux_syscall_i386.o: kernel/linux_compat/linux_syscall_i386.cpp | dirs
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(BUILD)/linux_compat/linux_syscall_x86_64.o: kernel/linux_compat/linux_syscall_x86_64.cpp | dirs
+	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(BUILD)/panic.o: kernel/panic.cpp kernel/panic.h | dirs
@@ -580,6 +675,9 @@ $(BUILD)/cmd_buildinfo.o: kernel/cmds/buildinfo.cpp | dirs
 $(BUILD)/cmd_sysfetch.o: kernel/cmds/sysfetch.cpp | dirs
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+$(BUILD)/cmd_sysinfo.o: kernel/cmds/sysinfo.cpp | dirs
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
 $(BUILD)/cmd_chrysver.o: kernel/cmds/chrysver.cpp | dirs
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
@@ -601,6 +699,13 @@ $(BUILD)/arch/isr_default.o: kernel/arch/i386/isr_default.S | dirs
 $(BUILD)/arch/syscall_dispatch.o: kernel/arch/i386/syscall_dispatch.cpp | dirs
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+$(BUILD)/arch/x86_64/longmode.o: kernel/arch/x86_64/longmode.cpp | dirs
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(BUILD64)/arch/multiboot2_header64.o: arch/i386/multiboot2_header.c | dirs64
+	$(CC) $(CFLAGS64) -DNO_FRAMEBUFFER -c $< -o $@
+
 $(BUILD)/elf.o: kernel/elf/elf.c | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -608,6 +713,10 @@ $(BUILD)/process.o: kernel/proc/process.c | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/exec.o: kernel/proc/exec.cpp | dirs
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(BUILD)/proc/exec64_stub.o: kernel/proc/exec64_stub.cpp | dirs
+	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(BUILD)/stubs/exec_fallbacks.o: kernel/stubs/exec_fallbacks.c | dirs
@@ -854,19 +963,35 @@ $(BUILD)/user/libpetal.o: user/libpetal/src/libpetal.c | dirs
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-PETAL_APPS_SRC = $(wildcard apps/*.cpp)
-PETAL_APPS = $(patsubst apps/%.cpp, $(ISO)/system/apps/%.petal, $(PETAL_APPS_SRC))
+PETAL_APPS_SRC_CPP = $(filter-out apps/konsole.cpp, $(wildcard apps/*.cpp))
+PETAL_APPS_SRC_ZIG = $(wildcard apps/*.zig)
+PETAL_APPS = \
+	$(patsubst apps/%.cpp, $(ISO)/system/apps/%.petal, $(PETAL_APPS_SRC_CPP)) \
+	$(patsubst apps/%.zig, $(ISO)/system/apps/%.petal, $(PETAL_APPS_SRC_ZIG))
 
 PETAL_CXXFLAGS = $(CXXFLAGS) -fno-pic -Iuser/libpetal/include
 PETAL_LDFLAGS = -m elf_i386
 PETAL_HEADERS = user/libpetal/include/petal.h
+ZIG_USERFLAGS = -O ReleaseSmall -target x86-freestanding -mcpu=i386 -fno-stack-protector -I user/libpetal/include
 
 $(BUILD)/user/start.o: user/libpetal/src/start.asm | dirs
 	$(AS) -f elf32 $< -o $@
 
+$(ISO)/system/apps/konsole.petal: apps/konsole.zig $(BUILD)/user/libpetal.o $(BUILD)/user/start.o $(PETAL_HEADERS) | dirs
+	@mkdir -p $(dir $@)
+	ZIG_LOCAL_CACHE_DIR=$(BUILD)/zig-cache ZIG_GLOBAL_CACHE_DIR=$(BUILD)/zig-cache-global \
+		$(ZIG) build-obj $(ZIG_USERFLAGS) -femit-bin=$(BUILD)/apps/konsole.o $<
+	$(LD) $(PETAL_LDFLAGS) $(BUILD)/user/start.o $(BUILD)/apps/konsole.o $(BUILD)/user/libpetal.o -o $@
+
 $(ISO)/system/apps/%.petal: apps/%.cpp $(BUILD)/user/libpetal.o $(BUILD)/user/start.o $(PETAL_HEADERS) | dirs
 	@mkdir -p $(dir $@)
 	$(CXX) $(PETAL_CXXFLAGS) -c $< -o $(BUILD)/apps/$*.o
+	$(LD) $(PETAL_LDFLAGS) $(BUILD)/user/start.o $(BUILD)/apps/$*.o $(BUILD)/user/libpetal.o -o $@
+
+$(ISO)/system/apps/%.petal: apps/%.zig $(BUILD)/user/libpetal.o $(BUILD)/user/start.o $(PETAL_HEADERS) | dirs
+	@mkdir -p $(dir $@)
+	ZIG_LOCAL_CACHE_DIR=$(BUILD)/zig-cache ZIG_GLOBAL_CACHE_DIR=$(BUILD)/zig-cache-global \
+		$(ZIG) build-obj $(ZIG_USERFLAGS) -femit-bin=$(BUILD)/apps/$*.o $<
 	$(LD) $(PETAL_LDFLAGS) $(BUILD)/user/start.o $(BUILD)/apps/$*.o $(BUILD)/user/libpetal.o -o $@
 
 petal_apps: $(PETAL_APPS)
@@ -978,11 +1103,13 @@ $(BUILD)/crypto/%.o: kernel/crypto/%.c | dirs
 # LINK
 # -------------------------
 
-LIBGCC := $(shell $(CC) $(CFLAGS) -print-libgcc-file-name)
-
 $(ISO)/boot/$(KERNEL): $(OBJS) | dirs
 	@mkdir -p $(dir $@)
 	$(LD) $(LDFLAGS) -o $@ $(OBJS) $(LIBGCC)
+
+$(ISO)/boot/$(KERNEL64): $(OBJS64) | dirs64
+	@mkdir -p $(dir $@)
+	$(LD) $(LDFLAGS64) -o $@ $(OBJS64) $(LIBGCC64)
 
 # -------------------------
 # ISO & RUN
@@ -1016,7 +1143,7 @@ consolerun: iso
 	qemu-system-x86_64 -cdrom chrysalis.iso -nographic
 
 clean:
-	rm -rf $(BUILD) *.iso $(ISO)/boot/$(KERNEL) $(ISO)/icons ../tools/icons/out
+	rm -rf $(BUILD) $(BUILD64) *.iso $(ISO)/boot/$(KERNEL) $(ISO)/boot/$(KERNEL64) $(ISO)/icons ../tools/icons/out
 
 # -------------------------
 # ASSETS

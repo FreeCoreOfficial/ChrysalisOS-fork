@@ -49,10 +49,12 @@
 #include "size.h"
 #include "sleep.h"
 #include "sysfetch.h"
+#include "sysinfo.h"
 #include "tail.h"
 #include "tee.h"
 #include "ticks.h"
 #include "touch.h"
+#include "uname.h"
 #include "uptime.h"
 #include "vfs.h"
 #include "vt_cmd.h"
@@ -60,6 +62,7 @@
 #include "which.h"
 #include "win.h"
 #include "write.h"
+#include "../terminal.h"
 
 extern "C" int cmd_bridge(int argc, char **argv);
 // Minimal freestanding helpers (no libc)
@@ -172,6 +175,9 @@ static int wrap_cmd_shutdown(int argc, char **argv) {
 static int wrap_cmd_sysfetch(int argc, char **argv) {
   return wrap_old_style(cmd_sysfetch, argc, argv);
 }
+static int wrap_cmd_sysinfo(int argc, char **argv) {
+  return wrap_old_style(cmd_sysinfo, argc, argv);
+}
 static int wrap_cmd_ticks(int argc, char **argv) {
   return wrap_old_style(cmd_ticks, argc, argv);
 }
@@ -180,6 +186,9 @@ static int wrap_cmd_touch(int argc, char **argv) {
 }
 static int wrap_cmd_uptime(int argc, char **argv) {
   return wrap_old_style(cmd_uptime, argc, argv);
+}
+static int wrap_cmd_uname(int argc, char **argv) {
+  return wrap_old_style(cmd_uname, argc, argv);
 }
 
 /* login and mem headers declare old-style; use old wrapper (if implementations
@@ -249,10 +258,16 @@ static int wrap_cmd_cd(int argc, char **argv) {
   return wrap_new_int(cmd_cd, argc, argv);
 } /* int cmd_cd(int,char**) */
 static int wrap_cmd_launch(int argc, char **argv) {
-  return wrap_new_int(cmd_launch, argc, argv);
+  (void)argc;
+  (void)argv;
+  terminal_printf("Command disabled: launch\n");
+  return -1;
 } /* int cmd_launch(int,char**) */
 static int wrap_cmd_launch_exit(int argc, char **argv) {
-  return wrap_new_int(cmd_launch_exit, argc, argv);
+  (void)argc;
+  (void)argv;
+  terminal_printf("Command disabled: launch-exit\n");
+  return -1;
 } /* int cmd_launch_exit(int,char**) */
 static int wrap_cmd_net(int argc, char **argv) {
   return wrap_new_int(cmd_net, argc, argv);
@@ -314,6 +329,16 @@ static int wrap_cmd_exec(int argc, char **argv) {
     return -1;
   return execve(argv[1], argv + 1, nullptr);
 }
+static int wrap_cmd_exec_linux(int argc, char **argv) {
+  if (argc < 2)
+    return -1;
+  return execve_linux_auto(argv[1], argv + 1);
+}
+static int wrap_cmd_exec_linux64(int argc, char **argv) {
+  if (argc < 2)
+    return -1;
+  return execve_linux_x86_64(argv[1], argv + 1);
+}
 static int wrap_cmd_bridge(int argc, char **argv) {
   return wrap_new_int(cmd_bridge, argc, argv);
 }
@@ -340,6 +365,8 @@ Command command_table[] = {
     {"elf-debug", wrap_cmd_elf_debug},
     {"elf-crash", wrap_cmd_elf_crash},
     {"exec", wrap_cmd_exec},
+    {"exec-linux", wrap_cmd_exec_linux},
+    {"exec-linux64", wrap_cmd_exec_linux64},
     {"exit", wrap_cmd_shutdown},
     {"fat", wrap_cmd_fat},
     {"fortune", wrap_cmd_fortune},
@@ -363,6 +390,7 @@ Command command_table[] = {
     {"sha256", wrap_cmd_sha256},
     {"shutdown", wrap_cmd_shutdown},
     {"sysfetch", wrap_cmd_sysfetch},
+    {"sysinfo", wrap_cmd_sysinfo},
     {"neofetch", wrap_cmd_sysfetch},
     {"bash-support", wrap_cmd_bash_support},
     {"ticks", wrap_cmd_ticks},
@@ -370,6 +398,7 @@ Command command_table[] = {
     {"tail", wrap_cmd_tail},
     {"touch", wrap_cmd_touch},
     {"uptime", wrap_cmd_uptime},
+    {"uname", wrap_cmd_uname},
     {"vfs", wrap_cmd_vfs},
     {"wc", wrap_cmd_wc},
     {"which", wrap_cmd_which},

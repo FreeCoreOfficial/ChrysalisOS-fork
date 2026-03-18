@@ -10,5 +10,10 @@ typedef short          int16_t;
 typedef int            int32_t;
 typedef long long      int64_t;
 
+#if defined(__x86_64__) || defined(_M_X64)
+typedef uint64_t uintptr_t;
+typedef int64_t  intptr_t;
+#else
 typedef uint32_t uintptr_t;
 typedef int32_t  intptr_t;
+#endif

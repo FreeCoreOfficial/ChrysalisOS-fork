@@ -81,13 +81,13 @@ static void apply_resize(int new_w, int new_h) {
 
 static void draw_screen(void *win) {
   char line[MAX_COLS + 1];
-  p_draw_rect_fill(win, 0, 0, win_w, win_h, 0x000000);
+  p_draw_rect_fill(win, 0, 0, win_w, win_h, 0xFF000000);
   for (int y = 0; y < rows; y++) {
     for (int x = 0; x < cols; x++) {
       line[x] = screen[y][x];
     }
     line[cols] = '\0';
-    p_draw_text(win, PAD_X, PAD_Y + y * CHAR_H, line, 0x00FF00);
+    p_draw_text(win, PAD_X, PAD_Y + y * CHAR_H, line, 0xFF00FF00);
   }
 }
 
@@ -167,6 +167,9 @@ int main() {
   cmdline[0] = '\0';
   cmd_len = 0;
   print_str("ChrysalisOS Konsole v0.2\n");
+  if (p_user_is_logged() == 0) {
+    print_str("No user logged in. Use GUI login.\n");
+  }
   print_prompt();
   draw_screen(win);
   p_wm_mark_dirty();

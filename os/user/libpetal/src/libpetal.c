@@ -137,6 +137,8 @@ int p_exec_command_capture(const char *line, char *out, uint32_t out_cap) {
                   (uint32_t)(uintptr_t)out, out_cap);
 }
 
+int p_user_is_logged(void) { return syscall0(SYS_USER_IS_LOGGED); }
+
 int p_open(const char *path, int flags) {
   return syscall2(SYS_OPEN, (uint32_t)(uintptr_t)path, (uint32_t)flags);
 }

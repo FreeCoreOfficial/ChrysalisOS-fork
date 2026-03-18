@@ -761,6 +761,27 @@ static void ui_write_line(int x, int y, int w, uint8_t color,
   ui_write_at(x, y, color, text);
 }
 
+static void ui_draw_box(int x, int y, int w, int h, uint8_t border_color,
+                        uint8_t fill_color) {
+  if (w < 2 || h < 2)
+    return;
+  ui_fill_rect_textmode(x + 1, y + 1, w - 2, h - 2, fill_color);
+
+  terminal_putentryat('+', border_color, x, y);
+  terminal_putentryat('+', border_color, x + w - 1, y);
+  terminal_putentryat('+', border_color, x, y + h - 1);
+  terminal_putentryat('+', border_color, x + w - 1, y + h - 1);
+
+  for (int i = 1; i < w - 1; i++) {
+    terminal_putentryat('-', border_color, x + i, y);
+    terminal_putentryat('-', border_color, x + i, y + h - 1);
+  }
+  for (int i = 1; i < h - 1; i++) {
+    terminal_putentryat('|', border_color, x, y + i);
+    terminal_putentryat('|', border_color, x + w - 1, y + i);
+  }
+}
+
 static void ui_u32_to_dec(uint32_t value, char *out, size_t out_sz) {
   if (!out || out_sz == 0)
     return;
@@ -784,6 +805,90 @@ static void ui_u32_to_dec(uint32_t value, char *out, size_t out_sz) {
     out[j] = tmp[i - 1 - j];
   }
   out[n] = 0;
+}
+
+static void ui_append_str(char *out, size_t out_sz, const char *src) {
+  if (!out || out_sz == 0 || !src)
+    return;
+  size_t len = strlen(out);
+  if (len >= out_sz - 1)
+    return;
+  while (*src && len + 1 < out_sz) {
+    out[len++] = *src++;
+  }
+  out[len] = 0;
+}
+
+static void ui_draw_header(const char *title) {
+  ui_fill_rect_textmode(0, 0, UI_SCREEN_W, 1, 0x70);
+  ui_write_at(1, 0, 0x70, title ? title : "");
+}
+
+static void ui_draw_footer(const char *text) {
+  ui_fill_rect_textmode(0, UI_SCREEN_H - 1, UI_SCREEN_W, 1, 0x70);
+  ui_write_at(1, UI_SCREEN_H - 1, 0x70, text ? text : "");
+}
+
+static void ui_draw_welcome_screen(bool scan_ok, int present_count,
+                                   int chrysalis_count, int other_os_count) {
+  terminal_set_color(0x1F);
+  terminal_clear();
+  ui_draw_header(
+      " Chrysalis OS Setup                                      [Installer]");
+  ui_fill_rect_textmode(0, 1, UI_SCREEN_W, UI_SCREEN_H - 2, 0x1F);
+  ui_draw_box(4, 3, 72, 16, 0x70, 0x1F);
+
+  ui_write_at(8, 5, 0x1F, "Welcome to Chrysalis OS Setup");
+  ui_write_at(8, 6, 0x1F,
+              "This program will install or upgrade Chrysalis OS.");
+
+  char part_line[80];
+  part_line[0] = 0;
+  if (!scan_ok) {
+    ui_append_str(part_line, sizeof(part_line),
+                  "Detected partitions: scan failed (disk not ready)");
+  } else {
+    char num[12];
+    ui_append_str(part_line, sizeof(part_line), "Detected partitions: ");
+    ui_u32_to_dec((uint32_t)present_count, num, sizeof(num));
+    ui_append_str(part_line, sizeof(part_line), num);
+    ui_append_str(part_line, sizeof(part_line), " (Chrysalis: ");
+    ui_u32_to_dec((uint32_t)chrysalis_count, num, sizeof(num));
+    ui_append_str(part_line, sizeof(part_line), num);
+    ui_append_str(part_line, sizeof(part_line), ", Other OS: ");
+    ui_u32_to_dec((uint32_t)other_os_count, num, sizeof(num));
+    ui_append_str(part_line, sizeof(part_line), num);
+    ui_append_str(part_line, sizeof(part_line), ")");
+  }
+  ui_write_at(8, 8, 0x1F, part_line);
+
+  ui_write_at(8, 10, 0x1F, "Please choose an option:");
+  ui_write_at(10, 12, 0x1F,
+              "[1] Fresh Install  - Wipes disk and installs a new system");
+  ui_write_at(10, 13, 0x1F,
+              "[2] Upgrade        - Keeps files and updates system");
+  ui_write_at(10, 14, 0x1F,
+              "[P] Partition Mgr  - Detect other OS and choose target");
+  ui_write_at(10, 15, 0x1F,
+              "[J] Recovery Shell - Opens a command shell");
+  ui_write_at(10, 16, 0x1F,
+              "[0] Shutdown       - Power off the machine");
+
+  ui_draw_footer("Keys: [1][2][P][J][0]    [F3] Exit");
+}
+
+static void ui_draw_user_setup_screen(void) {
+  terminal_set_color(0x1F);
+  terminal_clear();
+  ui_draw_header(
+      " Chrysalis OS - User Setup                               [Installer]");
+  ui_fill_rect_textmode(0, 1, UI_SCREEN_W, UI_SCREEN_H - 2, 0x1F);
+  ui_draw_box(4, 3, 72, 16, 0x70, 0x1F);
+  ui_write_at(8, 5, 0x1F, "Please create your user account:");
+  ui_write_at(8, 8, 0x1F, "Username:");
+  ui_write_at(8, 10, 0x1F, "Password:");
+  ui_write_at(8, 12, 0x1F, "Device Name:");
+  ui_draw_footer("Press Enter after each field");
 }
 
 static void ui_make_progress_text(int percent, char *out, size_t out_sz) {
@@ -810,22 +915,15 @@ static void ui_draw_progress_frame(bool upgrade_mode) {
   terminal_set_color(0x1F);
   terminal_clear();
 
-  terminal_set_color(0x70);
-  for (int x = 0; x < UI_SCREEN_W; x++)
-    terminal_putentryat(' ', 0x70, x, 0);
-
   if (upgrade_mode) {
-    ui_write_at(
-        1, 0, 0x70,
-        " Chrysalis OS Upgrade in progress...                 [Installer]");
+    ui_draw_header(" Chrysalis OS Upgrade in progress...           [Installer]");
   } else {
-    ui_write_at(
-        1, 0, 0x70,
-        " Chrysalis OS Installation in progress...            [Installer]");
+    ui_draw_header(
+        " Chrysalis OS Installation in progress...      [Installer]");
   }
 
   terminal_set_color(0x1F);
-  ui_fill_rect_textmode(0, 1, UI_SCREEN_W, UI_SCREEN_H - 1, 0x1F);
+  ui_fill_rect_textmode(0, 1, UI_SCREEN_W, UI_SCREEN_H - 2, 0x1F);
 
   ui_write_line(4, 4, 72, 0x1F,
                 "Please wait while setup installs Chrysalis OS.");
@@ -843,7 +941,7 @@ static void ui_draw_progress_frame(bool upgrade_mode) {
   ui_write_at(UI_BAR_X - 2, UI_BAR_Y + 1, 0x1F, "0%");
   ui_write_at(UI_BAR_X + UI_BAR_W - 2, UI_BAR_Y + 1, 0x1F, "100%");
 
-  ui_write_line(4, 23, 72, 0x1F, "Please wait...");
+  ui_draw_footer("Please wait...");
   ui_progress_anim_tick = 0;
 }
 
@@ -1088,53 +1186,16 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   serial("\n\n[INSTALLER] Starting Chrysalis OS Installer...\n");
 
   /* 0. Welcome Menu */
-  terminal_set_color(0x1F);
-  terminal_clear();
-
-  // Header bar
-  terminal_set_color(0x70); // Black on Light Grey
-  for (int x = 0; x < 80; x++)
-    terminal_putentryat(' ', 0x70, x, 0);
-  terminal_printf(" Chrysalis OS Setup v1.0                                    "
-                  "       [Installer]");
-
-  terminal_set_color(0x1F);
-  terminal_printf("\n\n\n");
-  terminal_printf("Welcome to Chrysalis OS Setup\n");
-  terminal_printf("This program will install or upgrade Chrysalis OS on "
-                  "your computer.\n\n");
   installer_partition_info_t detected_parts[4];
   bool has_valid_mbr = false;
   int present_count = 0;
   int other_os_count = 0;
   int chrysalis_count = 0;
-  if (installer_scan_partitions(detected_parts, &has_valid_mbr, &present_count,
-                                &other_os_count, &chrysalis_count) == 0) {
-    terminal_printf(
-        "    Detected partitions: %d  (Chrysalis: %d, Other OS: %d)\n\n",
-        present_count, chrysalis_count, other_os_count);
-  } else {
-    terminal_printf(
-        "    Detected partitions: scan failed (disk not ready yet)\n\n");
-  }
-  terminal_printf("    Please choose an option:\n\n");
-  terminal_printf(
-      "    [1] Fresh Install  - Wipes the disk and installs a new system.\n");
-  terminal_printf("    [2] Upgrade        - Keeps your files and updates "
-                  "system components.\n");
-  terminal_printf(
-      "    [P] Partition Mgr  - Detect other OS and choose install target.\n");
-  terminal_printf("    [0] Shutdown       - Shuts down the system.\n");
-  terminal_printf("    [J] Recovery Shell - Opens a command shell.\n\n");
-  terminal_printf("\n\n\n\n\n\n\n\n\n");
-
-  // Footer bar
-  terminal_set_color(0x70);
-  for (int x = 0; x < 80; x++)
-    terminal_putentryat(' ', 0x70, x, 24);
-  terminal_printf(" [1,2,P,0,J] Select Option    [F3] Exit");
-
-  terminal_set_color(0x1F);
+  bool scan_ok =
+      (installer_scan_partitions(detected_parts, &has_valid_mbr, &present_count,
+                                 &other_os_count, &chrysalis_count) == 0);
+  ui_draw_welcome_screen(scan_ok, present_count, chrysalis_count,
+                         other_os_count);
 
   char choice = 0;
   while (choice != '1' && choice != '2' && choice != '0' && choice != 'J' &&
@@ -1243,29 +1304,13 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
 
   if (!upgrade_mode) {
     ui_progress_update(20, "User setup", "Collecting account information...");
-    terminal_clear();
-    terminal_set_color(0x70);
-    for (int x = 0; x < 80; x++)
-      terminal_putentryat(' ', 0x70, x, 0);
-    terminal_printf(
-        " Chrysalis OS - User Setup                                    "
-        "             ");
-    terminal_set_color(0x1F);
-    terminal_printf("\n\n");
-
-    terminal_printf("    Please create your user account:\n\n");
-
-    terminal_printf("    Username: ");
+    ui_draw_user_setup_screen();
+    terminal_set_cursor_pos(18, 8);
     get_input(username, 32);
-    terminal_printf("\n");
-
-    terminal_printf("    Password: ");
+    terminal_set_cursor_pos(18, 10);
     get_password(password, 32);
-    terminal_printf("\n");
-
-    terminal_printf("    Device Name: ");
+    terminal_set_cursor_pos(18, 12);
     get_input(hostname, 32);
-    terminal_printf("\n");
 
     serial("[INSTALLER] User setup: user='%s' host='%s'\n", username, hostname);
     ui_draw_progress_frame(upgrade_mode);
@@ -1395,6 +1440,8 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   size_t sel_tga_size = 0;
   void *bg_bmp_data = NULL;
   size_t bg_bmp_size = 0;
+  void *kernel64_data = NULL;
+  size_t kernel64_size = 0;
 
   int module_total = installer_count_modules(addr);
   if (module_total <= 0)
@@ -1441,6 +1488,7 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
         serial("[INSTALLER] Module name parsed: '%s'\n", current_mod_name);
 
         int m_kernel = strcmp(current_mod_name, "kernel.bin");
+        int m_kernel64 = strcmp(current_mod_name, "kernel64.bin");
         int m_boot = strcmp(current_mod_name, "boot.img");
         int m_core = strcmp(current_mod_name, "core.img");
         serial("[INSTALLER] mod_name cmp: kernel=%d boot=%d core=%d\n",
@@ -1450,6 +1498,10 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
           kernel_data = (void *)(uintptr_t)mod->mod_start;
           kernel_size = mod->mod_end - mod->mod_start;
           serial("[INSTALLER] Assigned to kernel.bin\n");
+        } else if (m_kernel64 == 0) {
+          kernel64_data = (void *)(uintptr_t)mod->mod_start;
+          kernel64_size = mod->mod_end - mod->mod_start;
+          serial("[INSTALLER] Assigned to kernel64.bin\n");
         } else if (m_boot == 0) {
           boot_img = (void *)(uintptr_t)mod->mod_start;
           boot_img_size = mod->mod_end - mod->mod_start;
@@ -1581,73 +1633,59 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
                      "Writing GRUB configuration...");
 
   /* 5. Write GRUB config */
-  const char *grub_cfg = "# Load graphical modules\n"
-                         "insmod png\n"
-                         "insmod tga\n"
-                         "insmod jpeg\n"
-                         "insmod font\n"
-                         "insmod gfxterm\n"
-                         "insmod vbe\n"
-                         "insmod vga\n"
-                         "insmod all_video\n"
-                         "\n"
-                         "# Set graphics mode\n"
-                         "set gfxmode=1024x768,800x600,auto\n"
-                         "set gfxpayload=keep\n"
-                         "\n"
-                         "# Enable graphical terminal\n"
-                         "terminal_output gfxterm\n"
-                         "\n"
-                         "# Set theme\n"
-                         "set theme=/boot/grub/themes/chrysalis/theme.txt\n"
-                         "\n"
-                         "set timeout=5\n"
-                         "set default=0\n"
-                         "\n"
-                         "menuentry \"Chrysalis OS\" {\n"
-                         "  multiboot2 /boot/chrysalis/kernel.bin gui=1\n"
-                         "  module2 /system/icons/start.bmp start.bmp\n"
-                         "  module2 /system/icons/term.bmp term.bmp\n"
-                         "  module2 /system/icons/files.bmp files.bmp\n"
-                         "  module2 /system/icons/img.bmp img.bmp\n"
-                         "  module2 /system/icons/note.bmp note.bmp\n"
-                         "  module2 /system/icons/paint.bmp paint.bmp\n"
-                         "  module2 /system/icons/calc.bmp calc.bmp\n"
-                         "  module2 /system/icons/clock.bmp clock.bmp\n"
-                         "  module2 /system/icons/task.bmp task.bmp\n"
-                         "  module2 /system/icons/info.bmp info.bmp\n"
-                         "  module2 /system/icons/3D.bmp 3D.bmp\n"
-                         "  module2 /system/icons/mine.bmp mine.bmp\n"
-                         "  module2 /system/icons/net.bmp net.bmp\n"
-                         "  module2 /system/icons/x0.bmp x0.bmp\n"
-                         "  module2 /system/icons/run.bmp run.bmp\n"
-                         "  module2 /system/bg.bmp bg.bmp\n"
-                         "  boot\n"
-                         "}\n"
-                         "menuentry \"Chrysalis OS (Text Mode)\" {\n"
-                         "  multiboot2 /boot/chrysalis/kernel.bin\n"
-                         "  module2 /system/icons/start.bmp start.bmp\n"
-                         "  module2 /system/icons/term.bmp term.bmp\n"
-                         "  module2 /system/icons/files.bmp files.bmp\n"
-                         "  module2 /system/icons/img.bmp img.bmp\n"
-                         "  module2 /system/icons/note.bmp note.bmp\n"
-                         "  module2 /system/icons/paint.bmp paint.bmp\n"
-                         "  module2 /system/icons/calc.bmp calc.bmp\n"
-                         "  module2 /system/icons/clock.bmp clock.bmp\n"
-                         "  module2 /system/icons/task.bmp task.bmp\n"
-                         "  module2 /system/icons/info.bmp info.bmp\n"
-                         "  module2 /system/icons/3D.bmp 3D.bmp\n"
-                         "  module2 /system/icons/mine.bmp mine.bmp\n"
-                         "  module2 /system/icons/net.bmp net.bmp\n"
-                         "  module2 /system/icons/x0.bmp x0.bmp\n"
-                         "  module2 /system/icons/run.bmp run.bmp\n"
-                         "  module2 /system/bg.bmp bg.bmp\n"
-                         "  boot\n"
-                         "}\n"
-                         "menuentry \"Chrysalis OS (Text Mode, PIC Safe)\" {\n"
-                         "  multiboot2 /boot/chrysalis/kernel.bin apic=off\n"
-                         "  boot\n"
-                         "}\n";
+  char grub_cfg[4096];
+  grub_cfg[0] = 0;
+  ui_append_str(grub_cfg, sizeof(grub_cfg), "# Load graphical modules\n");
+  ui_append_str(grub_cfg, sizeof(grub_cfg), "insmod png\n");
+  ui_append_str(grub_cfg, sizeof(grub_cfg), "insmod tga\n");
+  ui_append_str(grub_cfg, sizeof(grub_cfg), "insmod jpeg\n");
+  ui_append_str(grub_cfg, sizeof(grub_cfg), "insmod font\n");
+  ui_append_str(grub_cfg, sizeof(grub_cfg), "insmod gfxterm\n");
+  ui_append_str(grub_cfg, sizeof(grub_cfg), "insmod vbe\n");
+  ui_append_str(grub_cfg, sizeof(grub_cfg), "insmod vga\n");
+  ui_append_str(grub_cfg, sizeof(grub_cfg), "insmod all_video\n\n");
+  ui_append_str(grub_cfg, sizeof(grub_cfg), "# Set graphics mode\n");
+  ui_append_str(grub_cfg, sizeof(grub_cfg),
+                "set gfxmode=1024x768,800x600,auto\n");
+  ui_append_str(grub_cfg, sizeof(grub_cfg), "set gfxpayload=keep\n\n");
+  ui_append_str(grub_cfg, sizeof(grub_cfg),
+                "# Enable graphical terminal\n");
+  ui_append_str(grub_cfg, sizeof(grub_cfg), "terminal_output gfxterm\n\n");
+  ui_append_str(grub_cfg, sizeof(grub_cfg), "# Set theme\n");
+  ui_append_str(grub_cfg, sizeof(grub_cfg),
+                "set theme=/boot/grub/themes/chrysalis/theme.txt\n\n");
+  ui_append_str(grub_cfg, sizeof(grub_cfg), "set timeout=5\n");
+  ui_append_str(grub_cfg, sizeof(grub_cfg), "set default=0\n\n");
+
+  ui_append_str(grub_cfg, sizeof(grub_cfg),
+                "menuentry \"Chrysalis OS (Console)\" {\n");
+  ui_append_str(grub_cfg, sizeof(grub_cfg),
+                "  multiboot2 /boot/chrysalis/kernel.bin\n");
+  ui_append_str(grub_cfg, sizeof(grub_cfg), "  boot\n}\n\n");
+
+  if (kernel64_data && kernel64_size > 0) {
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "menuentry \"Chrysalis OS (64-bit Prototype)\" {\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  set gfxpayload=text\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  terminal_output console\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  multiboot2 /boot/chrysalis/kernel64.bin\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg), "  boot\n}\n\n");
+  }
+
+  ui_append_str(grub_cfg, sizeof(grub_cfg),
+                "menuentry \"Chrysalis OS (Console, PIC Safe)\" {\n");
+  ui_append_str(grub_cfg, sizeof(grub_cfg),
+                "  multiboot2 /boot/chrysalis/kernel.bin apic=off\n");
+  ui_append_str(grub_cfg, sizeof(grub_cfg), "  boot\n}\n\n");
+
+  ui_append_str(grub_cfg, sizeof(grub_cfg),
+                "menuentry \"Chrysalis OS (Console, Debug)\" {\n");
+  ui_append_str(grub_cfg, sizeof(grub_cfg),
+                "  multiboot2 /boot/chrysalis/kernel.bin --debug\n");
+  ui_append_str(grub_cfg, sizeof(grub_cfg), "  boot\n}\n");
   serial("[INSTALLER] Writing GRUB configuration...\n");
   fat32_create_file_verified("/boot/grub/grub.cfg", grub_cfg, strlen(grub_cfg),
                              1);
@@ -1732,6 +1770,19 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   } else {
     serial("[INSTALLER] ERROR: Kernel module not found in memory!\n");
     return;
+  }
+
+  if (kernel64_data && kernel64_size > 0) {
+    ui_progress_update(95, "Installing kernel",
+                       "Writing /boot/chrysalis/kernel64.bin...");
+    serial("[INSTALLER] Installing kernel64.bin (%d bytes)...\n",
+           (int)kernel64_size);
+    int r64 = fat32_create_file_verified("/boot/chrysalis/kernel64.bin",
+                                         kernel64_data,
+                                         (uint32_t)kernel64_size, 1);
+    if (r64 != 0) {
+      serial("[INSTALLER] WARN: Failed to write kernel64.bin (err=%d)\n", r64);
+    }
   }
 
   /* Files (.bmp and .petal) are now installed dynamically during the module
@@ -1886,5 +1937,3 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
     }
   }
 }
-
-

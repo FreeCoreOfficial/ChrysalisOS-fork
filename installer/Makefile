@@ -139,6 +139,7 @@ installer.iso: $(BUILD)/installer.elf
 	@cp $(BUILD)/installer.elf $(ISO)/boot/
 	@# Copy Assets from Main OS Build
 	@if [ -f ../os/iso/boot/kernel.bin ]; then cp ../os/iso/boot/kernel.bin $(ISO)/boot/chrysalis/; else echo "WARNING: kernel.bin not found!"; fi
+	@if [ -f ../os/iso/boot/kernel64.bin ]; then cp ../os/iso/boot/kernel64.bin $(ISO)/boot/chrysalis/; else echo "WARNING: kernel64.bin not found!"; fi
 	@mkdir -p $(ISO)/icons
 	@if [ -d ../os/iso/icons ]; then cp ../os/iso/icons/*.bmp $(ISO)/icons/; else echo "WARNING: icons bmp not found!"; fi
 	@mkdir -p $(ISO)/system/apps
@@ -160,7 +161,13 @@ installer.iso: $(BUILD)/installer.elf
 	@
 	@echo "[ISO] Installing GRUB theme..."
 	@mkdir -p $(ISO)/boot/grub/themes/chrysalis
-	@cp ../grub-theme/* $(ISO)/boot/grub/themes/chrysalis/ 2>/dev/null || true
+	@if [ -f ../os/iso/boot/grub/themes/chrysalis/theme.txt ]; then \
+		echo "[ISO] Using OS GRUB theme"; \
+		cp ../os/iso/boot/grub/themes/chrysalis/* $(ISO)/boot/grub/themes/chrysalis/ 2>/dev/null || true; \
+	else \
+		echo "[ISO] Using bundled GRUB theme"; \
+		cp ../grub-theme/* $(ISO)/boot/grub/themes/chrysalis/ 2>/dev/null || true; \
+	fi
 	@echo "[ISO] Generating GRUB config..."
 	@echo 'set theme=/boot/grub/themes/chrysalis/theme.txt' > $(ISO)/boot/grub/grub.cfg
 	@echo 'set timeout=5' >> $(ISO)/boot/grub/grub.cfg
@@ -169,6 +176,9 @@ installer.iso: $(BUILD)/installer.elf
 	@echo 'menuentry "Chrysalis OS - Installer" {' >> $(ISO)/boot/grub/grub.cfg
 	@echo '  multiboot2 /boot/installer.elf' >> $(ISO)/boot/grub/grub.cfg
 	@echo '  module2 /boot/chrysalis/kernel.bin kernel.bin' >> $(ISO)/boot/grub/grub.cfg
+	@if [ -f $(ISO)/boot/chrysalis/kernel64.bin ]; then \
+		echo '  module2 /boot/chrysalis/kernel64.bin kernel64.bin' >> $(ISO)/boot/grub/grub.cfg; \
+	fi
 	@for f in $(ISO)/icons/*.bmp; do \
 		nm=$$(basename $$f); \
 		echo "  module2 /icons/$$nm $$nm" >> $(ISO)/boot/grub/grub.cfg; \

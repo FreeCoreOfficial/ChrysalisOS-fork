@@ -29,6 +29,11 @@ typedef enum {
   TASK_ZOMBIE
 } task_state_t;
 
+#define TASK_ABI_CHRYSALIS 0
+#define TASK_ABI_LINUX_I386 1
+#define TASK_ABI_LINUX_X86_64 2
+#define TASK_ABI_LINUX_X32 3
+
 #define TASK_EVENT_QUEUE_SIZE 32
 
 typedef struct task {
@@ -36,6 +41,7 @@ typedef struct task {
   char name[32];
   void (*entry_noarg)(void); /* saved entry point; used by task trampoline */
   uint8_t is_user_app;       /* dynamically loaded .petal task */
+  uint8_t abi;               /* task ABI selector (Chrysalis/Linux) */
   char launch_arg[256];      /* argv[1] passed by execve for standalone apps */
   uint32_t
       *kstack_ptr; /* pointer la frame-ul salvat (folosit de context_switch) */

@@ -13,6 +13,9 @@
 #include "../../ui/flyui/bmp.h"
 #include "../../ui/flyui/draw.h"
 #include "../../ui/wm/wm.h"
+#include "../../linux_compat/linux_syscall_i386.h"
+#include "../../linux_compat/linux_syscall_x86_64.h"
+#include "../../user/user.h"
 #include "../../mm/paging.h"
 #include <stdint.h>
 
@@ -62,6 +65,25 @@ static bool syscall_range_ok(pcb_t *cur, const void *ptr, uint32_t len) {
   }
 
   return false;
+}
+
+extern "C" int syscall_user_range_ok(const void *ptr, uint32_t len) {
+  if (!ptr || len == 0)
+    return 0;
+  uint32_t start = (uint32_t)(uintptr_t)ptr;
+  uint32_t end = start + len - 1;
+  if (end < start)
+    return 0;
+  if (start >= KERNEL_BASE || end >= KERNEL_BASE)
+    return 0;
+  pcb_t *cur = pcb_get_current();
+  if (!cur)
+    return 0;
+  uint32_t *pd = kernel_page_directory;
+  if (cur->cr3) {
+    pd = (uint32_t *)(uintptr_t)(cur->cr3 + KERNEL_BASE);
+  }
+  return range_ok_pd(pd, start, end, true) ? 1 : 0;
 }
 
 /* === helper intern === */
@@ -174,17 +196,9 @@ static int sys_close(int fd) {
   return 0;
 }
 
-int syscall_dispatch(uint32_t num, uint32_t a1, uint32_t a2, uint32_t a3,
-                     uint32_t a4, uint32_t a5, uint32_t a6) {
-  pcb_t *cur = pcb_get_current();
-  if (cur) {
-    cur->last_syscall = num;
-    cur->last_syscall_a1 = a1;
-    cur->last_syscall_a2 = a2;
-    cur->last_syscall_a3 = a3;
-  }
-  // serial("[SYSCALL] %d (a1=%x a2=%x a3=%x a4=%x a5=%x a6=%x)\n", num, a1, a2,
-  //        a3, a4, a5, a6);
+int syscall_dispatch_chrys(uint32_t num, uint32_t a1, uint32_t a2,
+                           uint32_t a3, uint32_t a4, uint32_t a5,
+                           uint32_t a6) {
   switch (num) {
   case SYS_WRITE:
     return sys_write((int)a1, (const char *)(uintptr_t)a2, a3);
@@ -389,10 +403,32 @@ int syscall_dispatch(uint32_t num, uint32_t a1, uint32_t a2, uint32_t a3,
     return cmd_exec_capture(line, out, out_cap);
   }
 
+  case SYS_USER_IS_LOGGED:
+    return user_get_current() ? 1 : 0;
+
   default:
     terminal_printf("[syscall] invalid syscall %d\n", num);
     return -1;
   }
+}
+
+int syscall_dispatch(uint32_t num, uint32_t a1, uint32_t a2, uint32_t a3,
+                     uint32_t a4, uint32_t a5, uint32_t a6) {
+  pcb_t *cur = pcb_get_current();
+  if (cur) {
+    cur->last_syscall = num;
+    cur->last_syscall_a1 = a1;
+    cur->last_syscall_a2 = a2;
+    cur->last_syscall_a3 = a3;
+  }
+
+  if (cur && cur->abi == TASK_ABI_LINUX_I386) {
+    return linux_syscall_dispatch_i386(num, a1, a2, a3, a4, a5, a6);
+  }
+  if (cur && cur->abi == TASK_ABI_LINUX_X86_64) {
+    return linux_syscall_dispatch_x86_64(num, a1, a2, a3, a4, a5, a6);
+  }
+  return syscall_dispatch_chrys(num, a1, a2, a3, a4, a5, a6);
 }
 
 #ifdef __cplusplus

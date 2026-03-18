@@ -13,6 +13,9 @@
 #include "../memory/pmm.h"
 #include "../mm/paging.h"
 #include "../mm/vmm.h"
+#include "../elf/elf64.h"
+#include "../arch/x86_64/longmode.h"
+#include "exec64.h"
 #include "../string.h"
 #include "../terminal.h"
 
@@ -22,6 +25,18 @@ extern "C" void serial(const char *fmt, ...);
 
 /* ELF Header Definitions */
 #define ELF_MAGIC 0x464C457F
+#ifndef ELFCLASS32
+#define ELFCLASS32 1
+#endif
+#ifndef ELFCLASS64
+#define ELFCLASS64 2
+#endif
+#ifndef EM_386
+#define EM_386 3
+#endif
+#ifndef EM_X86_64
+#define EM_X86_64 62
+#endif
 
 typedef uint32_t Elf32_Addr;
 typedef uint32_t Elf32_Off;
@@ -105,8 +120,8 @@ static const char *basename_ptr(const char *path) {
   return base;
 }
 
-extern "C" int execve(const char *filename, char *const argv[],
-                      char *const envp[]) {
+static int execve_impl(const char *filename, char *const argv[],
+                       char *const envp[], uint8_t abi) {
   (void)envp;
 
   /* Hook for Chrysalis Script Interpreter (/bin/cs) */
@@ -236,6 +251,7 @@ extern "C" int execve(const char *filename, char *const argv[],
   task_t *t = task_create(entry_point, 0);
   if (t) {
     t->is_user_app = 1;
+    t->abi = abi;
     t->cr3 = as_cr3;
     t->launch_arg[0] = 0;
     const char *base = basename_ptr(filename);
@@ -254,6 +270,140 @@ extern "C" int execve(const char *filename, char *const argv[],
   return 0;
 }
 
+static int execve64_impl(const char *filename, char *const argv[],
+                         uint8_t abi) {
+  (void)argv;
+  (void)abi;
+  size_t file_size = 0;
+  uint8_t *file_data = read_executable(filename, &file_size);
+
+  if (!file_data) {
+    terminal_printf("[EXEC64] Error: Could not read file '%s'\n", filename);
+    return -1;
+  }
+
+  if (!elf64_is_valid(file_data, (uint32_t)file_size)) {
+    terminal_printf("[EXEC64] Error: Invalid ELF64 magic\n");
+    kfree(file_data);
+    return -1;
+  }
+
+  elf64_load_info_t info;
+  int r = elf64_load_from_buffer(file_data, (uint32_t)file_size, &info);
+  if (r < 0) {
+    terminal_printf("[EXEC64] Error: ELF64 parse failed (%d)\n", r);
+    kfree(file_data);
+    return -1;
+  }
+
+  if (!cpu_is_long_mode()) {
+    terminal_printf("[EXEC64] Error: CPU not in long mode. Boot 64-bit kernel.\n");
+    elf64_unload_kernel_space(&info);
+    kfree(file_data);
+    return -1;
+  }
+
+  terminal_printf("[EXEC64] ELF64 parsed (entry=0x%llx). Loader not wired.\n",
+                  info.entry_point);
+  elf64_unload_kernel_space(&info);
+  kfree(file_data);
+  return -1;
+}
+
+static int detect_linux_abi(const uint8_t *file_data, size_t file_size) {
+  if (!file_data || file_size < 5)
+    return -1;
+  if (file_data[0] != 0x7F || file_data[1] != 'E' || file_data[2] != 'L' ||
+      file_data[3] != 'F')
+    return -1;
+
+  uint8_t cls = file_data[4];
+  if (cls == ELFCLASS32) {
+    if (file_size < sizeof(Elf32_Ehdr))
+      return -1;
+    const Elf32_Ehdr *eh = (const Elf32_Ehdr *)file_data;
+    if (eh->e_machine == EM_386)
+      return TASK_ABI_LINUX_I386;
+    if (eh->e_machine == EM_X86_64)
+      return TASK_ABI_LINUX_X32;
+    return -1;
+  }
+
+  if (cls == ELFCLASS64) {
+    if (file_size < sizeof(elf64_ehdr_t))
+      return -1;
+    const elf64_ehdr_t *eh = (const elf64_ehdr_t *)file_data;
+    if (eh->e_machine == EM_X86_64)
+      return TASK_ABI_LINUX_X86_64;
+    return -1;
+  }
+
+  return -1;
+}
+
+extern "C" int execve(const char *filename, char *const argv[],
+                      char *const envp[]) {
+  return execve_impl(filename, argv, envp, TASK_ABI_CHRYSALIS);
+}
+
+extern "C" int execve_linux_i386(const char *filename, char *const argv[]) {
+  return execve_impl(filename, argv, nullptr, TASK_ABI_LINUX_I386);
+}
+
+extern "C" int execve_linux_x86_64_full(const char *filename,
+                                        char *const argv[]);
+
+extern "C" int execve_linux_x86_64(const char *filename, char *const argv[]) {
+  if (cpu_is_long_mode()) {
+    return execve_linux_x86_64_full(filename, argv);
+  }
+  return execve64_impl(filename, argv, TASK_ABI_LINUX_X86_64);
+}
+
+static int execve_linux_x32(const char *filename, char *const argv[]) {
+  (void)filename;
+  (void)argv;
+  terminal_printf("[EXEC] Error: Linux x32 ABI not supported yet\n");
+  return -1;
+}
+
+extern "C" int execve_linux_auto(const char *filename, char *const argv[]) {
+  size_t file_size = 0;
+  uint8_t *file_data = read_executable(filename, &file_size);
+  if (!file_data) {
+    terminal_printf("[EXEC] Error: Could not read file '%s'\n", filename);
+    return -1;
+  }
+
+  int abi = detect_linux_abi(file_data, file_size);
+  kfree(file_data);
+
+  if (abi == TASK_ABI_LINUX_I386)
+    return execve_linux_i386(filename, argv);
+  if (abi == TASK_ABI_LINUX_X86_64)
+    return execve_linux_x86_64(filename, argv);
+  if (abi == TASK_ABI_LINUX_X32)
+    return execve_linux_x32(filename, argv);
+
+  terminal_printf("[EXEC] Error: Unsupported Linux ELF ABI\n");
+  return -1;
+}
+
 extern "C" int exec_from_path(const char *path, char *const argv[]) {
   return execve(path, argv, nullptr);
+}
+
+extern "C" int exec_from_path_linux_i386(const char *path,
+                                         char *const argv[]) {
+  return execve_linux_i386(path, argv);
+}
+
+extern "C" int exec_from_path_linux_x86_64(const char *path,
+                                           char *const argv[]) {
+  return execve_linux_x86_64(path, argv);
+}
+
+extern "C" int exec_from_path_linux_auto(const char *path,
+                                         char *const argv[]) {
+  return execve_linux_auto(path, argv);
 }
