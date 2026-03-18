@@ -16,6 +16,11 @@ _start64:
     mov [mb_magic], eax
     mov [mb_info], ebx
 
+    ; Debug marker A
+    mov edi, 0xB8000
+    mov ax, 0x1F41            ; 'A'
+    mov [edi], ax
+
     ; Check for long mode support (CPUID.80000001H:EDX[29])
     mov eax, 0x80000000
     cpuid
@@ -31,6 +36,11 @@ _start64:
     mov edi, pml4
     mov ecx, (4096 * 3) / 4
     rep stosd
+
+    ; Debug marker B
+    mov edi, 0xB8000
+    mov ax, 0x1F42            ; 'B'
+    mov [edi + 2], ax
 
     ; Build identity map for first 1 GiB using 2 MiB pages
     mov eax, pdpt
@@ -59,6 +69,11 @@ _start64:
     or eax, 1 << 5
     mov cr4, eax
 
+    ; Debug marker C
+    mov edi, 0xB8000
+    mov ax, 0x1F43            ; 'C'
+    mov [edi + 4], ax
+
     ; Load PML4
     mov eax, pml4
     mov cr3, eax
@@ -69,10 +84,20 @@ _start64:
     or eax, 1 << 8
     wrmsr
 
+    ; Debug marker D
+    mov edi, 0xB8000
+    mov ax, 0x1F44            ; 'D'
+    mov [edi + 6], ax
+
     ; Enable paging (CR0.PG)
     mov eax, cr0
     or eax, 1 << 31
     mov cr0, eax
+
+    ; Debug marker E
+    mov edi, 0xB8000
+    mov ax, 0x1F45            ; 'E'
+    mov [edi + 8], ax
 
     ; Load 64-bit GDT and jump
     lgdt [gdt64_ptr]
@@ -88,6 +113,9 @@ _start64:
 
 BITS 64
 long_mode_entry:
+    mov rdi, 0xB8000
+    mov ax, 0x1F46            ; 'F'
+    mov [rdi + 10], ax
     mov ax, 0x10
     mov ds, ax
     mov es, ax
@@ -96,6 +124,10 @@ long_mode_entry:
     mov gs, ax
 
     mov rsp, stack64_top
+
+    mov rdi, 0xB8000
+    mov ax, 0x1F47            ; 'G'
+    mov [rdi + 12], ax
 
     mov edi, [mb_magic]
     mov esi, [mb_info]

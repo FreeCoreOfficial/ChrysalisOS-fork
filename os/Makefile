@@ -280,6 +280,7 @@ OBJS64 = \
 	$(BUILD64)/proc/exec64.o \
 	$(BUILD64)/elf/elf64.o \
 	$(BUILD64)/mem/kmalloc.o \
+	$(BUILD64)/drivers/serial.o \
 	$(BUILD64)/string.o \
 
 
@@ -521,6 +522,10 @@ $(BUILD64)/elf/elf64.o: kernel/elf/elf64.c | dirs64
 $(BUILD64)/mem/kmalloc.o: kernel/mem/kmalloc.c | dirs64
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS64) -c $< -o $@
+
+$(BUILD64)/drivers/serial.o: kernel/drivers/serial.cpp | dirs64
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS64) -c $< -o $@
 
 $(BUILD64)/string.o: kernel/string.cpp | dirs64
 	$(CXX) $(CXXFLAGS64) -c $< -o $@

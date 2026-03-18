@@ -108,9 +108,15 @@ void serial_printf(const char* fmt, ...)
         case 'x':
             serial_write_hex(va_arg(args, uint32_t));
             break;
-        case 'p':
+        case 'p': {
+#if defined(__x86_64__) || defined(_M_X64)
+            uintptr_t v = (uintptr_t)va_arg(args, void*);
+            serial_write_hex((uint32_t)v);
+#else
             serial_write_hex((uint32_t)va_arg(args, void*));
+#endif
             break;
+        }
         case '%':
             serial_write('%');
             break;
