@@ -8,6 +8,7 @@ CXX = g++
 CC = gcc
 AS = nasm
 LD = ld
+ZIG = $(CURDIR)/../tools/zig/zig-x86_64-linux-0.16.0-dev.2905+5d71e3051/zig
 
 # flags comune
 COMMON_FLAGS = -ffreestanding -O2 -Wall -Wextra -Ikernel/include -m32
@@ -19,6 +20,7 @@ CXXFLAGS = $(COMMON_FLAGS) -fno-exceptions -fno-rtti -DKERNEL_CODENAME=\"$(KERNE
 
 ASFLAGS = -f elf32
 LDFLAGS = -m elf_i386 -T linker.ld
+ZIGFLAGS = -O ReleaseSmall -target x86-freestanding -mcpu=i386 -fno-stack-protector -I kernel
 
 BUILD = build
 ISO = iso
@@ -198,6 +200,7 @@ OBJS = \
 	$(BUILD)/ui/wm/wm.o \
 	$(BUILD)/ui/wm/window.o \
 	$(BUILD)/ui/wm/wm_layout.o \
+	$(BUILD)/ui/wm/chrome_zig.o \
 	$(BUILD)/ui/wm/wm_hooks.o \
 	$(BUILD)/ui/flyui/core.o \
 	$(BUILD)/ui/flyui/widget.o \
@@ -877,6 +880,11 @@ $(BUILD)/compositor.o: kernel/video/compositor.c | dirs
 $(BUILD)/ui/wm/wm.o: kernel/ui/wm/wm.c | dirs
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/ui/wm/chrome_zig.o: kernel/ui/wm/chrome.zig | dirs
+	@mkdir -p $(dir $@) $(BUILD)/zig-cache $(BUILD)/zig-cache-global
+	ZIG_LOCAL_CACHE_DIR=$(BUILD)/zig-cache ZIG_GLOBAL_CACHE_DIR=$(BUILD)/zig-cache-global \
+		$(ZIG) build-obj $(ZIGFLAGS) -femit-bin=$@ $<
 
 $(BUILD)/ui/wm/window.o: kernel/ui/wm/window.c | dirs
 	@mkdir -p $(dir $@)

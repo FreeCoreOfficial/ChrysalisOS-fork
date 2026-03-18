@@ -27,29 +27,8 @@ static int wm_reserved_bottom = 0;
 static window_t *win_array[MAX_WINDOWS];
 static size_t win_count = 0;
 
-static uint32_t wm_shade_color(uint32_t c, int delta) {
-  int a = (c >> 24) & 0xFF;
-  int r = (c >> 16) & 0xFF;
-  int g = (c >> 8) & 0xFF;
-  int b = c & 0xFF;
-  r += delta;
-  g += delta;
-  b += delta;
-  if (r < 0)
-    r = 0;
-  if (r > 255)
-    r = 255;
-  if (g < 0)
-    g = 0;
-  if (g > 255)
-    g = 255;
-  if (b < 0)
-    b = 0;
-  if (b > 255)
-    b = 255;
-  return ((uint32_t)a << 24) | ((uint32_t)r << 16) | ((uint32_t)g << 8) |
-         (uint32_t)b;
-}
+extern void wm_chrome_draw_zig(surface_t *surf, int x, int y, int w,
+                               int title_h, uint32_t title_bg);
 
 #define WM_CHROME_MAGIC 0x4348524dU
 #define WM_CHROME_BTN_MIN 1
@@ -110,15 +89,7 @@ static void chrome_root_draw(fly_widget_t *w, surface_t *surf, int x, int y) {
 
   uint32_t title_bg =
       c->focused ? th->win_title_active_bg : th->win_title_inactive_bg;
-  uint32_t title_fg =
-      c->focused ? th->win_title_active_fg : th->win_title_inactive_fg;
-  (void)title_fg;
-  uint32_t top = wm_shade_color(title_bg, 24);
-  uint32_t bot = wm_shade_color(title_bg, -18);
-
-  fly_draw_rect_vgradient(surf, x, y, ww, title_h, top, bot);
-  fly_draw_rect_fill(surf, x, y + title_h, ww, 1,
-                     wm_shade_color(title_bg, -40));
+  wm_chrome_draw_zig(surf, x, y, ww, title_h, title_bg);
 }
 
 static wm_chrome_t *wm_chrome_peek(window_t *win) {
