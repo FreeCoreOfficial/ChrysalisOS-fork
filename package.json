@@ -1,5 +1,6 @@
 {
     "scripts": {
+        "fastbuild": "make -C os -j4",
         "installer": "qemu-system-i386 -cdrom installer/installer.iso -hda hdd.img -serial stdio -m 512"
     }
 }

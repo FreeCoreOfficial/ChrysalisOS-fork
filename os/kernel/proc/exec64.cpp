@@ -4,6 +4,8 @@
 #include "../arch/x86_64/user64.h"
 #include "../string.h"
 #include "../mem/kmalloc.h"
+#include "../mem/user64_vm.h"
+#include "../sched/task64.h"
 extern "C" void *kmalloc(size_t size);
 extern "C" void kfree(void *ptr);
 
@@ -48,6 +50,7 @@ static int exec64_from_buffer(const uint8_t *file_data, size_t file_size) {
     return -1;
   }
 
+  uint64_t image_end = 0;
   for (int i = 0; i < info.seg_count; ++i) {
     elf64_segment_t *s = &info.segments[i];
     if (map_user_segment(s->vaddr, s->memsz, s->flags) < 0) {
@@ -55,6 +58,9 @@ static int exec64_from_buffer(const uint8_t *file_data, size_t file_size) {
       return -1;
     }
     memcpy((void *)(uint64_t)s->vaddr, s->kernel_buf, (uint32_t)s->filesz);
+    uint64_t end = s->vaddr + s->memsz;
+    if (end > image_end)
+      image_end = end;
   }
 
   uint64_t stack_top = 0x0000000080000000ULL;
@@ -62,6 +68,9 @@ static int exec64_from_buffer(const uint8_t *file_data, size_t file_size) {
     elf64_unload_kernel_space(&info);
     return -1;
   }
+
+  user64_init_process(image_end);
+  task64_set_user_stack(stack_top);
 
   struct user64_context ctx;
   ctx.rip = info.entry_point;

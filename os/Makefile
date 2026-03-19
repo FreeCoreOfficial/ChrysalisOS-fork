@@ -1,6 +1,6 @@
-KERNEL_CODENAME = "free_gold"
+KERNEL_CODENAME = "chrysalis"
 LICENSE = "MIT"
-CHRYVER= "chrysver-0.3.7"
+CHRYVER= "0.3.8-dev"
 GITHUB= "https://github.com/mihai209/chrysalisos"
 
 
@@ -24,7 +24,7 @@ ZIGFLAGS = -O ReleaseSmall -target x86-freestanding -mcpu=i386 -fno-stack-protec
 LIBGCC64 := $(shell $(CC) -m64 -print-libgcc-file-name)
 
 # 64-bit kernel flags (prototype)
-COMMON_FLAGS64 = -ffreestanding -O2 -Wall -Wextra -Ikernel/include -m64 -mno-red-zone -fno-pic -fno-pie
+COMMON_FLAGS64 = -ffreestanding -O2 -Wall -Wextra -Ikernel/include -m64 -mno-red-zone -fno-pic -fno-pie -mno-sse -mno-sse2 -mno-mmx
 CFLAGS64 = $(COMMON_FLAGS64) -DKERNEL_CODENAME=\"$(KERNEL_CODENAME)\" -DCHRYVER=\"$(CHRYVER)\" -DLICENSE=\"$(LICENSE)\"
 CXXFLAGS64 = $(COMMON_FLAGS64) -fno-exceptions -fno-rtti -DKERNEL_CODENAME=\"$(KERNEL_CODENAME)\" -DCHRYVER=\"$(CHRYVER)\" -DLICENSE=\"$(LICENSE)\"
 ASFLAGS64 = -f elf64
@@ -274,12 +274,21 @@ OBJS64 = \
 	$(BUILD64)/arch/idt64.o \
 	$(BUILD64)/arch/isr64.o \
 	$(BUILD64)/arch/paging64.o \
+	$(BUILD64)/arch/pmm64.o \
+	$(BUILD64)/arch/rtc64.o \
+	$(BUILD64)/arch/switch64.o \
 	$(BUILD64)/arch/syscall64.o \
 	$(BUILD64)/arch/syscall64_entry.o \
 	$(BUILD64)/arch/user64.o \
 	$(BUILD64)/proc/exec64.o \
 	$(BUILD64)/elf/elf64.o \
 	$(BUILD64)/mem/kmalloc.o \
+	$(BUILD64)/mem/user64_vm.o \
+	$(BUILD64)/time/clock.o \
+	$(BUILD64)/fs/vfs.o \
+	$(BUILD64)/fs/ramfs.o \
+	$(BUILD64)/linux_compat/linux_syscall_x86_64.o \
+	$(BUILD64)/sched/task64.o \
 	$(BUILD64)/drivers/serial.o \
 	$(BUILD64)/string.o \
 
@@ -291,7 +300,7 @@ OBJS64 = \
 
 .PHONY: all iso run clean help consolerun dirs dirs64 icons petal_apps
 
-all: $(ISO)/boot/$(KERNEL) $(ISO)/boot/$(KERNEL64) petal_apps
+all: $(ISO)/boot/$(KERNEL) $(ISO)/boot/$(KERNEL64) $(ISO)/boot/hello64.elf petal_apps
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -331,6 +340,11 @@ dirs64: $(BUILD64)
 	mkdir -p $(BUILD64)/proc
 	mkdir -p $(BUILD64)/elf
 	mkdir -p $(BUILD64)/mem
+	mkdir -p $(BUILD64)/time
+	mkdir -p $(BUILD64)/fs
+	mkdir -p $(BUILD64)/linux_compat
+	mkdir -p $(BUILD64)/sched
+	mkdir -p $(BUILD64)/user
 
 
 
@@ -503,6 +517,15 @@ $(BUILD64)/arch/isr64.o: kernel/arch/x86_64/isr64.S | dirs64
 $(BUILD64)/arch/paging64.o: kernel/arch/x86_64/paging64.cpp | dirs64
 	$(CXX) $(CXXFLAGS64) -c $< -o $@
 
+$(BUILD64)/arch/pmm64.o: kernel/arch/x86_64/pmm64.c | dirs64
+	$(CC) $(CFLAGS64) -c $< -o $@
+
+$(BUILD64)/arch/rtc64.o: kernel/arch/x86_64/rtc64.c | dirs64
+	$(CC) $(CFLAGS64) -c $< -o $@
+
+$(BUILD64)/arch/switch64.o: kernel/arch/x86_64/switch64.S | dirs64
+	$(AS) $(ASFLAGS64) $< -o $@
+
 $(BUILD64)/arch/syscall64.o: kernel/arch/x86_64/syscall64.cpp | dirs64
 	$(CXX) $(CXXFLAGS64) -c $< -o $@
 
@@ -522,6 +545,38 @@ $(BUILD64)/elf/elf64.o: kernel/elf/elf64.c | dirs64
 $(BUILD64)/mem/kmalloc.o: kernel/mem/kmalloc.c | dirs64
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS64) -c $< -o $@
+
+$(BUILD64)/mem/user64_vm.o: kernel/mem/user64_vm.c | dirs64
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS64) -c $< -o $@
+
+$(BUILD64)/time/clock.o: kernel/time/clock.cpp | dirs64
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS64) -c $< -o $@
+
+$(BUILD64)/fs/vfs.o: kernel/fs/vfs/vfs.c | dirs64
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS64) -c $< -o $@
+
+$(BUILD64)/fs/ramfs.o: kernel/fs/ramfs/ramfs.c | dirs64
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS64) -c $< -o $@
+
+$(BUILD64)/linux_compat/linux_syscall_x86_64.o: kernel/linux_compat/linux_syscall_x86_64.cpp | dirs64
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS64) -c $< -o $@
+
+$(BUILD64)/user/hello64.o: user/hello64.S | dirs64
+	@mkdir -p $(dir $@)
+	$(AS) $(ASFLAGS64) $< -o $@
+
+$(ISO)/boot/hello64.elf: $(BUILD64)/user/hello64.o | dirs64
+	@mkdir -p $(dir $@)
+	$(LD) -m elf_x86_64 -nostdlib -e _start -o $@ $<
+
+$(BUILD64)/sched/task64.o: kernel/sched/task64.cpp | dirs64
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS64) -c $< -o $@
 
 $(BUILD64)/drivers/serial.o: kernel/drivers/serial.cpp | dirs64
 	@mkdir -p $(dir $@)
@@ -1148,7 +1203,7 @@ consolerun: iso
 	qemu-system-x86_64 -cdrom chrysalis.iso -nographic
 
 clean:
-	rm -rf $(BUILD) $(BUILD64) *.iso $(ISO)/boot/$(KERNEL) $(ISO)/boot/$(KERNEL64) $(ISO)/icons ../tools/icons/out
+	rm -rf $(BUILD) $(BUILD64) *.iso $(ISO)/boot/$(KERNEL) $(ISO)/boot/$(KERNEL64) $(ISO)/boot/hello64.elf $(ISO)/icons ../tools/icons/out
 
 # -------------------------
 # ASSETS

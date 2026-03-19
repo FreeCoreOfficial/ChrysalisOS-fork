@@ -1,4 +1,4 @@
-boot-background = https://share.google/JEscdMOKT9uOXE5Gg
+boot-background = https://images.pexels.com/photos/2387793/pexels-photo-2387793.jpeg?cs=srgb&dl=pexels-adrien-olichon-1257089-2387793.jpg&fm=jpg
 select-c = gemini-content 
 resize tool = https://the-image-editor.com/
 convert png -> tga tool = https://www.freeconvert.com/png-to-tga

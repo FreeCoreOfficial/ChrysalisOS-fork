@@ -6,8 +6,14 @@ CXX = g++
 AS = nasm
 LD = ld
 
+CHRYVER := $(shell sed -n 's/^CHRYVER= *\"\\(.*\\)\".*/\\1/p' ../os/Makefile)
+
 CFLAGS = -fno-builtin -Wall -Wextra -ffreestanding -O2 -m32 -I../os/kernel/include -DNO_FRAMEBUFFER
 CXXFLAGS = $(CFLAGS) -fno-exceptions -fno-rtti
+ifneq ($(strip $(CHRYVER)),)
+CFLAGS += -DCHRYVER=\"$(CHRYVER)\"
+CXXFLAGS += -DCHRYVER=\"$(CHRYVER)\"
+endif
 ASFLAGS = -f elf32
 LDFLAGS = -nostdlib -m elf_i386 -T ../os/linker.ld
 

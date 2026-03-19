@@ -7,13 +7,22 @@
 #include <stddef.h>
 
 #include "arch/i386/io.h"
+#include "arch/x86_64/pmm64.h"
 #include "drivers/serial.h"
+#include "fs/ramfs/ramfs.h"
+#include "fs/vfs/vfs.h"
+#include "mem/kmalloc.h"
+#include "proc/exec64.h"
+#include "sched/task64.h"
 #include "smp/multiboot.h"
 #include "string.h"
+#include "time/clock.h"
 
 extern "C" void paging64_init(void);
 extern "C" void idt64_init(void);
 extern "C" void syscall64_init(void);
+extern "C" void syscall64_set_linux_abi(int enabled);
+extern "C" char kernel64_end;
 
 struct mb64_module {
   const char *name;
@@ -24,6 +33,7 @@ struct mb64_module {
 static mb64_module g_mb_modules[32];
 static int g_mb_module_count = 0;
 static uint64_t g_total_ram_mb = 0;
+static uint64_t g_mb_module_max_end = 0;
 
 static volatile uint16_t *g_vga = (uint16_t *)0xB8000;
 static int g_vga_row = 0;
@@ -32,6 +42,8 @@ static uint8_t g_vga_attr = 0x0F;
 
 static bool g_force_pic = false;
 static bool g_boot_gui = false;
+static bool g_linux_abi = false;
+static uint8_t g_heap64[4 * 1024 * 1024];
 
 static void vga_clear(void) {
   for (int y = 0; y < 25; y++) {
@@ -156,6 +168,10 @@ static void parse_cmdline(const char *cmdline) {
       cmdline_has_token(cmdline, "boot=gui")) {
     g_boot_gui = true;
   }
+  if (cmdline_has_token(cmdline, "linuxabi=1") ||
+      cmdline_has_token(cmdline, "linuxabi")) {
+    g_linux_abi = true;
+  }
 }
 
 static void shell64_prompt(void) {
@@ -191,8 +207,9 @@ static int shell64_readline(char *buf, int max) {
 }
 
 static void shell64_cmd_help(void) {
-  vga_puts("Commands: help, echo, uname, mods, ram, reboot, halt\n");
-  serial_write_string("Commands: help, echo, uname, mods, ram, reboot, halt\r\n");
+  vga_puts("Commands: help, echo, uname, mods, ram, runmod, runuser, linuxabi, reboot, halt\n");
+  serial_write_string(
+      "Commands: help, echo, uname, mods, ram, runmod, runuser, linuxabi, reboot, halt\r\n");
 }
 
 static void shell64_cmd_uname(void) {
@@ -218,6 +235,71 @@ static void shell64_cmd_ram(void) {
   vga_puts("RAM: ");
   vga_put_u32((uint32_t)g_total_ram_mb);
   vga_puts(" MB\n");
+}
+
+static void shell64_cmd_linuxabi(int argc, char **argv) {
+  if (argc < 2) {
+    serial_write_string(g_linux_abi ? "linuxabi=1\r\n" : "linuxabi=0\r\n");
+    return;
+  }
+  if (strcmp(argv[1], "1") == 0 || strcmp(argv[1], "on") == 0 ||
+      strcmp(argv[1], "enable") == 0) {
+    g_linux_abi = true;
+  } else if (strcmp(argv[1], "0") == 0 || strcmp(argv[1], "off") == 0 ||
+             strcmp(argv[1], "disable") == 0) {
+    g_linux_abi = false;
+  } else {
+    serial_write_string("Usage: linuxabi [on|off]\r\n");
+    return;
+  }
+  syscall64_set_linux_abi(g_linux_abi ? 1 : 0);
+  serial_write_string(g_linux_abi ? "linuxabi=1\r\n" : "linuxabi=0\r\n");
+}
+
+static void shell64_cmd_runmod(int argc, char **argv) {
+  if (argc < 2) {
+    serial_write_string("Usage: runmod <index>\r\n");
+    return;
+  }
+  int idx = atoi(argv[1]);
+  if (idx < 0 || idx >= g_mb_module_count) {
+    serial_write_string("Invalid module index\r\n");
+    return;
+  }
+  uint64_t start = g_mb_modules[idx].start;
+  uint64_t size = g_mb_modules[idx].end - g_mb_modules[idx].start;
+  if (start == 0 || size == 0) {
+    serial_write_string("Module empty\r\n");
+    return;
+  }
+  serial_write_string("[K64] Executing module...\r\n");
+  exec64_from_module((void *)(uintptr_t)start, size);
+  serial_write_string("[K64] exec64_from_module returned\r\n");
+}
+
+static void runuser_task(void *arg) {
+  int idx = (int)(intptr_t)arg;
+  if (idx < 0 || idx >= g_mb_module_count) {
+    serial_write_string("[K64] runuser invalid index\r\n");
+    return;
+  }
+  uint64_t start = g_mb_modules[idx].start;
+  uint64_t size = g_mb_modules[idx].end - g_mb_modules[idx].start;
+  serial_write_string("[K64] runuser launching module...\r\n");
+  exec64_from_module((void *)(uintptr_t)start, size);
+  serial_write_string("[K64] runuser returned to kernel\r\n");
+}
+
+static void shell64_cmd_runuser(int argc, char **argv) {
+  if (argc < 2) {
+    serial_write_string("Usage: runuser <index>\r\n");
+    return;
+  }
+  int idx = atoi(argv[1]);
+  task64_t *t = task64_create("user", runuser_task, (void *)(intptr_t)idx);
+  if (!t) {
+    serial_write_string("[K64] Failed to create user task\r\n");
+  }
 }
 
 static void shell64_exec(char *line) {
@@ -255,6 +337,12 @@ static void shell64_exec(char *line) {
     shell64_cmd_mods();
   } else if (strcmp(argv[0], "ram") == 0) {
     shell64_cmd_ram();
+  } else if (strcmp(argv[0], "runmod") == 0) {
+    shell64_cmd_runmod(argc, argv);
+  } else if (strcmp(argv[0], "runuser") == 0) {
+    shell64_cmd_runuser(argc, argv);
+  } else if (strcmp(argv[0], "linuxabi") == 0) {
+    shell64_cmd_linuxabi(argc, argv);
   } else if (strcmp(argv[0], "reboot") == 0) {
     serial_write_string("Rebooting...\r\n");
     outb(0x64, 0xFE);
@@ -272,6 +360,17 @@ static void shell64_exec(char *line) {
   }
 }
 
+static void shell64_task(void *arg) {
+  (void)arg;
+  char line[128];
+  for (;;) {
+    shell64_prompt();
+    if (shell64_readline(line, sizeof(line)) >= 0) {
+      shell64_exec(line);
+    }
+  }
+}
+
 extern "C" void kernel_main64(unsigned long long magic,
                               unsigned long long info) {
   (void)magic;
@@ -284,6 +383,10 @@ extern "C" void kernel_main64(unsigned long long magic,
   syscall64_init();
   serial_init();
   serial_write_string("[K64] serial online\r\n");
+  heap_init(g_heap64, sizeof(g_heap64));
+
+  time_init();
+  vfs_mount("/", ramfs_root());
 
   const char *boot_cmdline = NULL;
 
@@ -296,6 +399,7 @@ extern "C" void kernel_main64(unsigned long long magic,
             (struct multiboot2_tag_string *)tag;
         boot_cmdline = cs->string;
         parse_cmdline(boot_cmdline);
+        syscall64_set_linux_abi(g_linux_abi ? 1 : 0);
       }
       if (tag->type == MULTIBOOT2_TAG_TYPE_BASIC_MEMINFO) {
         struct multiboot2_tag_basic_meminfo *mem =
@@ -324,6 +428,8 @@ extern "C" void kernel_main64(unsigned long long magic,
           g_mb_modules[g_mb_module_count].name = mod->string;
           g_mb_module_count++;
         }
+        if (mod->mod_end > g_mb_module_max_end)
+          g_mb_module_max_end = mod->mod_end;
       }
       tag = (struct multiboot2_tag *)((uint8_t *)tag + ((tag->size + 7) & ~7));
     }
@@ -334,7 +440,12 @@ extern "C" void kernel_main64(unsigned long long magic,
   vga_puts(" MB\n");
 
   /* TODO: virtualbox_check_or_panic() */
-  /* TODO: pmm_init (64-bit physical memory manager) */
+  {
+    uint64_t reserved_end = (uint64_t)(uintptr_t)&kernel64_end;
+    if (g_mb_module_max_end > reserved_end)
+      reserved_end = g_mb_module_max_end;
+    pmm64_init((uint64_t)(uintptr_t)info, reserved_end);
+  }
   /* TODO: gdt_init + tss_init for x86_64 */
   /* TODO: idt_init + isr_install + irq_install */
   /* TODO: pic_remap / ioapic routing */
@@ -348,18 +459,35 @@ extern "C" void kernel_main64(unsigned long long magic,
   vga_puts("\n[K64] Ready. Use serial console for input.\n");
   serial_write_string("[K64] Ready. Use serial console for input.\r\n");
 
-  char line[128];
-  while (1) {
-    shell64_prompt();
-    if (shell64_readline(line, sizeof(line)) >= 0) {
-      shell64_exec(line);
-    }
+  task64_init();
+  task64_t *shell_task = task64_create("shell", shell64_task, nullptr);
+  if (!shell_task) {
+    serial_write_string("[K64] Failed to create shell task\r\n");
+    for (;;)
+      asm volatile("hlt");
   }
+  task64_start(shell_task);
 }
 
-extern "C" void isr64_handler(void) {
+extern "C" void isr64_handler(uint64_t *stack) {
+  uint64_t rip = stack ? stack[0] : 0;
+  uint64_t cs = stack ? stack[1] : 0;
+  uint64_t rflags = stack ? stack[2] : 0;
+  uint64_t err = stack ? stack[3] : 0;
+  uint64_t cr2 = 0;
+  asm volatile("mov %%cr2, %0" : "=r"(cr2));
   vga_puts("\n[K64] Unhandled exception.\n");
-  serial_write_string("\r\n[K64] Unhandled exception.\r\n");
+  serial_write_string("\r\n[K64] Unhandled exception. RIP=");
+  serial_printf("%p", (void *)(uintptr_t)rip);
+  serial_write_string(" CS=");
+  serial_printf("%p", (void *)(uintptr_t)cs);
+  serial_write_string(" RFLAGS=");
+  serial_printf("%p", (void *)(uintptr_t)rflags);
+  serial_write_string(" ERR=");
+  serial_printf("%p", (void *)(uintptr_t)err);
+  serial_write_string(" CR2=");
+  serial_printf("%p", (void *)(uintptr_t)cr2);
+  serial_write_string("\r\n");
   for (;;) {
     asm volatile("hlt");
   }

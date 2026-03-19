@@ -1673,6 +1673,16 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
     ui_append_str(grub_cfg, sizeof(grub_cfg),
                   "  multiboot2 /boot/chrysalis/kernel64.bin\n");
     ui_append_str(grub_cfg, sizeof(grub_cfg), "  boot\n}\n\n");
+
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "menuentry \"Chrysalis OS (64-bit Prototype, Linux ABI)\" {\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  set gfxpayload=text\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  terminal_output console\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  multiboot2 /boot/chrysalis/kernel64.bin linuxabi=1\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg), "  boot\n}\n\n");
   }
 
   ui_append_str(grub_cfg, sizeof(grub_cfg),
@@ -1901,7 +1911,11 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
     terminal_printf(
         "    ************************************************************\n\n");
 
-    terminal_printf("    Version  = 0.2\n");
+#ifdef CHRYVER
+    terminal_printf("    Version  = %s\n", CHRYVER);
+#else
+    terminal_printf("    Version  = unknown\n");
+#endif
     terminal_printf("    Website  = https://chrysalisos.netlify.app\n\n");
     terminal_printf(
         "    The installation has finished. Please choose how to proceed:\n\n");

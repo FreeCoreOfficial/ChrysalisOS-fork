@@ -6,6 +6,8 @@ extern "C" uint64_t pdpt;
 extern "C" uint64_t pd;
 
 extern "C" char kernel64_end;
+extern "C" uint64_t pmm64_alloc_frame(void);
+extern "C" int pmm64_is_ready(void);
 
 static uint64_t *g_pml4 = 0;
 static uint64_t g_next_phys = 0;
@@ -27,10 +29,15 @@ void paging64_init(void) {
 
   uint64_t start = (uint64_t)(unsigned long long)&kernel64_end;
   g_next_phys = align_up(start, 0x1000);
-  g_max_phys = 0x40000000ULL; /* 1 GiB */
+  g_max_phys = 0x100000000ULL; /* 4 GiB */
 }
 
 uint64_t paging64_alloc_frame(void) {
+  if (pmm64_is_ready()) {
+    uint64_t phys = pmm64_alloc_frame();
+    if (phys)
+      return phys;
+  }
   if (g_next_phys == 0)
     paging64_init();
   if (g_next_phys + 0x1000 > g_max_phys)

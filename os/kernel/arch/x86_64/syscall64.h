@@ -5,10 +5,32 @@
 extern "C" {
 #endif
 
+typedef struct {
+  uint64_t ds;
+  uint64_t es;
+  uint64_t r15;
+  uint64_t r14;
+  uint64_t r13;
+  uint64_t r12;
+  uint64_t r11;
+  uint64_t r10;
+  uint64_t r9;
+  uint64_t r8;
+  uint64_t rbp;
+  uint64_t rdi;
+  uint64_t rsi;
+  uint64_t rdx;
+  uint64_t rcx;
+  uint64_t rbx;
+  uint64_t rax;
+} syscall64_state_t;
+
 void syscall64_init(void);
+void syscall64_set_linux_abi(int enabled);
 uint64_t syscall64_dispatch(uint64_t num, uint64_t a1, uint64_t a2,
                             uint64_t a3, uint64_t a4, uint64_t a5,
                             uint64_t a6);
+void __syscall_handler(syscall64_state_t *state);
 
 #ifdef __cplusplus
 }

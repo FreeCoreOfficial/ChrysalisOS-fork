@@ -5,6 +5,7 @@ extern isr64_handler
 section .text
 isr64_stub:
     cli
+    mov rdi, rsp
     call isr64_handler
 .halt:
     hlt

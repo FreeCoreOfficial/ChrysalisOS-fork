@@ -31,10 +31,10 @@ _start64:
     test edx, 1 << 29
     jz .no_long_mode
 
-    ; Clear page tables (3 * 4096 bytes)
+    ; Clear page tables (6 * 4096 bytes)
     xor eax, eax
     mov edi, pml4
-    mov ecx, (4096 * 3) / 4
+    mov ecx, (4096 * 6) / 4
     rep stosd
 
     ; Debug marker B
@@ -42,7 +42,7 @@ _start64:
     mov ax, 0x1F42            ; 'B'
     mov [edi + 2], ax
 
-    ; Build identity map for first 1 GiB using 2 MiB pages
+    ; Build identity map for first 4 GiB using 2 MiB pages
     mov eax, pdpt
     or eax, 0x03
     mov [pml4], eax
@@ -52,6 +52,21 @@ _start64:
     or eax, 0x03
     mov [pdpt], eax
     mov dword [pdpt + 4], 0
+
+    mov eax, pd2
+    or eax, 0x03
+    mov [pdpt + 8], eax
+    mov dword [pdpt + 12], 0
+
+    mov eax, pd3
+    or eax, 0x03
+    mov [pdpt + 16], eax
+    mov dword [pdpt + 20], 0
+
+    mov eax, pd4
+    or eax, 0x03
+    mov [pdpt + 24], eax
+    mov dword [pdpt + 28], 0
 
     xor ecx, ecx
 .pd_fill:
@@ -63,6 +78,42 @@ _start64:
     inc ecx
     cmp ecx, 512
     jl .pd_fill
+
+    xor ecx, ecx
+.pd_fill2:
+    mov eax, ecx
+    add eax, 512
+    shl eax, 21
+    or eax, 0x83
+    mov [pd2 + ecx*8], eax
+    mov dword [pd2 + ecx*8 + 4], 0
+    inc ecx
+    cmp ecx, 512
+    jl .pd_fill2
+
+    xor ecx, ecx
+.pd_fill3:
+    mov eax, ecx
+    add eax, 1024
+    shl eax, 21
+    or eax, 0x83
+    mov [pd3 + ecx*8], eax
+    mov dword [pd3 + ecx*8 + 4], 0
+    inc ecx
+    cmp ecx, 512
+    jl .pd_fill3
+
+    xor ecx, ecx
+.pd_fill4:
+    mov eax, ecx
+    add eax, 1536
+    shl eax, 21
+    or eax, 0x83
+    mov [pd4 + ecx*8], eax
+    mov dword [pd4 + ecx*8 + 4], 0
+    inc ecx
+    cmp ecx, 512
+    jl .pd_fill4
 
     ; Enable PAE
     mov eax, cr4
@@ -178,4 +229,16 @@ pdpt:
 alignb 4096
 global pd
 pd:
+    resq 512
+alignb 4096
+global pd2
+pd2:
+    resq 512
+alignb 4096
+global pd3
+pd3:
+    resq 512
+alignb 4096
+global pd4
+pd4:
     resq 512
