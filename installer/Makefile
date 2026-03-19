@@ -36,6 +36,7 @@ OBJS = \
 	../os/build/cmd_fat.o \
 	../os/build/serial.o \
 	../os/build/ramfs.o \
+	../os/build/ramfs_add.o \
 	../os/build/string.o \
 	$(BUILD)/cmd_ls.o \
 	$(BUILD)/cmd_cd.o \

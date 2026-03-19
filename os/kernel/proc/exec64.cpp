@@ -10,6 +10,7 @@
 
 extern "C" void *kmalloc(size_t size);
 extern "C" void kfree(void *ptr);
+extern "C" const void *ramfs_read_file(const char *name, size_t *out_size);
 
 #define PT_DYNAMIC 2
 #define PT_INTERP 3

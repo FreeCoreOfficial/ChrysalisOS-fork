@@ -22,7 +22,6 @@
 /* FAT32 Driver API */
 extern "C" int fat32_read_file(const char *path, void *buf, uint32_t max_size);
 extern "C" int32_t fat32_get_file_size(const char *path);
-extern "C" const void *ramfs_read_file(const char *name, size_t *out_size);
 extern "C" void serial(const char *fmt, ...);
 
 /* ELF Header Definitions */

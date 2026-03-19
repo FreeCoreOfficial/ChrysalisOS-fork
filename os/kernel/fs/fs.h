@@ -27,4 +27,10 @@ void fs_list();
 const FSNode* fs_find(const char* name);
 
 /* RAMFS helper: Find file in RAMFS and return its data pointer and size */
+#ifdef __cplusplus
+extern "C" {
+#endif
 const void* ramfs_read_file(const char* name, size_t* out_size);
+#ifdef __cplusplus
+}
+#endif
