@@ -1,29 +1,40 @@
 #include "mount.h"
 #include "vnode.h"
-#include <stdint.h>
-
-/* Use project string lib; if you don't have it replace with <string.h> */
+#include "fs_ops.h"
+#include "../../mem/kmalloc.h"
 #include "../../string.h"
+#include <stdint.h>
 
 #define MAX_MOUNTS 8
 
 typedef struct mount {
-    const char* path;   /* mount point string (e.g. "/") */
-    vnode_t* root;      /* root vnode of the mounted FS */
+    char* path;       /* mount point string (e.g. "/") */
+    uint32_t len;
+    vnode_t* root;    /* root vnode of the mounted FS */
 } mount_t;
 
 static mount_t mounts[MAX_MOUNTS];
 static int mount_count = 0;
 
-void vfs_mount(const char* path, vnode_t* root)
-{
+static char* vfs_strdup(const char* s) {
+    if (!s)
+        return NULL;
+    size_t len = strlen(s);
+    char* out = (char*)kmalloc(len + 1);
+    if (!out)
+        return NULL;
+    memcpy(out, s, len);
+    out[len] = 0;
+    return out;
+}
+
+void vfs_mount(const char* path, vnode_t* root) {
     if (!path || !root)
         return;
 
-    /* simple duplicate check */
     for (int i = 0; i < mount_count; i++) {
-        if (strcmp(mounts[i].path, path) == 0) {
-            mounts[i].root = root; /* replace */
+        if (mounts[i].path && strcmp(mounts[i].path, path) == 0) {
+            mounts[i].root = root;
             return;
         }
     }
@@ -31,40 +42,96 @@ void vfs_mount(const char* path, vnode_t* root)
     if (mount_count >= MAX_MOUNTS)
         return;
 
-    mounts[mount_count].path = path;
+    mounts[mount_count].path = vfs_strdup(path);
+    mounts[mount_count].len = (uint32_t)strlen(path);
     mounts[mount_count].root = root;
     mount_count++;
 }
 
-vnode_t* vfs_resolve(const char* path)
-{
+static mount_t* vfs_find_mount(const char* path) {
+    mount_t* best = NULL;
     if (!path)
-        return 0;
-
-    /* only absolute paths supported for now */
-    if (path[0] != '/')
-        return 0;
-
-    /* exact-match mount points only for now. If user mounts "/" it will match "/".
-       We also support the case where a mount point is "/" and any path starting with
-       "/" should return the mount's root (later we'll parse path components).
-    */
+        return NULL;
 
     for (int i = 0; i < mount_count; i++) {
-        const char* mp = mounts[i].path;
-        if (!mp)
+        mount_t* m = &mounts[i];
+        if (!m->path || !m->root)
             continue;
-
-        /* exact match */
-        if (strcmp(path, mp) == 0)
-            return mounts[i].root;
-
-        /* if mount point is "/" and path starts with "/", return root */
-        if (strcmp(mp, "/") == 0)
-            return mounts[i].root;
-
-        /* future: match prefix mount points (e.g. /mnt/foo -> /mnt/foo/bar) */
+        uint32_t len = m->len;
+        if (len == 0)
+            continue;
+        if (strncmp(path, m->path, len) != 0)
+            continue;
+        if (path[len] != 0 && path[len] != '/')
+            continue;
+        if (!best || len > best->len)
+            best = m;
     }
+    return best;
+}
 
-    return 0;
+static vnode_t* vfs_find_child(vnode_t* dir, const char* name, size_t len) {
+    if (!dir || !dir->ops || !dir->ops->readdir)
+        return NULL;
+
+    uint32_t idx = 0;
+    while (1) {
+        vnode_t* out = NULL;
+        int res = dir->ops->readdir(dir, idx, &out);
+        if (res <= 0 || !out)
+            break;
+        if (out->name && strlen(out->name) == len &&
+            strncmp(out->name, name, len) == 0) {
+            return out;
+        }
+        idx++;
+    }
+    return NULL;
+}
+
+vnode_t* vfs_resolve(const char* path) {
+    if (!path)
+        return NULL;
+    if (path[0] != '/')
+        return NULL;
+
+    mount_t* m = vfs_find_mount(path);
+    if (!m || !m->root)
+        return NULL;
+
+    const char* sub = path + m->len;
+    if (m->len == 1)
+        sub = path + 1;
+    if (*sub == '/')
+        sub++;
+    if (*sub == 0)
+        return m->root;
+
+    vnode_t* cur = m->root;
+    const char* p = sub;
+    while (*p) {
+        while (*p == '/')
+            p++;
+        if (!*p)
+            break;
+        const char* start = p;
+        while (*p && *p != '/')
+            p++;
+        size_t len = (size_t)(p - start);
+        if (len == 0)
+            continue;
+        if (len == 1 && start[0] == '.')
+            continue;
+        if (len == 2 && start[0] == '.' && start[1] == '.') {
+            if (cur->parent)
+                cur = cur->parent;
+            continue;
+        }
+
+        vnode_t* child = vfs_find_child(cur, start, len);
+        if (!child)
+            return NULL;
+        cur = child;
+    }
+    return cur;
 }

@@ -95,6 +95,9 @@ OBJS = \
 	$(BUILD)/vfs_extra.o \
 	$(BUILD)/ramfs.o \
 	$(BUILD)/ramfs_add.o \
+	$(BUILD)/fs/devfs.o \
+	$(BUILD)/fs/procfs.o \
+	$(BUILD)/fs/pipe.o \
 	$(BUILD)/cmd_vfs.o \
 	$(BUILD)/pmm.o \
 	$(BUILD)/cmd_pmm.o \
@@ -287,6 +290,10 @@ OBJS64 = \
 	$(BUILD64)/time/clock.o \
 	$(BUILD64)/fs/vfs.o \
 	$(BUILD64)/fs/ramfs.o \
+	$(BUILD64)/fs/ramfs_add.o \
+	$(BUILD64)/fs/devfs.o \
+	$(BUILD64)/fs/procfs.o \
+	$(BUILD64)/fs/pipe.o \
 	$(BUILD64)/linux_compat/linux_syscall_x86_64.o \
 	$(BUILD64)/sched/task64.o \
 	$(BUILD64)/drivers/serial.o \
@@ -562,6 +569,22 @@ $(BUILD64)/fs/ramfs.o: kernel/fs/ramfs/ramfs.c | dirs64
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS64) -c $< -o $@
 
+$(BUILD64)/fs/ramfs_add.o: kernel/fs/ramfs/ramfs_add.c | dirs64
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS64) -c $< -o $@
+
+$(BUILD64)/fs/devfs.o: kernel/fs/devfs/devfs.c | dirs64
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS64) -c $< -o $@
+
+$(BUILD64)/fs/procfs.o: kernel/fs/procfs/procfs.c | dirs64
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS64) -c $< -o $@
+
+$(BUILD64)/fs/pipe.o: kernel/fs/pipe/pipe.c | dirs64
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS64) -c $< -o $@
+
 $(BUILD64)/linux_compat/linux_syscall_x86_64.o: kernel/linux_compat/linux_syscall_x86_64.cpp | dirs64
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS64) -c $< -o $@
@@ -607,6 +630,18 @@ $(BUILD)/ramfs.o: kernel/fs/ramfs/ramfs.c | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/ramfs_add.o: kernel/fs/ramfs/ramfs_add.c | dirs
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/fs/devfs.o: kernel/fs/devfs/devfs.c | dirs
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/fs/procfs.o: kernel/fs/procfs/procfs.c | dirs
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/fs/pipe.o: kernel/fs/pipe/pipe.c | dirs
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -1023,13 +1058,31 @@ $(BUILD)/user/libpetal.o: user/libpetal/src/libpetal.c | dirs
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+LIBC_SRCS = \
+	user/libc/src/string.c \
+	user/libc/src/stdlib.c \
+	user/libc/src/unistd.c \
+	user/libc/src/errno.c
+
+LIBC_OBJS = $(patsubst user/libc/src/%.c,$(BUILD)/user/libc_%.o,$(LIBC_SRCS))
+LIBC_PIC_OBJS = $(patsubst user/libc/src/%.c,$(BUILD)/user/libc_pic_%.o,$(LIBC_SRCS))
+
+$(BUILD)/user/libc_%.o: user/libc/src/%.c | dirs
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/user/libc_pic_%.o: user/libc/src/%.c | dirs
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -fPIC -c $< -o $@
+
 PETAL_APPS_SRC_CPP = $(filter-out apps/konsole.cpp, $(wildcard apps/*.cpp))
 PETAL_APPS_SRC_ZIG = $(wildcard apps/*.zig)
 PETAL_APPS = \
 	$(patsubst apps/%.cpp, $(ISO)/system/apps/%.petal, $(PETAL_APPS_SRC_CPP)) \
 	$(patsubst apps/%.zig, $(ISO)/system/apps/%.petal, $(PETAL_APPS_SRC_ZIG))
+PETAL_LIBS = $(ISO)/system/lib/libc.so
 
-PETAL_CXXFLAGS = $(CXXFLAGS) -fno-pic -Iuser/libpetal/include
+PETAL_CXXFLAGS = $(CXXFLAGS) -fno-pic -Iuser/libpetal/include -Iuser/libc/include
 PETAL_LDFLAGS = -m elf_i386
 PETAL_HEADERS = user/libpetal/include/petal.h
 ZIG_USERFLAGS = -O ReleaseSmall -target x86-freestanding -mcpu=i386 -fno-stack-protector -I user/libpetal/include
@@ -1037,24 +1090,28 @@ ZIG_USERFLAGS = -O ReleaseSmall -target x86-freestanding -mcpu=i386 -fno-stack-p
 $(BUILD)/user/start.o: user/libpetal/src/start.asm | dirs
 	$(AS) -f elf32 $< -o $@
 
-$(ISO)/system/apps/konsole.petal: apps/konsole.zig $(BUILD)/user/libpetal.o $(BUILD)/user/start.o $(PETAL_HEADERS) | dirs
+$(ISO)/system/apps/konsole.petal: apps/konsole.zig $(BUILD)/user/libpetal.o $(BUILD)/user/start.o $(LIBC_OBJS) $(PETAL_HEADERS) | dirs
 	@mkdir -p $(dir $@)
 	ZIG_LOCAL_CACHE_DIR=$(BUILD)/zig-cache ZIG_GLOBAL_CACHE_DIR=$(BUILD)/zig-cache-global \
 		$(ZIG) build-obj $(ZIG_USERFLAGS) -femit-bin=$(BUILD)/apps/konsole.o $<
-	$(LD) $(PETAL_LDFLAGS) $(BUILD)/user/start.o $(BUILD)/apps/konsole.o $(BUILD)/user/libpetal.o -o $@
+	$(LD) $(PETAL_LDFLAGS) $(BUILD)/user/start.o $(BUILD)/apps/konsole.o $(BUILD)/user/libpetal.o $(LIBC_OBJS) -o $@
 
-$(ISO)/system/apps/%.petal: apps/%.cpp $(BUILD)/user/libpetal.o $(BUILD)/user/start.o $(PETAL_HEADERS) | dirs
+$(ISO)/system/apps/%.petal: apps/%.cpp $(BUILD)/user/libpetal.o $(BUILD)/user/start.o $(LIBC_OBJS) $(PETAL_HEADERS) | dirs
 	@mkdir -p $(dir $@)
 	$(CXX) $(PETAL_CXXFLAGS) -c $< -o $(BUILD)/apps/$*.o
-	$(LD) $(PETAL_LDFLAGS) $(BUILD)/user/start.o $(BUILD)/apps/$*.o $(BUILD)/user/libpetal.o -o $@
+	$(LD) $(PETAL_LDFLAGS) $(BUILD)/user/start.o $(BUILD)/apps/$*.o $(BUILD)/user/libpetal.o $(LIBC_OBJS) -o $@
 
-$(ISO)/system/apps/%.petal: apps/%.zig $(BUILD)/user/libpetal.o $(BUILD)/user/start.o $(PETAL_HEADERS) | dirs
+$(ISO)/system/apps/%.petal: apps/%.zig $(BUILD)/user/libpetal.o $(BUILD)/user/start.o $(LIBC_OBJS) $(PETAL_HEADERS) | dirs
 	@mkdir -p $(dir $@)
 	ZIG_LOCAL_CACHE_DIR=$(BUILD)/zig-cache ZIG_GLOBAL_CACHE_DIR=$(BUILD)/zig-cache-global \
 		$(ZIG) build-obj $(ZIG_USERFLAGS) -femit-bin=$(BUILD)/apps/$*.o $<
-	$(LD) $(PETAL_LDFLAGS) $(BUILD)/user/start.o $(BUILD)/apps/$*.o $(BUILD)/user/libpetal.o -o $@
+	$(LD) $(PETAL_LDFLAGS) $(BUILD)/user/start.o $(BUILD)/apps/$*.o $(BUILD)/user/libpetal.o $(LIBC_OBJS) -o $@
 
-petal_apps: $(PETAL_APPS)
+petal_apps: $(PETAL_APPS) $(PETAL_LIBS)
+
+$(ISO)/system/lib/libc.so: $(LIBC_PIC_OBJS) | dirs
+	@mkdir -p $(ISO)/system/lib
+	$(LD) -shared -m elf_i386 $(LIBC_PIC_OBJS) -o $@
 
 $(BUILD)/surface.o: kernel/video/surface.c | dirs
 	$(CC) $(CFLAGS) -c $< -o $@

@@ -49,7 +49,9 @@
 #include "ethernet/net.h"
 #include "events/event_queue.h"
 #include "fs/chrysfs/chrysfs.h"
+#include "fs/devfs/devfs.h"
 #include "fs/fs.h"
+#include "fs/procfs/procfs.h"
 #include "fs/ramfs/ramfs.h"
 #include "fs/vfs/mount.h"
 #include "hardware/acpi.h"
@@ -450,6 +452,8 @@ extern "C" void kernel_main(uint32_t magic, uint32_t addr) {
     panic_if_fatal("ramfs_root() returned NULL");
   }
   vfs_mount("/", ramfs_root());
+  vfs_mount("/dev", devfs_root());
+  vfs_mount("/proc", procfs_root());
 
   vnode_t *v = vfs_resolve("/");
   if (v)

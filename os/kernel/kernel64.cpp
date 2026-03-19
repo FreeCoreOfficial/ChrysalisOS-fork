@@ -9,6 +9,8 @@
 #include "arch/i386/io.h"
 #include "arch/x86_64/pmm64.h"
 #include "drivers/serial.h"
+#include "fs/devfs/devfs.h"
+#include "fs/procfs/procfs.h"
 #include "fs/ramfs/ramfs.h"
 #include "fs/vfs/vfs.h"
 #include "mem/kmalloc.h"
@@ -32,7 +34,7 @@ struct mb64_module {
 
 static mb64_module g_mb_modules[32];
 static int g_mb_module_count = 0;
-static uint64_t g_total_ram_mb = 0;
+uint32_t g_total_ram_mb = 0;
 static uint64_t g_mb_module_max_end = 0;
 
 static volatile uint16_t *g_vga = (uint16_t *)0xB8000;
@@ -387,6 +389,8 @@ extern "C" void kernel_main64(unsigned long long magic,
 
   time_init();
   vfs_mount("/", ramfs_root());
+  vfs_mount("/dev", devfs_root());
+  vfs_mount("/proc", procfs_root());
 
   const char *boot_cmdline = NULL;
 

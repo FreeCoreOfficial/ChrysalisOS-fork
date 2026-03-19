@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 #include "../vfs/vnode.h"
+#include "../fs.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -11,6 +12,12 @@ extern "C" {
 struct vnode* ramfs_root(void);
 
 void ramfs_create_file(const char* name, const void* data, size_t len);
+struct FSNode* ramfs_fs_root(void);
+struct FSNode* ramfs_find_child(struct FSNode* dir, const char* name);
+struct FSNode* ramfs_mkdir_at(struct FSNode* dir, const char* name);
+struct FSNode* ramfs_create_file_at(struct FSNode* dir, const char* name,
+                                    const void* data, size_t len, int dynamic);
+int ramfs_unlink_node(struct FSNode* node);
 
 #ifdef __cplusplus
 }

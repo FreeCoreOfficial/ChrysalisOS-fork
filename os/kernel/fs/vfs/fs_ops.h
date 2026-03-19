@@ -13,6 +13,8 @@ typedef struct fs_ops {
     int (*open)(struct vnode* node);
     int (*read)(struct vnode* node, uint32_t off, uint8_t* buf, uint32_t size);
     int (*write)(struct vnode* node, uint32_t off, const uint8_t* buf, uint32_t size);
+    int (*close)(struct vnode* node);
+    uint32_t (*poll)(struct vnode* node, uint32_t events);
 
     /* readdir: for directory nodes; index starts at 0. If no more entries return 0 and set *out = NULL.
        On success return 1 and set *out to the vnode pointer (owned by FS). */

@@ -88,6 +88,37 @@ static int split_huge_pd(uint64_t *pd_entry) {
   return 0;
 }
 
+static int get_pte(uint64_t virt, uint64_t **out_pte) {
+  if (!out_pte)
+    return -1;
+  if (!g_pml4)
+    paging64_init();
+
+  uint64_t pml4_i = (virt >> 39) & 0x1FF;
+  uint64_t pdpt_i = (virt >> 30) & 0x1FF;
+  uint64_t pd_i = (virt >> 21) & 0x1FF;
+  uint64_t pt_i = (virt >> 12) & 0x1FF;
+
+  uint64_t *pml4_tab = g_pml4;
+  if (!(pml4_tab[pml4_i] & 0x1))
+    return -1;
+  uint64_t *pdpt_tab = (uint64_t *)(uint64_t)(pml4_tab[pml4_i] & ~0xFFFULL);
+  if (!(pdpt_tab[pdpt_i] & 0x1))
+    return -1;
+  uint64_t *pd_tab = (uint64_t *)(uint64_t)(pdpt_tab[pdpt_i] & ~0xFFFULL);
+  if (!(pd_tab[pd_i] & 0x1))
+    return -1;
+  if (pd_tab[pd_i] & 0x80) {
+    if (split_huge_pd(&pd_tab[pd_i]) < 0)
+      return -1;
+  }
+  if (!(pd_tab[pd_i] & 0x1))
+    return -1;
+  uint64_t *pt_tab = (uint64_t *)(uint64_t)(pd_tab[pd_i] & ~0xFFFULL);
+  *out_pte = &pt_tab[pt_i];
+  return 0;
+}
+
 int paging64_map_page(uint64_t virt, uint64_t phys, uint64_t flags) {
   if (!g_pml4)
     paging64_init();
@@ -116,6 +147,29 @@ int paging64_map_page(uint64_t virt, uint64_t phys, uint64_t flags) {
   uint64_t *pt_tab = (uint64_t *)(uint64_t)(pd_tab[pd_i] & ~0xFFFULL);
 
   pt_tab[pt_i] = (phys & ~0xFFFULL) | (flags & 0xFFFULL) | 0x1;
+  return 0;
+}
+
+int paging64_unmap_page(uint64_t virt) {
+  uint64_t *pte = nullptr;
+  if (get_pte(virt, &pte) < 0 || !pte)
+    return -1;
+  if (!(*pte & 0x1))
+    return -1;
+  *pte = 0;
+  asm volatile("invlpg (%0)" ::"r"(virt) : "memory");
+  return 0;
+}
+
+int paging64_protect_page(uint64_t virt, uint64_t flags) {
+  uint64_t *pte = nullptr;
+  if (get_pte(virt, &pte) < 0 || !pte)
+    return -1;
+  if (!(*pte & 0x1))
+    return -1;
+  uint64_t phys = *pte & ~0xFFFULL;
+  *pte = phys | (flags & 0xFFFULL) | 0x1;
+  asm volatile("invlpg (%0)" ::"r"(virt) : "memory");
   return 0;
 }
 

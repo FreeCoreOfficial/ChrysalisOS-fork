@@ -18,6 +18,21 @@ static int ram_open(vnode_t *node) {
   return 0;
 }
 
+static int ram_close(vnode_t *node) {
+  (void)node;
+  return 0;
+}
+
+static uint32_t ram_poll(vnode_t *node, uint32_t events) {
+  (void)node;
+  uint32_t revents = 0;
+  if (events & 0x001)
+    revents |= 0x001;
+  if (events & 0x004)
+    revents |= 0x004;
+  return revents;
+}
+
 static int ram_read(vnode_t *node, uint32_t off, uint8_t *buf, uint32_t size) {
   ram_node_t *rn = (ram_node_t *)node->internal;
   if (off >= rn->size)
@@ -51,8 +66,12 @@ static int ram_write(vnode_t *node, uint32_t off, const uint8_t *buf,
   return size;
 }
 
-static fs_ops_t ram_ops = {
-    .open = ram_open, .read = ram_read, .write = ram_write, .readdir = NULL};
+static fs_ops_t ram_ops = {.open = ram_open,
+                           .read = ram_read,
+                           .write = ram_write,
+                           .close = ram_close,
+                           .poll = ram_poll,
+                           .readdir = NULL};
 
 vnode_t *vfs_create_ram_file(const char *name) {
   ram_node_t *rn = (ram_node_t *)kmalloc(sizeof(ram_node_t));

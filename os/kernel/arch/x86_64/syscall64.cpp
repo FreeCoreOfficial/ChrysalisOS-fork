@@ -9,6 +9,7 @@
 #include "../../sched/task64.h"
 #include "../../time/clock.h"
 #include "../i386/io.h"
+#include "../../fs/vfs/vfs.h"
 #include <stddef.h>
 
 #define MSR_EFER 0xC0000080u
@@ -26,6 +27,7 @@ static constexpr int k_syscall_table_size = 128;
 static syscall64_fn g_syscall_table[k_syscall_table_size];
 static file_t *g_files[MAX_FILES_PER_PROCESS];
 static int g_linux_abi_mode = 0;
+static syscall64_state_t *g_syscall_state = nullptr;
 
 static void register_syscall(uint32_t num, syscall64_fn fn) {
   if (num < (uint32_t)k_syscall_table_size)
@@ -112,6 +114,8 @@ static uint64_t sys_close64(uint64_t fd, uint64_t, uint64_t, uint64_t,
   file_t *f = g_files[fd];
   if (!f)
     return k_sys_enosys;
+  if (f->node && f->node->ops && f->node->ops->close)
+    f->node->ops->close(f->node);
   kfree(f);
   g_files[fd] = nullptr;
   return 0;
@@ -187,6 +191,20 @@ void syscall64_init(void) {
 
 void syscall64_set_linux_abi(int enabled) { g_linux_abi_mode = enabled ? 1 : 0; }
 
+syscall64_state_t *syscall64_get_state(void) { return g_syscall_state; }
+
+file_t *syscall64_get_file(int fd) {
+  if (fd < 0 || fd >= MAX_FILES_PER_PROCESS)
+    return nullptr;
+  return g_files[fd];
+}
+
+void syscall64_set_file(int fd, file_t *f) {
+  if (fd < 0 || fd >= MAX_FILES_PER_PROCESS)
+    return;
+  g_files[fd] = f;
+}
+
 uint64_t syscall64_dispatch(uint64_t num, uint64_t a1, uint64_t a2,
                             uint64_t a3, uint64_t a4, uint64_t a5,
                             uint64_t a6) {
@@ -205,6 +223,8 @@ uint64_t syscall64_dispatch(uint64_t num, uint64_t a1, uint64_t a2,
 extern "C" void __syscall_handler(syscall64_state_t *state) {
   if (!state)
     return;
+  g_syscall_state = state;
   state->rax = syscall64_dispatch(state->rax, state->rdi, state->rsi,
                                   state->rdx, state->r10, state->r8, state->r9);
+  g_syscall_state = nullptr;
 }

@@ -24,10 +24,30 @@ typedef struct task64 {
   uint64_t user_brk_start;
   uint64_t user_brk_end;
   uint64_t user_mmap_base;
+  struct {
+    uint64_t start;
+    uint64_t end;
+    int prot;
+    int flags;
+    int used;
+  } vmas[64];
   void (*entry)(void *arg);
   void *arg;
   task64_state_t state;
   struct task64 *next;
+
+  uint64_t sig_pending;
+  uint64_t sig_mask;
+  struct {
+    void (*handler)(int);
+    uint32_t flags;
+    uint64_t mask;
+  } sig_actions[64];
+  uint64_t sig_saved_rip;
+  uint64_t sig_saved_rsp;
+  int sig_active;
+
+  void *epoll_table[32];
 } task64_t;
 
 void task64_init(void);

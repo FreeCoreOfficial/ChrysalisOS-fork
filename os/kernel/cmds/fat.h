@@ -29,6 +29,9 @@ int fat32_read_directory(const char* path, fat_file_info_t* out, int max_entries
 /* Citește un fișier complet (limitat la max_size) */
 int fat32_read_file(const char* path, void* buf, uint32_t max_size);
 
+/* Obține dimensiunea unui fișier (sau -1 dacă nu există) */
+int32_t fat32_get_file_size(const char* path);
+
 /* Citește dintr-un fișier de la un offset specificat (pentru fișiere mari) */
 int fat32_read_file_offset(const char* path, void* buf, uint32_t size, uint32_t offset);
 

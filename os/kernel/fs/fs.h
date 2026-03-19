@@ -2,17 +2,23 @@
 
 #include <stddef.h>  /* for size_t */
 
+
 #define FS_FILE 1
 #define FS_DIR  2
+
+struct vnode;
 
 typedef struct FSNode {
     char name[256];          /* Filename */
     void* data;              /* Pointer to file data */
     size_t length;           /* File size in bytes */
+    size_t capacity;         /* Allocated capacity (for dynamic files) */
+    int is_dynamic;          /* 1 if data is heap-allocated and writable */
     int flags;               /* FS_FILE or FS_DIR */
     struct FSNode* next;     /* Next sibling */
     struct FSNode* children; /* First child (for directories) */
     struct FSNode* parent;   /* Parent node */
+    struct vnode* vnode;     /* VFS vnode mapping (lazy) */
 } FSNode;
 
 void fs_init();

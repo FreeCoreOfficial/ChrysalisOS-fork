@@ -191,6 +191,8 @@ static int sys_close(int fd) {
   if (!f)
     return -1;
 
+  if (f->node && f->node->ops && f->node->ops->close)
+    f->node->ops->close(f->node);
   kfree(f);
   cur->files[fd] = NULL;
   return 0;
