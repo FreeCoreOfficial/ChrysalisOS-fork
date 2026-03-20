@@ -19,3 +19,4 @@ tools/zig/zig-x86_64-linux-0.16.0-dev.2905+5d71e3051
 tools/zig/zig-x86_64-linux-0.16.0-dev.2905+5d71e3051.tar.xz
 info/*
 os/build64
+xorg.md

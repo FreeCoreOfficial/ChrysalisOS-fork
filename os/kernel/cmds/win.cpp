@@ -1562,8 +1562,9 @@ extern "C" int cmd_launch(int argc, char **argv) {
       wm_mark_dirty();
     }
 
-    /* Poll Input */
-    while (input_pop(&ev)) {
+    /* Poll Input (bounded per-frame to avoid starvation on floods) */
+    int input_budget = 256;
+    while (input_budget-- > 0 && input_pop(&ev)) {
       /* Handle Global Keys */
       if (ev.type == INPUT_KEYBOARD && ev.pressed) {
         if (ev.keycode == 0x58) { /* F12 to Exit */

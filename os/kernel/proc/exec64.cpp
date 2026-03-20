@@ -7,14 +7,22 @@
 #include "../mem/user64_vm.h"
 #include "../sched/task64.h"
 #include "../fs/fs.h"
+#ifndef __x86_64__
+#include "../cmds/fat.h"
+#endif
 
 extern "C" void *kmalloc(size_t size);
 extern "C" void kfree(void *ptr);
 extern "C" const void *ramfs_read_file(const char *name, size_t *out_size);
+#ifndef __x86_64__
+extern "C" int fat32_read_file(const char *path, void *buf, uint32_t max_size);
+extern "C" int32_t fat32_get_file_size(const char *path);
+#endif
 
 #define PT_DYNAMIC 2
 #define PT_INTERP 3
 #define PT_PHDR 6
+#define PT_TLS 7
 
 #ifndef ET_DYN
 #define ET_DYN 3
@@ -75,6 +83,7 @@ typedef struct {
 #define ELF64_INTERP_BASE 0x0000000070000000ULL
 #define ELF64_STACK_TOP 0x0000000080000000ULL
 #define ELF64_STACK_SIZE (64 * 1024ULL)
+#define ELF64_TLS_BASE 0x000000007ffe0000ULL
 
 #define AT_NULL 0
 #define AT_PHDR 3
@@ -83,6 +92,7 @@ typedef struct {
 #define AT_PAGESZ 6
 #define AT_BASE 7
 #define AT_ENTRY 9
+#define AT_TLS 25
 
 typedef struct {
   const char *name;
@@ -112,6 +122,11 @@ typedef struct {
   uint64_t hash_addr;
   uint64_t gnu_hash_addr;
   uint32_t sym_count;
+
+  uint64_t tls_offset;
+  uint64_t tls_filesz;
+  uint64_t tls_memsz;
+  uint64_t tls_align;
 } elf64_image_t;
 
 static const uint8_t *read_exec64(const char *path, size_t *out_size,
@@ -128,6 +143,27 @@ static const uint8_t *read_exec64(const char *path, size_t *out_size,
       return (const uint8_t *)rdata;
     }
   }
+
+#ifndef __x86_64__
+  if (path && path[0] == '/') {
+    fat_automount();
+    int32_t fsz = fat32_get_file_size(path);
+    if (fsz > 0) {
+      uint8_t *buf = (uint8_t *)kmalloc((size_t)fsz);
+      if (!buf)
+        return nullptr;
+      int bytes = fat32_read_file(path, buf, (uint32_t)fsz);
+      if (bytes == fsz) {
+        if (out_size)
+          *out_size = (size_t)fsz;
+        if (out_owned)
+          *out_owned = 1;
+        return buf;
+      }
+      kfree(buf);
+    }
+  }
+#endif
 
   return nullptr;
 }
@@ -451,6 +487,10 @@ static int load_elf64_image(const uint8_t *file_data, size_t file_size,
   uint64_t phdr_addr = 0;
   uint64_t phent = eh->e_phentsize;
   uint64_t phnum = eh->e_phnum;
+  uint64_t tls_offset = 0;
+  uint64_t tls_filesz = 0;
+  uint64_t tls_memsz = 0;
+  uint64_t tls_align = 0;
 
   for (uint16_t i = 0; i < eh->e_phnum; i++) {
     if (phdr[i].p_type == PT_PHDR)
@@ -463,6 +503,12 @@ static int load_elf64_image(const uint8_t *file_data, size_t file_size,
         memcpy(interp_buf, file_data + phdr[i].p_offset, len);
         interp_buf[len] = 0;
       }
+    }
+    if (phdr[i].p_type == PT_TLS) {
+      tls_offset = phdr[i].p_offset;
+      tls_filesz = phdr[i].p_filesz;
+      tls_memsz = phdr[i].p_memsz;
+      tls_align = phdr[i].p_align;
     }
     if (phdr[i].p_type != PT_LOAD)
       continue;
@@ -498,6 +544,10 @@ static int load_elf64_image(const uint8_t *file_data, size_t file_size,
     out_img->phnum = phnum;
     out_img->is_main = 0;
     out_img->sym_count = 0;
+    out_img->tls_offset = tls_offset;
+    out_img->tls_filesz = tls_filesz;
+    out_img->tls_memsz = tls_memsz;
+    out_img->tls_align = tls_align;
     if (elf64_parse_dynamic(out_img, eh, phdr, eh->e_phnum) < 0)
       return -1;
   }
@@ -507,7 +557,7 @@ static int load_elf64_image(const uint8_t *file_data, size_t file_size,
 static uint64_t build_user_stack(char *const argv[], uint64_t stack_top,
                                  uint64_t at_entry, uint64_t at_phdr,
                                  uint64_t at_phent, uint64_t at_phnum,
-                                 uint64_t at_base) {
+                                 uint64_t at_base, uint64_t at_tls) {
   uint64_t sp = stack_top;
 
   int argc = 0;
@@ -557,6 +607,10 @@ static uint64_t build_user_stack(char *const argv[], uint64_t stack_top,
   push64(AT_PAGESZ);
   push64(at_base);
   push64(AT_BASE);
+  if (at_tls) {
+    push64(at_tls);
+    push64(AT_TLS);
+  }
 
   push64(0);
   for (int i = envc - 1; i >= 0; i--)
@@ -768,9 +822,29 @@ static int exec64_from_buffer(const uint8_t *file_data, size_t file_size,
     entry = images[interp_index].entry;
   }
 
+  uint64_t at_tls = 0;
+  if (images[0].tls_memsz > 0) {
+    uint64_t tls_base = ELF64_TLS_BASE;
+    if (images[0].tls_align &&
+        (images[0].tls_align & (images[0].tls_align - 1)) == 0) {
+      tls_base &= ~(images[0].tls_align - 1);
+    }
+    uint64_t tls_size = images[0].tls_memsz;
+    if (map_user_segment(tls_base, tls_size, PF_R | PF_W) < 0)
+      return -1;
+    if (images[0].tls_filesz > 0 &&
+        images[0].tls_offset + images[0].tls_filesz <= file_size) {
+      memcpy((void *)(uintptr_t)tls_base,
+             file_data + images[0].tls_offset,
+             (size_t)images[0].tls_filesz);
+    }
+    at_tls = tls_base;
+  }
+
   uint64_t rsp = build_user_stack(argv ? argv : (char *const *)"", stack_top,
                                   images[0].entry, images[0].phdr,
-                                  images[0].phent, images[0].phnum, at_base);
+                                  images[0].phent, images[0].phnum, at_base,
+                                  at_tls);
 
   user64_init_process(image_end);
   task64_set_user_stack(rsp);
@@ -779,6 +853,8 @@ static int exec64_from_buffer(const uint8_t *file_data, size_t file_size,
   ctx.rip = entry;
   ctx.rsp = rsp;
   ctx.rflags = 0x202;
+  ctx.fs_base = at_tls;
+  ctx.gs_base = 0;
   user64_enter(&ctx);
   return 0;
 }

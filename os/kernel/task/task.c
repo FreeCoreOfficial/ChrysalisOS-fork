@@ -20,6 +20,8 @@
 #include "../include/task.h"
 #include "../mm/paging.h"
 #include "../time/timer.h"
+#include "../arch/i386/gdt.h"
+#include "../string.h"
 
 /* Freestanding-friendly tiny helpers */
 static void *k_memset(void *s, int c, size_t n) {
@@ -56,6 +58,14 @@ static inline uint32_t task_read_cr3(void) {
   return cr3;
 }
 
+static void task_apply_tls(task_t *t) {
+  if (!t)
+    return;
+  gdt_set_tls_base(t->tls_base);
+  uint16_t sel = gdt_get_tls_selector();
+  asm volatile("movw %0, %%gs" : : "rm"(sel));
+}
+
 /* Every task starts in this trampoline so return from entry is always handled.
    This mirrors Linux-style "if task function returns -> do_exit". */
 static __attribute__((noreturn)) void task_entry_trampoline(void) {
@@ -67,6 +77,15 @@ static __attribute__((noreturn)) void task_entry_trampoline(void) {
   if (!entry) {
     terminal_writestring("[TASK] Null entry in trampoline. Exiting task.\n");
     task_exit(-1);
+  }
+
+  if (current_task && current_task->user_stack) {
+    uint32_t usp = current_task->user_stack;
+    asm volatile("movl %0, %%esp\n"
+                 "jmp *%1\n"
+                 :
+                 : "r"(usp), "r"(entry)
+                 : "memory");
   }
 
   entry();
@@ -134,6 +153,7 @@ void schedule(void) {
     /* context_switch.S will save context and LOAD new stack.
        It also re-enables interrupts via sti before ret. */
     context_switch(&prev->kstack_ptr, &next->kstack_ptr);
+    task_apply_tls(current_task);
   } else {
     if (next->cr3 && next->cr3 != task_read_cr3()) {
       paging_load_directory(next->cr3);
@@ -142,6 +162,7 @@ void schedule(void) {
     /* No real context switch available */
     current_task = next;
     _pcb_set_current(next->pid);
+    task_apply_tls(current_task);
     asm volatile("sti");
   }
 }
@@ -390,6 +411,13 @@ void task_exit(int code) {
   extern void wm_cleanup_task_windows(void *task_ptr);
   wm_cleanup_task_windows(to_free);
 
+  if (to_free->clear_tid_addr) {
+    extern int syscall_user_range_ok(const void *ptr, uint32_t len);
+    uint32_t *p = (uint32_t *)(uintptr_t)to_free->clear_tid_addr;
+    if (syscall_user_range_ok(p, sizeof(uint32_t)))
+      *p = 0;
+  }
+
   to_free->state = TASK_ZOMBIE;
 
   schedule();
@@ -397,4 +425,64 @@ void task_exit(int code) {
   /* Should never return */
   for (;;)
     asm volatile("hlt");
+}
+
+void syscall_capture_kstack(uint32_t sp) {
+  if (!current_task)
+    return;
+  current_task->kstack_ptr = (uint32_t *)(uintptr_t)sp;
+}
+
+task_t *task_clone_current(uint32_t child_stack) {
+  if (!current_task)
+    return NULL;
+
+  task_t *child = (task_t *)kmalloc(sizeof(task_t));
+  if (!child)
+    return NULL;
+  k_memset(child, 0, sizeof(*child));
+
+  /* clone state */
+  *child = *current_task;
+  child->pid = (int)next_pid++;
+  child->state = TASK_READY;
+  child->next = NULL;
+
+  /* copy kernel stack frame */
+  uintptr_t parent_top =
+      (uintptr_t)current_task->kstack + sizeof(current_task->kstack);
+  uintptr_t parent_sp = (uintptr_t)current_task->kstack_ptr;
+  if (parent_sp < (uintptr_t)current_task->kstack ||
+      parent_sp > parent_top) {
+    kfree(child);
+    return NULL;
+  }
+  size_t used = parent_top - parent_sp;
+  uintptr_t child_top = (uintptr_t)child->kstack + sizeof(child->kstack);
+  uintptr_t child_sp = child_top - used;
+  memcpy((void *)(uintptr_t)child_sp, (const void *)(uintptr_t)parent_sp,
+         used);
+  child->kstack_ptr = (uint32_t *)(uintptr_t)child_sp;
+
+  /* patch child return value (EAX=0) */
+  uint32_t *eax_slot = (uint32_t *)(uintptr_t)(child_sp + 28);
+  *eax_slot = 0;
+
+  /* patch child user stack in iret frame if provided */
+  if (child_stack) {
+    uint32_t *user_esp_slot = (uint32_t *)(uintptr_t)(child_sp + 32 + 12);
+    *user_esp_slot = child_stack;
+    child->user_stack = child_stack;
+  }
+
+  /* insert into circular list */
+  if (!task_list) {
+    child->next = child;
+    task_list = child;
+  } else {
+    child->next = task_list->next;
+    task_list->next = child;
+  }
+
+  return child;
 }

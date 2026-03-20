@@ -8,7 +8,7 @@ LD = ld
 
 CHRYVER := $(shell sed -n 's/^CHRYVER= *\"\\(.*\\)\".*/\\1/p' ../os/Makefile)
 
-CFLAGS = -fno-builtin -Wall -Wextra -ffreestanding -O2 -m32 -I../os/kernel/include -DNO_FRAMEBUFFER
+CFLAGS = -fno-builtin -Wall -Wextra -ffreestanding -O2 -m32 -I../os/kernel/include -I../os/kernel -DNO_FRAMEBUFFER -DINSTALLER_BUILD
 CXXFLAGS = $(CFLAGS) -fno-exceptions -fno-rtti
 ifneq ($(strip $(CHRYVER)),)
 CFLAGS += -DCHRYVER=\"$(CHRYVER)\"
@@ -37,7 +37,15 @@ OBJS = \
 	../os/build/serial.o \
 	../os/build/ramfs.o \
 	../os/build/ramfs_add.o \
+	../os/build/input/input.o \
 	../os/build/string.o \
+	$(BUILD)/usb_core.o \
+	$(BUILD)/uhci.o \
+	$(BUILD)/ehci.o \
+	$(BUILD)/xhci.o \
+	$(BUILD)/usb_hid.o \
+	$(BUILD)/usb_hub.o \
+	$(BUILD)/usb_msc.o \
 	$(BUILD)/cmd_ls.o \
 	$(BUILD)/cmd_cd.o \
 	$(BUILD)/cmd_reboot.o \
@@ -87,6 +95,42 @@ $(BUILD)/ata_installer.o: ../os/kernel/storage/ata.c
 	@mkdir -p $(BUILD)
 	@echo "[BUILD] ata.c (installer serial-only logs)"
 	$(CC) $(CFLAGS) -DATA_LOG_SERIAL_ONLY=1 -c $< -o $@
+
+# USB stack (installer build)
+$(BUILD)/usb_core.o: ../os/kernel/usb/usb_core.c
+	@mkdir -p $(BUILD)
+	@echo "[BUILD] usb_core.c"
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/uhci.o: ../os/kernel/usb/uhci.c
+	@mkdir -p $(BUILD)
+	@echo "[BUILD] uhci.c"
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/ehci.o: ../os/kernel/usb/ehci.c
+	@mkdir -p $(BUILD)
+	@echo "[BUILD] ehci.c"
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/xhci.o: ../os/kernel/usb/xhci.c
+	@mkdir -p $(BUILD)
+	@echo "[BUILD] xhci.c"
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/usb_hid.o: ../os/kernel/usb/usb_hid.c
+	@mkdir -p $(BUILD)
+	@echo "[BUILD] usb_hid.c"
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/usb_hub.o: ../os/kernel/usb/usb_hub.c
+	@mkdir -p $(BUILD)
+	@echo "[BUILD] usb_hub.c"
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/usb_msc.o: ../os/kernel/usb/usb_msc.c
+	@mkdir -p $(BUILD)
+	@echo "[BUILD] usb_msc.c"
+	$(CC) $(CFLAGS) -c $< -o $@
 
 # Simple kmalloc for installer (no PMM)
 $(BUILD)/kmalloc_simple.o: kmalloc_simple.cpp

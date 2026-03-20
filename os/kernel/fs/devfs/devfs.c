@@ -2,9 +2,11 @@
 #include "../vfs/fs_ops.h"
 #include "../../mem/kmalloc.h"
 #include "../../string.h"
+#include "../../video/kms.h"
 #ifndef __x86_64__
 #include "../../terminal.h"
 #include "../../input/keyboard_buffer.h"
+#include "../../video/framebuffer.h"
 #else
 #include "../../drivers/serial.h"
 #endif
@@ -15,7 +17,10 @@
 typedef enum {
   DEV_TTY = 1,
   DEV_NULL,
-  DEV_ZERO
+  DEV_ZERO,
+  DEV_FB0,
+  DEV_DRI_DIR,
+  DEV_DRI_CARD0
 } dev_type_t;
 
 typedef struct dev_node {
@@ -29,6 +34,9 @@ static dev_node_t dev_root;
 static dev_node_t dev_tty;
 static dev_node_t dev_null;
 static dev_node_t dev_zero;
+static dev_node_t dev_fb0;
+static dev_node_t dev_dri;
+static dev_node_t dev_card0;
 
 static int devfs_open(struct vnode *n) {
   (void)n;
@@ -38,6 +46,16 @@ static int devfs_open(struct vnode *n) {
 static int devfs_close(struct vnode *n) {
   (void)n;
   return 0;
+}
+
+static int devfs_ioctl(struct vnode *n, uint32_t cmd, void *arg) {
+  if (!n)
+    return -1;
+  dev_node_t *dn = (dev_node_t *)n;
+  if (dn->type == DEV_DRI_CARD0) {
+    return kms_ioctl(cmd, arg);
+  }
+  return -1;
 }
 
 static int devfs_read(struct vnode *n, uint32_t off, uint8_t *buf,
@@ -83,6 +101,31 @@ static int devfs_read(struct vnode *n, uint32_t off, uint8_t *buf,
   case DEV_ZERO:
     memset(buf, 0, size);
     return (int)size;
+  case DEV_FB0: {
+#ifndef __x86_64__
+    uint32_t w = 0, h = 0, pitch = 0;
+    uint8_t bpp = 0;
+    uint8_t *fb = NULL;
+    fb_get_info(&w, &h, &pitch, &bpp, &fb);
+    if (!fb || pitch == 0 || h == 0)
+      return 0;
+    uint32_t fb_size = pitch * h;
+    if (off >= fb_size)
+      return 0;
+    uint32_t to_copy = size;
+    if (off + to_copy > fb_size)
+      to_copy = fb_size - off;
+    memcpy(buf, fb + off, to_copy);
+    return (int)to_copy;
+#else
+    (void)off;
+    return 0;
+#endif
+  }
+  case DEV_DRI_CARD0:
+    return 0;
+  case DEV_DRI_DIR:
+    return 0;
   default:
     return 0;
   }
@@ -108,6 +151,31 @@ static int devfs_write(struct vnode *n, uint32_t off, const uint8_t *buf,
     return (int)size;
   case DEV_ZERO:
     return (int)size;
+  case DEV_FB0: {
+#ifndef __x86_64__
+    uint32_t w = 0, h = 0, pitch = 0;
+    uint8_t bpp = 0;
+    uint8_t *fb = NULL;
+    fb_get_info(&w, &h, &pitch, &bpp, &fb);
+    if (!fb || pitch == 0 || h == 0)
+      return 0;
+    uint32_t fb_size = pitch * h;
+    if (off >= fb_size)
+      return 0;
+    uint32_t to_copy = size;
+    if (off + to_copy > fb_size)
+      to_copy = fb_size - off;
+    memcpy(fb + off, buf, to_copy);
+    return (int)to_copy;
+#else
+    (void)off;
+    return 0;
+#endif
+  }
+  case DEV_DRI_CARD0:
+    return (int)size;
+  case DEV_DRI_DIR:
+    return 0;
   default:
     return 0;
   }
@@ -141,22 +209,37 @@ static uint32_t devfs_poll(struct vnode *n, uint32_t events) {
 static int devfs_readdir(struct vnode *dir, uint32_t index, struct vnode **out) {
   if (!dir || !out)
     return 0;
-  if (dir != &dev_root.vnode)
-    return 0;
-  switch (index) {
-  case 0:
-    *out = &dev_tty.vnode;
-    return 1;
-  case 1:
-    *out = &dev_null.vnode;
-    return 1;
-  case 2:
-    *out = &dev_zero.vnode;
-    return 1;
-  default:
+  if (dir == &dev_root.vnode) {
+    switch (index) {
+    case 0:
+      *out = &dev_tty.vnode;
+      return 1;
+    case 1:
+      *out = &dev_null.vnode;
+      return 1;
+    case 2:
+      *out = &dev_zero.vnode;
+      return 1;
+    case 3:
+      *out = &dev_fb0.vnode;
+      return 1;
+    case 4:
+      *out = &dev_dri.vnode;
+      return 1;
+    default:
+      *out = NULL;
+      return 0;
+    }
+  }
+  if (dir == &dev_dri.vnode) {
+    if (index == 0) {
+      *out = &dev_card0.vnode;
+      return 1;
+    }
     *out = NULL;
     return 0;
   }
+  return 0;
 }
 
 static void devfs_init_node(dev_node_t *node, const char *name,
@@ -170,6 +253,7 @@ static void devfs_init_node(dev_node_t *node, const char *name,
   node->vnode.ops = &devfs_ops;
   node->vnode.internal = node;
   node->vnode.parent = parent;
+  node->vnode.size = 0;
 }
 
 vnode_t *devfs_root(void) {
@@ -183,6 +267,7 @@ vnode_t *devfs_root(void) {
   devfs_ops.write = devfs_write;
   devfs_ops.close = devfs_close;
   devfs_ops.poll = devfs_poll;
+  devfs_ops.ioctl = devfs_ioctl;
   devfs_ops.readdir = devfs_readdir;
 
   devfs_init_node(&dev_root, "dev", VNODE_DIR, DEV_NULL, NULL);
@@ -191,6 +276,10 @@ vnode_t *devfs_root(void) {
   devfs_init_node(&dev_tty, "tty", VNODE_DEV, DEV_TTY, &dev_root.vnode);
   devfs_init_node(&dev_null, "null", VNODE_DEV, DEV_NULL, &dev_root.vnode);
   devfs_init_node(&dev_zero, "zero", VNODE_DEV, DEV_ZERO, &dev_root.vnode);
+  devfs_init_node(&dev_fb0, "fb0", VNODE_DEV, DEV_FB0, &dev_root.vnode);
+  devfs_init_node(&dev_dri, "dri", VNODE_DIR, DEV_DRI_DIR, &dev_root.vnode);
+  devfs_init_node(&dev_card0, "card0", VNODE_DEV, DEV_DRI_CARD0,
+                  &dev_dri.vnode);
 
   return &dev_root.vnode;
 }

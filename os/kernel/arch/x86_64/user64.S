@@ -11,6 +11,20 @@ user64_enter:
 
     mov rsp, rax
 
+    ; set FS base (MSR 0xC0000100)
+    mov rax, [rdi + 24]
+    mov rdx, rax
+    shr rdx, 32
+    mov ecx, 0xC0000100
+    wrmsr
+
+    ; set GS base (MSR 0xC0000101)
+    mov rax, [rdi + 32]
+    mov rdx, rax
+    shr rdx, 32
+    mov ecx, 0xC0000101
+    wrmsr
+
     ; sysretq will:
     ;   rip <- rcx
     ;   rflags <- r11

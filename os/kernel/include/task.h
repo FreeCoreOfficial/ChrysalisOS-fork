@@ -37,6 +37,15 @@ typedef enum {
 #define TASK_LINUX_MAX_SIGNALS 64
 #define TASK_LINUX_EPOLL_FD_BASE 64
 #define TASK_LINUX_EPOLL_MAX 32
+#define USER32_VMA_MAX 64
+
+typedef struct user32_vma {
+  uint32_t start;
+  uint32_t end;
+  int prot;
+  int flags;
+  int used;
+} user32_vma_t;
 
 typedef struct linux_sig_action {
   void (*handler)(int);
@@ -84,6 +93,17 @@ typedef struct task {
   uint64_t sig_mask;
   linux_sig_action_t sig_actions[TASK_LINUX_MAX_SIGNALS];
   void *epoll_table[TASK_LINUX_EPOLL_MAX];
+
+  /* Linux compatibility: i386 TLS + TID addresses */
+  uint32_t tls_base;
+  uint32_t clear_tid_addr;
+  uint32_t set_tid_addr;
+
+  /* Linux compatibility: i386 user-space memory tracking */
+  uint32_t user_brk_start;
+  uint32_t user_brk_end;
+  uint32_t user_mmap_base;
+  user32_vma_t user_vmas[USER32_VMA_MAX];
 } task_t;
 
 /* Helper to push event to task queue */
@@ -91,6 +111,9 @@ void task_push_event(task_t *t, input_event_t *ev);
 /* Helper to pop event from task queue */
 int task_pop_event(task_t *t, input_event_t *ev);
 void task_kill_user_apps(void);
+
+void syscall_capture_kstack(uint32_t sp);
+task_t *task_clone_current(uint32_t child_stack);
 #endif
 
 /* API minim */

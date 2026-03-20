@@ -178,6 +178,32 @@ void serial_set_vga_mirror(int enabled) {
   serial_vga_mirror_enabled = enabled ? 1 : 0;
 }
 
+/* IRQ stub for installer (no real interrupts) */
+typedef struct regs {
+  uint32_t gs, fs, es, ds;
+  uint32_t edi, esi, ebp, esp, ebx, edx, ecx, eax;
+  uint32_t int_no, err_code;
+  uint32_t eip, cs, eflags, useresp, ss;
+} registers_t;
+
+void irq_install_handler(int irq, void (*handler)(registers_t *r)) {
+  (void)irq;
+  (void)handler;
+}
+
+/* Minimal timer/HPET stubs for USB polling */
+uint32_t timer_uptime_ms(void) {
+  static uint32_t t = 0;
+  t += 10;
+  return t;
+}
+
+void hpet_delay_ms(uint32_t ms) {
+  volatile uint32_t spins = ms * 10000u;
+  while (spins--)
+    asm volatile("pause");
+}
+
 extern void serial_write(char c);
 extern void serial_write_string(const char *s);
 

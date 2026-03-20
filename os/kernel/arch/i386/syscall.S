@@ -10,6 +10,13 @@ syscall_handler:
     ; Keep full 32-bit state so stack stays compatible with iretd frame.
     pushad
 
+    ; capture kernel stack pointer for clone()
+    extern syscall_capture_kstack
+    mov eax, esp
+    push eax
+    call syscall_capture_kstack
+    add esp, 4
+
     ; push syscall_dispatch(num, a1, a2, a3, a4, a5, a6)
     ; pushad layout at [esp]:
     ;   0: edi, 4: esi, 8: ebp, 12: old esp, 16: ebx, 20: edx, 24: ecx, 28: eax

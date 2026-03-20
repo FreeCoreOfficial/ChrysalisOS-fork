@@ -13,6 +13,7 @@
 #include "../memory/pmm.h"
 #include "../mm/paging.h"
 #include "../mm/vmm.h"
+#include "../mem/user32_vm.h"
 #include "../elf/elf64.h"
 #include "../arch/x86_64/longmode.h"
 #include "exec64.h"
@@ -81,6 +82,7 @@ typedef struct {
 #define PT_LOAD 1
 #define PT_DYNAMIC 2
 #define PT_INTERP 3
+#define PT_TLS 7
 
 typedef struct {
   int32_t d_tag;
@@ -144,6 +146,7 @@ typedef struct {
 #define ELF32_DYN_BASE 0x40000000u
 #define ELF32_STACK_TOP 0xBFF00000u
 #define ELF32_STACK_SIZE (64 * 1024u)
+#define ELF32_TLS_BASE 0xBFE00000u
 
 /* Helper to read file content into a buffer */
 static const uint8_t *read_executable(const char *path, size_t *out_size,
@@ -206,6 +209,168 @@ static uint8_t *as_translate_ptr(address_space_t *as, uint32_t vaddr) {
                                 (vaddr & (PAGE_SIZE - 1)));
 }
 
+static int as_write(address_space_t *as, uint32_t vaddr, const void *src,
+                    size_t len) {
+  if (!as || !src || len == 0)
+    return -1;
+  const uint8_t *p = (const uint8_t *)src;
+  size_t remaining = len;
+  uint32_t cur = vaddr;
+  while (remaining > 0) {
+    uint32_t page_off = cur & (PAGE_SIZE - 1);
+    uint32_t chunk = PAGE_SIZE - page_off;
+    if (chunk > remaining)
+      chunk = (uint32_t)remaining;
+    uint8_t *dst = as_translate_ptr(as, cur);
+    if (!dst)
+      return -1;
+    memcpy(dst, p, chunk);
+    p += chunk;
+    cur += chunk;
+    remaining -= chunk;
+  }
+  return 0;
+}
+
+static int map_user_stack(address_space_t *as, uint32_t top,
+                          uint32_t size) {
+  if (!as || !as->page_directory || size == 0)
+    return -1;
+  uint32_t start = (top - size) & PAGE_FRAME_MASK;
+  for (uint32_t va = start; va < top; va += PAGE_SIZE) {
+    uint32_t *pte = get_pte_for(as->page_directory, va, 0);
+    if (!pte || !(*pte & PAGE_PRESENT)) {
+      void *page = vmm_alloc_page();
+      if (!page)
+        return -1;
+      uint32_t phys = vmm_virt_to_phys(page);
+      if (!phys)
+        return -1;
+      vmm_map_page(as->page_directory, va, phys,
+                   PAGE_PRESENT | PAGE_RW | PAGE_USER);
+      memset(page, 0, PAGE_SIZE);
+    }
+  }
+  return 0;
+}
+
+static int map_user_region(address_space_t *as, uint32_t base, uint32_t size,
+                           uint32_t flags) {
+  if (!as || !as->page_directory || size == 0)
+    return -1;
+  uint32_t start = base & PAGE_FRAME_MASK;
+  uint32_t end = (base + size + PAGE_SIZE - 1) & PAGE_FRAME_MASK;
+  for (uint32_t va = start; va < end; va += PAGE_SIZE) {
+    uint32_t *pte = get_pte_for(as->page_directory, va, 0);
+    if (!pte || !(*pte & PAGE_PRESENT)) {
+      void *page = vmm_alloc_page();
+      if (!page)
+        return -1;
+      uint32_t phys = vmm_virt_to_phys(page);
+      if (!phys)
+        return -1;
+      vmm_map_page(as->page_directory, va, phys, flags);
+      memset(page, 0, PAGE_SIZE);
+    }
+  }
+  return 0;
+}
+
+static uint32_t build_linux_stack32(address_space_t *as, const char *filename,
+                                    char *const argv[], char *const envp[],
+                                    uint32_t at_phdr, uint32_t at_phent,
+                                    uint32_t at_phnum, uint32_t at_entry,
+                                    uint32_t at_base, uint32_t at_tls) {
+  if (!as)
+    return 0;
+
+  const int max_args = 64;
+  const char *argv_local[max_args + 1];
+  const char *env_local[max_args + 1];
+  int argc = 0;
+  int envc = 0;
+
+  if (!argv || !argv[0]) {
+    argv_local[argc++] = filename ? filename : "app";
+  } else {
+    for (; argv[argc] && argc < max_args; argc++)
+      argv_local[argc] = argv[argc];
+  }
+  argv_local[argc] = nullptr;
+
+  if (envp) {
+    for (; envp[envc] && envc < max_args; envc++)
+      env_local[envc] = envp[envc];
+  }
+  env_local[envc] = nullptr;
+
+  uint32_t sp = ELF32_STACK_TOP;
+
+  const uint32_t argv_ptrs_count = (uint32_t)argc;
+  const uint32_t env_ptrs_count = (uint32_t)envc;
+  uint32_t argv_ptrs[max_args];
+  uint32_t env_ptrs[max_args];
+
+  for (int i = envc - 1; i >= 0; i--) {
+    size_t len = strlen(env_local[i]) + 1;
+    sp -= (uint32_t)len;
+    if (as_write(as, sp, env_local[i], len) < 0)
+      return 0;
+    env_ptrs[i] = sp;
+  }
+
+  for (int i = argc - 1; i >= 0; i--) {
+    size_t len = strlen(argv_local[i]) + 1;
+    sp -= (uint32_t)len;
+    if (as_write(as, sp, argv_local[i], len) < 0)
+      return 0;
+    argv_ptrs[i] = sp;
+  }
+
+  sp &= ~0xFu;
+
+  struct auxv_pair {
+    uint32_t key;
+    uint32_t val;
+  };
+  auxv_pair auxv[] = {
+      {3, at_phdr},    {4, at_phent}, {5, at_phnum}, {6, PAGE_SIZE},
+      {7, at_base},    {9, at_entry}, {11, 0},       {12, 0},
+      {13, 0},         {14, 0},       {23, 0},       {0, 0}};
+
+  if (at_tls) {
+    auxv_pair tls_pair = {25, at_tls};
+    sp -= sizeof(auxv_pair);
+    if (as_write(as, sp, &tls_pair, sizeof(auxv_pair)) < 0)
+      return 0;
+  }
+
+  for (int i = (int)(sizeof(auxv) / sizeof(auxv[0])) - 1; i >= 0; i--) {
+    sp -= sizeof(auxv_pair);
+    if (as_write(as, sp, &auxv[i], sizeof(auxv_pair)) < 0)
+      return 0;
+  }
+
+  uint32_t zero = 0;
+  sp -= sizeof(uint32_t);
+  as_write(as, sp, &zero, sizeof(uint32_t));
+  for (int i = env_ptrs_count - 1; i >= 0; i--) {
+    sp -= sizeof(uint32_t);
+    as_write(as, sp, &env_ptrs[i], sizeof(uint32_t));
+  }
+
+  sp -= sizeof(uint32_t);
+  as_write(as, sp, &zero, sizeof(uint32_t));
+  for (int i = argv_ptrs_count - 1; i >= 0; i--) {
+    sp -= sizeof(uint32_t);
+    as_write(as, sp, &argv_ptrs[i], sizeof(uint32_t));
+  }
+
+  sp -= sizeof(uint32_t);
+  as_write(as, sp, &argv_ptrs_count, sizeof(uint32_t));
+  return sp;
+}
+
 typedef struct {
   const char *name;
   address_space_t *as;
@@ -238,6 +403,11 @@ typedef struct {
   uint32_t hash_addr;
   uint32_t gnu_hash_addr;
   uint32_t sym_count;
+
+  uint32_t tls_offset;
+  uint32_t tls_filesz;
+  uint32_t tls_memsz;
+  uint32_t tls_align;
 } elf32_image_t;
 
 static uint32_t elf32_sym_count_from_hash(address_space_t *as,
@@ -677,7 +847,17 @@ static int load_elf32_image(const uint8_t *file_data, size_t file_size,
 
   Elf32_Phdr *phdr = (Elf32_Phdr *)(file_data + ehdr->e_phoff);
   uint32_t image_end = 0;
+  uint32_t tls_offset = 0;
+  uint32_t tls_filesz = 0;
+  uint32_t tls_memsz = 0;
+  uint32_t tls_align = 0;
   for (int i = 0; i < ehdr->e_phnum; i++) {
+    if (phdr[i].p_type == PT_TLS) {
+      tls_offset = phdr[i].p_offset;
+      tls_filesz = phdr[i].p_filesz;
+      tls_memsz = phdr[i].p_memsz;
+      tls_align = phdr[i].p_align;
+    }
     if (phdr[i].p_type != PT_LOAD)
       continue;
     if ((size_t)phdr[i].p_offset + (size_t)phdr[i].p_filesz > file_size)
@@ -732,14 +912,49 @@ static int load_elf32_image(const uint8_t *file_data, size_t file_size,
   out_img->phdr = load_base + ehdr->e_phoff;
   out_img->phent = ehdr->e_phentsize;
   out_img->phnum = ehdr->e_phnum;
+  out_img->tls_offset = tls_offset;
+  out_img->tls_filesz = tls_filesz;
+  out_img->tls_memsz = tls_memsz;
+  out_img->tls_align = tls_align;
   if (elf32_parse_dynamic(out_img, ehdr, phdr) < 0)
     return -1;
   return 0;
 }
 
+static const char *elf32_find_interp(const uint8_t *file_data, size_t file_size,
+                                     const Elf32_Ehdr *ehdr, char *buf,
+                                     size_t buf_sz) {
+  if (!file_data || !ehdr || !buf || buf_sz == 0)
+    return nullptr;
+  if (ehdr->e_phoff == 0 || ehdr->e_phnum == 0)
+    return nullptr;
+  size_t ph_table_size = (size_t)ehdr->e_phnum * ehdr->e_phentsize;
+  if (ehdr->e_phoff + ph_table_size > file_size)
+    return nullptr;
+  const Elf32_Phdr *phdr =
+      (const Elf32_Phdr *)(file_data + ehdr->e_phoff);
+  for (int i = 0; i < ehdr->e_phnum; i++) {
+    if (phdr[i].p_type != PT_INTERP)
+      continue;
+    if (phdr[i].p_offset >= file_size)
+      return nullptr;
+    size_t max_len = file_size - phdr[i].p_offset;
+    size_t copy_len = phdr[i].p_filesz;
+    if (copy_len > max_len)
+      copy_len = max_len;
+    if (copy_len >= buf_sz)
+      copy_len = buf_sz - 1;
+    memcpy(buf, file_data + phdr[i].p_offset, copy_len);
+    buf[copy_len] = 0;
+    return buf;
+  }
+  return nullptr;
+}
+
 static int execve_impl(const char *filename, char *const argv[],
                        char *const envp[], uint8_t abi) {
-  (void)envp;
+  const char *interp_path = nullptr;
+  char interp_buf[256];
 
   /* Hook for Chrysalis Script Interpreter (/bin/cs) */
   if (strcmp(filename, "/bin/cs") == 0) {
@@ -782,6 +997,9 @@ static int execve_impl(const char *filename, char *const argv[],
   terminal_printf("[EXEC] ELF Loaded. Entry=0x%x, Segments=%d\n", ehdr->e_entry,
                   ehdr->e_phnum);
 
+  interp_path = elf32_find_interp(file_data, file_size, ehdr, interp_buf,
+                                  sizeof(interp_buf));
+
   /* Create a private address space for this user app so multiple .petal apps
      can coexist without overlapping at the same virtual addresses. */
   address_space_t *as = address_space_create();
@@ -798,6 +1016,7 @@ static int execve_impl(const char *filename, char *const argv[],
   elf32_image_t images[16];
   elf32_image_t *image_ptrs[16];
   int img_count = 0;
+  int interp_index = -1;
 
   if (load_elf32_image(file_data, file_size, as, load_base, &images[0],
                        filename) < 0) {
@@ -813,6 +1032,51 @@ static int execve_impl(const char *filename, char *const argv[],
   images[0].is_main = 1;
   image_ptrs[0] = &images[0];
   img_count = 1;
+
+  if (interp_path && *interp_path) {
+    size_t interp_size = 0;
+    int interp_owned = 0;
+    const uint8_t *interp_data =
+        read_executable(interp_path, &interp_size, &interp_owned);
+    if (!interp_data) {
+      terminal_printf("[EXEC] Error: Missing interpreter '%s'\n", interp_path);
+      address_space_destroy(as);
+      if (owned)
+        kfree((void *)file_data);
+      return -1;
+    }
+    if (img_count >= (int)(sizeof(images) / sizeof(images[0]))) {
+      terminal_printf("[EXEC] Error: Too many shared libraries\n");
+      address_space_destroy(as);
+      if (owned)
+        kfree((void *)file_data);
+      if (interp_owned)
+        kfree((void *)interp_data);
+      return -1;
+    }
+    const Elf32_Ehdr *interp_eh = (const Elf32_Ehdr *)interp_data;
+    uint32_t interp_base =
+        (interp_eh && interp_eh->e_type == ET_DYN)
+            ? (ELF32_DYN_BASE + 0x20000000u)
+            : 0;
+    if (load_elf32_image(interp_data, interp_size, as, interp_base,
+                         &images[img_count], interp_path) < 0) {
+      terminal_printf("[EXEC] Error: Failed to load interpreter '%s'\n",
+                      interp_path);
+      address_space_destroy(as);
+      if (owned)
+        kfree((void *)file_data);
+      if (interp_owned)
+        kfree((void *)interp_data);
+      return -1;
+    }
+    images[img_count].file_data = interp_data;
+    images[img_count].file_size = interp_size;
+    images[img_count].owned = interp_owned;
+    image_ptrs[img_count] = &images[img_count];
+    interp_index = img_count;
+    img_count++;
+  }
 
   char base_dir_buf[256];
   const char *base_dir = basename_dir32(filename, base_dir_buf,
@@ -881,8 +1145,60 @@ static int execve_impl(const char *filename, char *const argv[],
   }
 
   /* Cleanup buffer */
+  uint32_t user_sp = 0;
+  uint32_t at_base = 0;
+  uint32_t at_tls = 0;
+  uint32_t main_entry = images[0].entry;
+  uint32_t entry_addr = images[0].entry;
+  if (interp_index >= 0) {
+    entry_addr = images[interp_index].entry;
+    at_base = images[interp_index].load_base;
+  }
+
+  if (abi == TASK_ABI_LINUX_I386) {
+    if (images[0].tls_memsz > 0) {
+      uint32_t tls_base = ELF32_TLS_BASE;
+      if (images[0].tls_align && (images[0].tls_align & (images[0].tls_align - 1)) == 0) {
+        tls_base &= ~(images[0].tls_align - 1);
+      }
+      uint32_t tls_size =
+          (images[0].tls_memsz + PAGE_SIZE - 1) & PAGE_FRAME_MASK;
+      if (map_user_region(as, tls_base, tls_size,
+                          PAGE_PRESENT | PAGE_RW | PAGE_USER) < 0) {
+        terminal_printf("[EXEC] Error: Could not map TLS region\n");
+        address_space_destroy(as);
+        return -1;
+      }
+      if (images[0].tls_filesz > 0 &&
+          images[0].tls_offset + images[0].tls_filesz <= images[0].file_size) {
+        if (as_write(as, tls_base,
+                     images[0].file_data + images[0].tls_offset,
+                     images[0].tls_filesz) < 0) {
+          terminal_printf("[EXEC] Error: Could not init TLS image\n");
+          address_space_destroy(as);
+          return -1;
+        }
+      }
+      at_tls = tls_base;
+    }
+
+    if (map_user_stack(as, ELF32_STACK_TOP, ELF32_STACK_SIZE) < 0) {
+      terminal_printf("[EXEC] Error: Could not map user stack\n");
+      address_space_destroy(as);
+      return -1;
+    }
+    user_sp = build_linux_stack32(as, filename, argv, envp, images[0].phdr,
+                                  images[0].phent, images[0].phnum,
+                                  main_entry, at_base, at_tls);
+    if (!user_sp) {
+      terminal_printf("[EXEC] Error: Could not build user stack\n");
+      address_space_destroy(as);
+      return -1;
+    }
+  }
+
   void (*entry_point)(void) =
-      (void (*)(void))(uintptr_t)(images[0].entry);
+      (void (*)(void))(uintptr_t)(entry_addr);
   for (int i = 0; i < img_count; i++) {
     if (images[i].owned)
       kfree((void *)images[i].file_data);
@@ -895,6 +1211,8 @@ static int execve_impl(const char *filename, char *const argv[],
     t->is_user_app = 1;
     t->abi = abi;
     t->cr3 = as_cr3;
+    if (user_sp)
+      t->user_stack = user_sp;
     t->launch_arg[0] = 0;
     const char *base = basename_ptr(filename);
     strncpy(t->name, base, sizeof(t->name) - 1);
@@ -903,6 +1221,7 @@ static int execve_impl(const char *filename, char *const argv[],
       strncpy(t->launch_arg, argv[1], sizeof(t->launch_arg) - 1);
       t->launch_arg[sizeof(t->launch_arg) - 1] = 0;
     }
+    user32_init_process(t, images[0].image_end);
   } else {
     terminal_printf("[EXEC] Error: Could not create task\n");
     address_space_destroy(as);

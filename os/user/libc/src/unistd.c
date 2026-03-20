@@ -41,4 +41,8 @@ int open(const char *path, int flags) {
 
 int close(int fd) { return syscall1(SYS_CLOSE, (uint32_t)fd); }
 
+int ioctl(int fd, uint32_t cmd, void *arg) {
+  return syscall3(SYS_IOCTL, (uint32_t)fd, cmd, (uint32_t)(uintptr_t)arg);
+}
+
 void _exit(int code) { syscall1(SYS_EXIT, (uint32_t)code); }

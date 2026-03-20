@@ -54,6 +54,14 @@ typedef struct {
     uint8_t  bNumConfigurations;
 } __attribute__((packed)) usb_dev_desc_t;
 
+typedef struct {
+    int (*control_transfer)(uint8_t addr, uint8_t endp, void* setup,
+                            void* data, uint16_t len);
+    void* (*interrupt_setup)(uint8_t addr, uint8_t endp, void* data,
+                             uint16_t len);
+    int (*interrupt_poll)(void* handle);
+} usb_hc_ops_t;
+
 /* Initializes the USB subsystem and scans for controllers */
 void usb_core_init(void);
 
@@ -62,6 +70,16 @@ void usb_attach_device(uint8_t port_id);
 
 /* Polls registered HID devices for input */
 void usb_poll(void);
+
+/* Host controller registration */
+void usb_register_hc(const usb_hc_ops_t* ops);
+
+/* HC generic helpers */
+int usb_control_transfer(uint8_t addr, uint8_t endp, void* setup, void* data,
+                         uint16_t len);
+void* usb_interrupt_setup(uint8_t addr, uint8_t endp, void* data,
+                          uint16_t len);
+int usb_interrupt_poll(void* handle);
 
 #ifdef __cplusplus
 }

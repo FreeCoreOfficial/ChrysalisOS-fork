@@ -242,6 +242,14 @@ void uhci_init(uint32_t io_base, uint8_t irq) {
     
     /* Check ports for initial connection */
     uhci_check_ports();
+
+    /* Register UHCI ops */
+    usb_hc_ops_t ops = {
+        .control_transfer = uhci_control_transfer,
+        .interrupt_setup = uhci_setup_interrupt,
+        .interrupt_poll = uhci_poll_interrupt
+    };
+    usb_register_hc(&ops);
     
     /* Force an interrupt for testing (optional, but good for verification) */
     /* We can't easily force an IRQ without a transaction, but we can verify

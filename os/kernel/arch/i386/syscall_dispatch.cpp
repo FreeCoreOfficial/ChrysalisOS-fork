@@ -198,6 +198,16 @@ static int sys_close(int fd) {
   return 0;
 }
 
+static int sys_ioctl(int fd, uint32_t cmd, void *arg) {
+  pcb_t *cur = pcb_get_current();
+  if (!cur || fd < 0 || fd >= MAX_FILES_PER_PROCESS)
+    return -1;
+  file_t *f = cur->files[fd];
+  if (!f || !f->node || !f->node->ops || !f->node->ops->ioctl)
+    return -1;
+  return f->node->ops->ioctl(f->node, cmd, arg);
+}
+
 int syscall_dispatch_chrys(uint32_t num, uint32_t a1, uint32_t a2,
                            uint32_t a3, uint32_t a4, uint32_t a5,
                            uint32_t a6) {
@@ -216,6 +226,9 @@ int syscall_dispatch_chrys(uint32_t num, uint32_t a1, uint32_t a2,
 
   case SYS_CLOSE:
     return sys_close((int)a1);
+
+  case SYS_IOCTL:
+    return sys_ioctl((int)a1, a2, (void *)(uintptr_t)a3);
 
   case SYS_EXIT:
     terminal_printf("[syscall] process exit code=%d\n", a1);

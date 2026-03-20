@@ -81,6 +81,7 @@ static int pipe_read(struct vnode *n, uint32_t off, uint8_t *buf,
     p->tail = (p->tail + 1) % PIPE_BUF_SIZE;
   }
   p->len -= to_read;
+  n->size = p->len;
   return (int)to_read;
 }
 
@@ -111,6 +112,7 @@ static int pipe_write(struct vnode *n, uint32_t off, const uint8_t *buf,
     p->head = (p->head + 1) % PIPE_BUF_SIZE;
     p->len++;
   }
+  n->size = p->len;
   return (int)written;
 }
 
@@ -176,11 +178,13 @@ int pipe_create(vnode_t **out_read, vnode_t **out_write) {
   rvn->type = VNODE_DEV;
   rvn->ops = &pipe_ops;
   rvn->internal = read_end;
+  rvn->size = 0;
 
   wvn->name = "pipe";
   wvn->type = VNODE_DEV;
   wvn->ops = &pipe_ops;
   wvn->internal = write_end;
+  wvn->size = 0;
 
   pipe_ops.open = pipe_open;
   pipe_ops.read = pipe_read;

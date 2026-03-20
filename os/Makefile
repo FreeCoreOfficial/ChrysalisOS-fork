@@ -116,6 +116,7 @@ OBJS = \
 	$(BUILD)/cmd_mem.o \
 	$(BUILD)/address_space.o \
 	$(BUILD)/user_mem.o \
+	$(BUILD)/mem/user32_vm.o \
 	$(BUILD)/copy_user.o \
 	$(BUILD)/vmm.o \
 	$(BUILD)/mm/paging.o \
@@ -194,6 +195,8 @@ OBJS = \
 	$(BUILD)/hardware/hpet.o \
 	$(BUILD)/usb/usb_core.o \
 	$(BUILD)/usb/uhci.o \
+	$(BUILD)/usb/ehci.o \
+	$(BUILD)/usb/xhci.o \
 	$(BUILD)/usb/usb_hid.o \
 	$(BUILD)/usb/usb_hub.o \
 	$(BUILD)/usb/usb_msc.o \
@@ -213,6 +216,7 @@ OBJS = \
 	$(BUILD)/fb_console.o \
 	$(BUILD)/gpu.o \
 	$(BUILD)/gpu_bochs.o \
+	$(BUILD)/kms.o \
 	$(BUILD)/vt.o \
 	$(BUILD)/colors/cl.o \
 	$(BUILD)/surface.o \
@@ -294,6 +298,7 @@ OBJS64 = \
 	$(BUILD64)/fs/devfs.o \
 	$(BUILD64)/fs/procfs.o \
 	$(BUILD64)/fs/pipe.o \
+	$(BUILD64)/video/kms.o \
 	$(BUILD64)/linux_compat/linux_syscall_x86_64.o \
 	$(BUILD64)/sched/task64.o \
 	$(BUILD64)/drivers/serial.o \
@@ -582,6 +587,10 @@ $(BUILD64)/fs/procfs.o: kernel/fs/procfs/procfs.c | dirs64
 	$(CC) $(CFLAGS64) -c $< -o $@
 
 $(BUILD64)/fs/pipe.o: kernel/fs/pipe/pipe.c | dirs64
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS64) -c $< -o $@
+
+$(BUILD64)/video/kms.o: kernel/video/kms.c | dirs64
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS64) -c $< -o $@
 
@@ -962,6 +971,14 @@ $(BUILD)/usb/uhci.o: kernel/usb/uhci.c | dirs
 	@mkdir -p $(BUILD)/usb
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD)/usb/ehci.o: kernel/usb/ehci.c | dirs
+	@mkdir -p $(BUILD)/usb
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/usb/xhci.o: kernel/usb/xhci.c | dirs
+	@mkdir -p $(BUILD)/usb
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD)/usb/usb_hid.o: kernel/usb/usb_hid.c | dirs
 	@mkdir -p $(BUILD)/usb
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -1042,6 +1059,9 @@ $(BUILD)/gpu.o: kernel/video/gpu.c | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/gpu_bochs.o: kernel/video/gpu_bochs.c | dirs
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/kms.o: kernel/video/kms.c | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/vt.o: kernel/vt/vt.c | dirs

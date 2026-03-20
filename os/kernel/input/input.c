@@ -3,7 +3,7 @@
 /* Kernel logging helper */
 extern void serial(const char *fmt, ...);
 
-#define INPUT_QUEUE_SIZE 256
+#define INPUT_QUEUE_SIZE 512
 
 static input_event_t queue[INPUT_QUEUE_SIZE];
 static int head = 0;
@@ -18,17 +18,35 @@ void input_init(void) {
 }
 
 void input_push(input_event_t event) {
+    /* Coalesce consecutive mouse-move events */
+    if (event.type == INPUT_MOUSE_MOVE && head != tail) {
+        int last = (head - 1 + INPUT_QUEUE_SIZE) % INPUT_QUEUE_SIZE;
+        if (queue[last].type == INPUT_MOUSE_MOVE) {
+            queue[last] = event;
+            return;
+        }
+    }
+
     int next = (head + 1) % INPUT_QUEUE_SIZE;
     if (next == tail) {
-        // Queue full, drop event
-        return;
+        /* Queue full: drop mouse-move, otherwise try to drop oldest mouse-move */
+        if (event.type == INPUT_MOUSE_MOVE) {
+            return;
+        }
+        if (queue[tail].type == INPUT_MOUSE_MOVE) {
+            tail = (tail + 1) % INPUT_QUEUE_SIZE;
+        } else {
+            /* Full of non-mouse events, drop this event */
+            return;
+        }
+        next = (head + 1) % INPUT_QUEUE_SIZE;
+        if (next == tail) {
+            return;
+        }
     }
-    
+
     queue[head] = event;
     head = next;
-    
-    // Optional debug
-    // serial("[INPUT] push key: %c (%d)\n", (char)event.keycode, event.pressed);
 }
 
 bool input_pop(input_event_t *out_event) {

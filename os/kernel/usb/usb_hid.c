@@ -1,6 +1,5 @@
 #include "usb_hid.h"
 #include "usb_core.h"
-#include "uhci.h"
 #include "../drivers/serial.h"
 #include "../mem/kmalloc.h"
 #include "../string.h"
@@ -66,7 +65,7 @@ void usb_hid_init(uint8_t addr, uint8_t* config_desc, uint16_t config_len) {
                 hid_devices[i].addr = addr;
                 hid_devices[i].ep = hid_ep;
                 hid_devices[i].buffer = (uint8_t*)kmalloc(hid_ep_size);
-                hid_devices[i].td_handle = uhci_setup_interrupt(addr, hid_ep, hid_devices[i].buffer, hid_ep_size);
+                hid_devices[i].td_handle = usb_interrupt_setup(addr, hid_ep, hid_devices[i].buffer, hid_ep_size);
                 memset(hid_devices[i].prev_buffer, 0, 8);
                 hid_devices[i].has_input = 0;
                 hid_devices[i].last_report_ms = 0;
@@ -86,7 +85,7 @@ void usb_hid_poll(void) {
 
         hid_device_t* dev = &hid_devices[i];
 
-        if (uhci_poll_interrupt(dev->td_handle)) {
+        if (usb_interrupt_poll(dev->td_handle)) {
             dev->last_report_ms = now_ms;
             if (!dev->has_input) {
                 dev->has_input = 1;

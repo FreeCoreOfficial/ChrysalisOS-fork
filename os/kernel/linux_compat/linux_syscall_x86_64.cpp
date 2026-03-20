@@ -34,6 +34,10 @@ extern "C" uint64_t syscall64_dispatch(uint64_t num, uint64_t a1, uint64_t a2,
 #define LINUX_NR_write 1
 #define LINUX_NR_open 2
 #define LINUX_NR_close 3
+#define LINUX_NR_stat 4
+#define LINUX_NR_fstat 5
+#define LINUX_NR_lstat 6
+#define LINUX_NR_lseek 8
 #define LINUX_NR_mmap 9
 #define LINUX_NR_mprotect 10
 #define LINUX_NR_munmap 11
@@ -50,6 +54,7 @@ extern "C" uint64_t syscall64_dispatch(uint64_t num, uint64_t a1, uint64_t a2,
 #define LINUX_NR_getgid 104
 #define LINUX_NR_getppid 110
 #define LINUX_NR_time 201
+#define LINUX_NR_clock_gettime 228
 #define LINUX_NR_exit 60
 #define LINUX_NR_exit_group 231
 #define LINUX_NR_openat 257
@@ -66,6 +71,10 @@ extern "C" uint64_t syscall64_dispatch(uint64_t num, uint64_t a1, uint64_t a2,
 #define LINUX_NR_epoll_create1 291
 #define LINUX_NR_pipe2 293
 #define LINUX_NR_tgkill 234
+#define LINUX_NR_clone 56
+#define LINUX_NR_arch_prctl 158
+#define LINUX_NR_gettid 186
+#define LINUX_NR_set_tid_address 218
 
 #define FUTEX_WAIT 0
 #define FUTEX_WAKE 1
@@ -104,6 +113,7 @@ extern "C" uint64_t syscall64_dispatch(uint64_t num, uint64_t a1, uint64_t a2,
 #define PROT_WRITE 0x2
 #define PROT_EXEC 0x4
 #define MAP_FIXED 0x10
+#define MAP_ANONYMOUS 0x20
 
 #define SIG_BLOCK 0
 #define SIG_UNBLOCK 1
@@ -113,6 +123,19 @@ extern "C" uint64_t syscall64_dispatch(uint64_t num, uint64_t a1, uint64_t a2,
 #define SIGCHLD 17
 #define SIGSTOP 19
 #define SIGWINCH 28
+
+#define CLONE_VM 0x00000100
+#define CLONE_FS 0x00000200
+#define CLONE_FILES 0x00000400
+#define CLONE_SIGHAND 0x00000800
+#define CLONE_THREAD 0x00010000
+#define CLONE_SETTLS 0x00080000
+#define CLONE_PARENT_SETTID 0x00100000
+#define CLONE_CHILD_CLEARTID 0x00200000
+#define CLONE_CHILD_SETTID 0x01000000
+
+#define ARCH_SET_FS 0x1002
+#define ARCH_GET_FS 0x1003
 
 typedef struct linux_sigaction64 {
   uint64_t handler;
@@ -131,6 +154,24 @@ typedef struct linux_pollfd {
   int16_t events;
   int16_t revents;
 } linux_pollfd_t;
+
+typedef struct linux_stat64 {
+  uint64_t st_dev;
+  uint64_t st_ino;
+  uint64_t st_nlink;
+  uint32_t st_mode;
+  uint32_t st_uid;
+  uint32_t st_gid;
+  uint32_t __pad0;
+  uint64_t st_rdev;
+  int64_t st_size;
+  int64_t st_blksize;
+  int64_t st_blocks;
+  struct linux_timespec64 st_atim;
+  struct linux_timespec64 st_mtim;
+  struct linux_timespec64 st_ctim;
+  int64_t __unused[3];
+} linux_stat64_t;
 
 typedef struct futex_waiter64 {
   uint64_t key;
@@ -160,6 +201,34 @@ static int linux_copy_to_user(void *dst, const void *src, uint32_t len) {
   if (!dst || !src || len == 0)
     return -LINUX_EFAULT;
   memcpy(dst, src, len);
+  return 0;
+}
+
+static int linux_mmap_load_file(uint64_t addr, uint64_t len, int fd,
+                                uint64_t file_off) {
+  if (fd < 0 || fd >= MAX_FILES_PER_PROCESS)
+    return -LINUX_EBADF;
+  file_t *f = syscall64_get_file(fd);
+  if (!f || !f->node || !f->node->ops || !f->node->ops->read)
+    return -LINUX_EBADF;
+
+  uint64_t remaining = len;
+  uint64_t dst = addr;
+  uint64_t off = file_off;
+  uint8_t tmp[256];
+  while (remaining > 0) {
+    uint32_t chunk =
+        remaining > sizeof(tmp) ? (uint32_t)sizeof(tmp) : (uint32_t)remaining;
+    int r = f->node->ops->read(f->node, (uint32_t)off, tmp, chunk);
+    if (r <= 0)
+      break;
+    memcpy((void *)(uintptr_t)dst, tmp, (uint32_t)r);
+    dst += (uint32_t)r;
+    off += (uint32_t)r;
+    remaining -= (uint32_t)r;
+    if ((uint32_t)r < chunk)
+      break;
+  }
   return 0;
 }
 
@@ -487,6 +556,80 @@ static int linux_sys_time(uint64_t a1) {
   return (int)now;
 }
 
+static uint16_t linux_mode_from_vnode(vnode_t *n) {
+  if (!n)
+    return 0;
+  switch (n->type) {
+  case VNODE_DIR:
+    return 0040000 | 0755;
+  case VNODE_DEV:
+    return 0020000 | 0666;
+  case VNODE_FILE:
+  default:
+    return 0100000 | 0644;
+  }
+}
+
+static int linux_fill_stat64(vnode_t *node, linux_stat64_t *st) {
+  if (!node || !st)
+    return -LINUX_EINVAL;
+  memset(st, 0, sizeof(*st));
+  st->st_mode = linux_mode_from_vnode(node);
+  st->st_nlink = 1;
+  st->st_uid = 0;
+  st->st_gid = 0;
+  uint64_t size = node->size;
+  st->st_size = (int64_t)size;
+  st->st_blksize = 512;
+  st->st_blocks = (int64_t)((size + 511ULL) / 512ULL);
+  struct datetime t;
+  time_get_utc(&t);
+  uint64_t epoch = linux_epoch_from_datetime(&t);
+  st->st_atim.tv_sec = (int64_t)epoch;
+  st->st_mtim.tv_sec = (int64_t)epoch;
+  st->st_ctim.tv_sec = (int64_t)epoch;
+  return 0;
+}
+
+static int linux_sys_stat64(const char *path, linux_stat64_t *out) {
+  if (!path || !out)
+    return -LINUX_EFAULT;
+  vnode_t *node = vfs_resolve(path);
+  if (!node)
+    return -LINUX_ENOENT;
+  linux_stat64_t st;
+  linux_fill_stat64(node, &st);
+  return linux_copy_to_user(out, &st, sizeof(st));
+}
+
+static int linux_sys_fstat64(int fd, linux_stat64_t *out) {
+  if (!out)
+    return -LINUX_EFAULT;
+  file_t *f = syscall64_get_file(fd);
+  if (!f || !f->node)
+    return -LINUX_EBADF;
+  linux_stat64_t st;
+  linux_fill_stat64(f->node, &st);
+  return linux_copy_to_user(out, &st, sizeof(st));
+}
+
+static int linux_sys_clock_gettime(uint64_t clk_id, uint64_t out_ptr) {
+  if (!out_ptr)
+    return -LINUX_EFAULT;
+  struct linux_timespec64 ts;
+  if (clk_id == 0) {
+    struct datetime t;
+    time_get_utc(&t);
+    ts.tv_sec = (int64_t)linux_epoch_from_datetime(&t);
+    ts.tv_nsec = 0;
+  } else {
+    uint64_t ms = linux_now_ms();
+    ts.tv_sec = (int64_t)(ms / 1000ULL);
+    ts.tv_nsec = (int64_t)((ms % 1000ULL) * 1000000ULL);
+  }
+  return linux_copy_to_user((void *)(uintptr_t)out_ptr, &ts, sizeof(ts));
+}
+
 static int linux_sys_sysinfo(uint64_t a1) {
   if (!a1)
     return -LINUX_EFAULT;
@@ -508,6 +651,68 @@ static int linux_sys_nanosleep(uint64_t a1) {
                 (uint64_t)req.tv_nsec / 1000000ULL;
   syscall64_dispatch(SYS_SLEEP, ms, 0, 0, 0, 0, 0);
   return 0;
+}
+
+static int linux_sys_arch_prctl(uint64_t code, uint64_t addr) {
+  task64_t *t = task64_current();
+  if (!t)
+    return -LINUX_ESRCH;
+  switch (code) {
+  case ARCH_SET_FS:
+    t->gs.fs_base = addr;
+    return 0;
+  case ARCH_GET_FS:
+    if (!addr)
+      return -LINUX_EFAULT;
+    *(uint64_t *)(uintptr_t)addr = t->gs.fs_base;
+    return 0;
+  default:
+    return -LINUX_EINVAL;
+  }
+}
+
+static task64_t *task64_clone_current(uint64_t child_stack, uint64_t fs_base) {
+  task64_t *parent = task64_current();
+  if (!parent)
+    return nullptr;
+
+  task64_t *child = task64_create(parent->name, parent->entry, parent->arg);
+  if (!child)
+    return nullptr;
+
+  child->user_brk_start = parent->user_brk_start;
+  child->user_brk_end = parent->user_brk_end;
+  child->user_mmap_base = parent->user_mmap_base;
+  memcpy(child->vmas, parent->vmas, sizeof(parent->vmas));
+
+  child->sig_pending = parent->sig_pending;
+  child->sig_mask = parent->sig_mask;
+  memcpy(child->sig_actions, parent->sig_actions, sizeof(parent->sig_actions));
+  memcpy(child->epoll_table, parent->epoll_table, sizeof(parent->epoll_table));
+
+  if (child_stack)
+    child->gs.user_stack = child_stack;
+  else
+    child->gs.user_stack = parent->gs.user_stack;
+
+  child->gs.fs_base = fs_base;
+
+  uint64_t parent_top = parent->gs.kernel_stack;
+  uint64_t parent_rsp = parent->rsp;
+  if (parent_rsp == 0 || parent_rsp > parent_top)
+    return child;
+
+  uint64_t used = parent_top - parent_rsp;
+  uint64_t child_top = child->gs.kernel_stack;
+  uint64_t child_rsp = child_top - used;
+  memcpy((void *)(uintptr_t)child_rsp, (const void *)(uintptr_t)parent_rsp,
+         (size_t)used);
+  child->rsp = child_rsp;
+
+  syscall64_state_t *st =
+      (syscall64_state_t *)(uintptr_t)(child_rsp + 8);
+  st->rax = 0;
+  return child;
 }
 
 int linux_syscall_dispatch_x86_64(uint64_t num, uint64_t a1, uint64_t a2,
@@ -532,6 +737,44 @@ int linux_syscall_dispatch_x86_64(uint64_t num, uint64_t a1, uint64_t a2,
 
   case LINUX_NR_open:
     return (int)syscall64_dispatch(SYS_OPEN, a1, a2, 0, 0, 0, 0);
+
+  case LINUX_NR_stat:
+    return linux_sys_stat64((const char *)(uintptr_t)a1,
+                            (linux_stat64_t *)(uintptr_t)a2);
+
+  case LINUX_NR_fstat:
+    return linux_sys_fstat64((int)a1, (linux_stat64_t *)(uintptr_t)a2);
+
+  case LINUX_NR_lstat:
+    return linux_sys_stat64((const char *)(uintptr_t)a1,
+                            (linux_stat64_t *)(uintptr_t)a2);
+
+  case LINUX_NR_lseek: {
+    int fd = (int)a1;
+    int64_t off = (int64_t)a2;
+    int whence = (int)a3;
+    file_t *f = syscall64_get_file(fd);
+    if (!f)
+      return -LINUX_EBADF;
+    int64_t new_off = 0;
+    switch (whence) {
+    case 0:
+      new_off = off;
+      break;
+    case 1:
+      new_off = (int64_t)f->offset + off;
+      break;
+    case 2:
+      new_off = off;
+      break;
+    default:
+      return -LINUX_EINVAL;
+    }
+    if (new_off < 0)
+      return -LINUX_EINVAL;
+    f->offset = (uint32_t)new_off;
+    return (int)new_off;
+  }
 
   case LINUX_NR_openat:
     return (int)syscall64_dispatch(SYS_OPEN, a2, a3, 0, 0, 0, 0);
@@ -832,6 +1075,37 @@ int linux_syscall_dispatch_x86_64(uint64_t num, uint64_t a1, uint64_t a2,
     return 0;
   }
 
+  case LINUX_NR_clone: {
+    if (!(a1 & CLONE_VM))
+      return -LINUX_ENOSYS;
+    uint64_t fs_base = task64_current() ? task64_current()->gs.fs_base : 0;
+    if (a1 & CLONE_SETTLS)
+      fs_base = a4;
+    task64_t *child = task64_clone_current(a2, fs_base);
+    if (!child)
+      return -LINUX_ENOMEM;
+    if (a1 & CLONE_PARENT_SETTID && a3)
+      *(uint64_t *)(uintptr_t)a3 = child->id;
+    if (a1 & CLONE_CHILD_SETTID && a5)
+      *(uint64_t *)(uintptr_t)a5 = child->id;
+    if (a1 & CLONE_CHILD_CLEARTID)
+      child->clear_tid_addr = a5;
+    return (int)child->id;
+  }
+
+  case LINUX_NR_gettid:
+    return task64_current() ? (int)task64_current()->id : 1;
+
+  case LINUX_NR_set_tid_address:
+    if (auto *t = task64_current()) {
+      t->clear_tid_addr = a1;
+      return (int)t->id;
+    }
+    return -LINUX_ESRCH;
+
+  case LINUX_NR_arch_prctl:
+    return linux_sys_arch_prctl(a1, a2);
+
   case LINUX_NR_brk: {
     uint64_t res = user64_brk(a1);
     return (int)res;
@@ -841,6 +1115,13 @@ int linux_syscall_dispatch_x86_64(uint64_t num, uint64_t a1, uint64_t a2,
     uint64_t addr = user64_mmap(a1, a2, (int)a3, (int)a4);
     if ((int64_t)addr < 0)
       return -LINUX_ENOMEM;
+    if (!(a4 & MAP_ANONYMOUS) && (int)a5 >= 0) {
+      int r = linux_mmap_load_file(addr, a2, (int)a5, a6);
+      if (r < 0) {
+        user64_munmap(addr, a2);
+        return r;
+      }
+    }
     return (int)addr;
   }
 
@@ -883,6 +1164,9 @@ int linux_syscall_dispatch_x86_64(uint64_t num, uint64_t a1, uint64_t a2,
 
   case LINUX_NR_time:
     return linux_sys_time(a1);
+
+  case LINUX_NR_clock_gettime:
+    return linux_sys_clock_gettime(a1, a2);
 
   default:
     return -LINUX_ENOSYS;

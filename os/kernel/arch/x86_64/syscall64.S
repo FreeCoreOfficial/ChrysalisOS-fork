@@ -61,6 +61,13 @@ syscall64_entry:
     pop rbx
     pop rax
 
+    ; set FS base from task GS data
+    mov rax, [gs:16]
+    mov rdx, rax
+    shr rdx, 32
+    mov ecx, 0xC0000100
+    wrmsr
+
     mov rsp, [gs:8]
     swapgs
     o64 sysret

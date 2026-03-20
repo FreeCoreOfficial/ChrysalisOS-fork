@@ -20,6 +20,7 @@ typedef struct task64 {
   struct {
     uint64_t kernel_stack;
     uint64_t user_stack;
+    uint64_t fs_base;
   } gs;
   uint64_t user_brk_start;
   uint64_t user_brk_end;
@@ -46,6 +47,8 @@ typedef struct task64 {
   uint64_t sig_saved_rip;
   uint64_t sig_saved_rsp;
   int sig_active;
+
+  uint64_t clear_tid_addr;
 
   void *epoll_table[32];
 } task64_t;

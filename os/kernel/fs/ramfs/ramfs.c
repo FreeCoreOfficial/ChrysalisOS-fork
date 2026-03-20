@@ -22,6 +22,7 @@ static vnode_t* ramfs_vnode_for(FSNode* node) {
     vn->ops = &ramfs_ops;
     vn->internal = node;
     vn->parent = node->parent ? ramfs_vnode_for(node->parent) : NULL;
+    vn->size = (node->flags == FS_FILE) ? (uint64_t)node->length : 0;
     node->vnode = vn;
     return vn;
 }
@@ -102,6 +103,8 @@ static int ramfs_write(struct vnode* n, uint32_t off, const uint8_t* buf, uint32
     memcpy((uint8_t*)node->data + off, buf, size);
     if (required > node->length)
         node->length = required;
+    if (node->vnode)
+        node->vnode->size = (uint64_t)node->length;
     return (int)size;
 }
 

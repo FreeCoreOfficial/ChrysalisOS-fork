@@ -121,6 +121,17 @@ static uint64_t sys_close64(uint64_t fd, uint64_t, uint64_t, uint64_t,
   return 0;
 }
 
+static uint64_t sys_ioctl64(uint64_t fd, uint64_t cmd, uint64_t arg,
+                            uint64_t, uint64_t, uint64_t) {
+  if (fd >= (uint64_t)MAX_FILES_PER_PROCESS)
+    return k_sys_enosys;
+  file_t *f = g_files[fd];
+  if (!f || !f->node || !f->node->ops || !f->node->ops->ioctl)
+    return k_sys_enosys;
+  return (uint64_t)f->node->ops->ioctl(f->node, (uint32_t)cmd,
+                                       (void *)(uintptr_t)arg);
+}
+
 static uint64_t sys_exit64(uint64_t code, uint64_t, uint64_t, uint64_t,
                            uint64_t, uint64_t) {
   serial_write_string("[K64] sys_exit ");
@@ -160,6 +171,7 @@ static void init_syscall_table(void) {
   register_syscall(SYS_READ, sys_read64);
   register_syscall(SYS_OPEN, sys_open64);
   register_syscall(SYS_CLOSE, sys_close64);
+  register_syscall(SYS_IOCTL, sys_ioctl64);
   register_syscall(SYS_EXIT, sys_exit64);
   register_syscall(SYS_YIELD, sys_yield64);
   register_syscall(SYS_SLEEP, sys_sleep64);
@@ -223,6 +235,9 @@ uint64_t syscall64_dispatch(uint64_t num, uint64_t a1, uint64_t a2,
 extern "C" void __syscall_handler(syscall64_state_t *state) {
   if (!state)
     return;
+  if (auto *t = task64_current()) {
+    t->rsp = (uint64_t)(uintptr_t)state - 8;
+  }
   g_syscall_state = state;
   state->rax = syscall64_dispatch(state->rax, state->rdi, state->rsi,
                                   state->rdx, state->r10, state->r8, state->r9);

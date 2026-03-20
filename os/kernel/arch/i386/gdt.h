@@ -35,6 +35,8 @@ void gdt_set_gate(int num, uint32_t base, uint32_t limit, uint8_t access, uint8_
 
 /* Exportă GDTR-ul actual */
 void gdt_get_ptr(gdt_ptr_t* out);
+void gdt_set_tls_base(uint32_t base);
+uint16_t gdt_get_tls_selector(void);
 
 
 #ifdef __cplusplus

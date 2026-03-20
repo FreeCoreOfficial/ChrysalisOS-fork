@@ -20,8 +20,9 @@ uint8_t base_high;
 } __attribute__((packed));
 
 
-static gdt_entry gdt[6];
+static gdt_entry gdt[7];
 static gdt_ptr_t gp;
+static const int GDT_TLS_INDEX = 5;
 
 
 /*
@@ -47,7 +48,7 @@ gdt[num].access = access;
 
 extern "C" void gdt_init()
 {
-gp.limit = (sizeof(gdt_entry) * 6) - 1;
+gp.limit = (sizeof(gdt_entry) * 7) - 1;
 gp.base = (uint32_t)&gdt;
 
 
@@ -70,10 +71,21 @@ gdt_set_gate(3, 0, 0xFFFFFFFF, 0xFA, 0xCF);
 // 4) User data (Ring 3)
 gdt_set_gate(4, 0, 0xFFFFFFFF, 0xF2, 0xCF);
 
+// 5) User TLS (Ring 3 data)
+gdt_set_gate(GDT_TLS_INDEX, 0, 0xFFFFFFFF, 0xF2, 0xCF);
+
 
 gdt_flush((uint32_t)&gp);
 }
 
 extern "C" void gdt_get_ptr(gdt_ptr_t* out) {
     asm volatile("sgdt %0" : "=m"(*out));
+}
+
+extern "C" void gdt_set_tls_base(uint32_t base) {
+    gdt_set_gate(GDT_TLS_INDEX, base, 0xFFFFFFFF, 0xF2, 0xCF);
+}
+
+extern "C" uint16_t gdt_get_tls_selector(void) {
+    return (uint16_t)((GDT_TLS_INDEX * 8) | 0x3);
 }

@@ -23,6 +23,7 @@ typedef struct vnode {
     void* internal;          /* FS-private data */
 
     struct vnode* parent;    /* parent vnode (or NULL for root) */
+    uint64_t size;           /* file size (bytes), if known */
 } vnode_t;
 
 #ifdef __cplusplus

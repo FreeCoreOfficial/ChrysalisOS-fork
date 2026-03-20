@@ -10,8 +10,11 @@
 #include "../memory/pmm.h"
 #include "../mem/kmalloc.h"
 #include "../fs/vfs/fs_ops.h"
+#include "../fs/vfs/vfs.h"
 #include "../user/user.h"
 #include "../fs/pipe/pipe.h"
+#include "../mem/user32_vm.h"
+#include "../arch/i386/gdt.h"
 
 extern "C" int syscall_dispatch_chrys(uint32_t num, uint32_t a1, uint32_t a2,
                                       uint32_t a3, uint32_t a4, uint32_t a5,
@@ -36,11 +39,21 @@ extern "C" int syscall_user_range_ok(const void *ptr, uint32_t len);
 #define LINUX_NR_open 5
 #define LINUX_NR_close 6
 #define LINUX_NR_time 13
+#define LINUX_NR_lseek 19
 #define LINUX_NR_getpid 20
+#define LINUX_NR_brk 45
 #define LINUX_NR_getuid 24
 #define LINUX_NR_getgid 47
 #define LINUX_NR_getppid 64
 #define LINUX_NR_gettimeofday 78
+#define LINUX_NR_mmap 90
+#define LINUX_NR_munmap 91
+#define LINUX_NR_stat 106
+#define LINUX_NR_lstat 107
+#define LINUX_NR_fstat 108
+#define LINUX_NR_mprotect 125
+#define LINUX_NR__llseek 140
+#define LINUX_NR_nanosleep 162
 #define LINUX_NR_sysinfo 116
 #define LINUX_NR_uname 122
 #define LINUX_NR_exit_group 252
@@ -59,6 +72,14 @@ extern "C" int syscall_user_range_ok(const void *ptr, uint32_t len);
 #define LINUX_NR_epoll_pwait 319
 #define LINUX_NR_epoll_create1 329
 #define LINUX_NR_pipe2 331
+#define LINUX_NR_mmap2 192
+#define LINUX_NR_openat 295
+#define LINUX_NR_clock_gettime 265
+#define LINUX_NR_clone 120
+#define LINUX_NR_gettid 224
+#define LINUX_NR_set_thread_area 243
+#define LINUX_NR_get_thread_area 244
+#define LINUX_NR_set_tid_address 258
 
 #define FUTEX_WAIT 0
 #define FUTEX_WAKE 1
@@ -93,6 +114,11 @@ extern "C" int syscall_user_range_ok(const void *ptr, uint32_t len);
 #define POLLIN 0x001
 #define POLLOUT 0x004
 
+#define PROT_READ 0x1
+#define PROT_WRITE 0x2
+#define MAP_FIXED 0x10
+#define MAP_ANONYMOUS 0x20
+
 #define SIG_BLOCK 0
 #define SIG_UNBLOCK 1
 #define SIG_SETMASK 2
@@ -102,10 +128,52 @@ extern "C" int syscall_user_range_ok(const void *ptr, uint32_t len);
 #define SIGSTOP 19
 #define SIGWINCH 28
 
+#define CLONE_VM 0x00000100
+#define CLONE_FS 0x00000200
+#define CLONE_FILES 0x00000400
+#define CLONE_SIGHAND 0x00000800
+#define CLONE_THREAD 0x00010000
+#define CLONE_SETTLS 0x00080000
+#define CLONE_PARENT_SETTID 0x00100000
+#define CLONE_CHILD_CLEARTID 0x00200000
+#define CLONE_CHILD_SETTID 0x01000000
+
 typedef struct linux_timespec32 {
   int32_t tv_sec;
   int32_t tv_nsec;
 } linux_timespec32_t;
+
+typedef struct linux_stat32 {
+  uint16_t st_dev;
+  uint16_t __pad1;
+  uint32_t st_ino;
+  uint16_t st_mode;
+  uint16_t st_nlink;
+  uint16_t st_uid;
+  uint16_t st_gid;
+  uint16_t st_rdev;
+  uint16_t __pad2;
+  uint32_t st_size;
+  uint32_t st_blksize;
+  uint32_t st_blocks;
+  uint32_t st_atime;
+  uint32_t st_atime_nsec;
+  uint32_t st_mtime;
+  uint32_t st_mtime_nsec;
+  uint32_t st_ctime;
+  uint32_t st_ctime_nsec;
+  uint32_t __unused4;
+  uint32_t __unused5;
+} linux_stat32_t;
+
+typedef struct linux_mmap_arg {
+  uint32_t addr;
+  uint32_t len;
+  uint32_t prot;
+  uint32_t flags;
+  uint32_t fd;
+  uint32_t offset;
+} linux_mmap_arg_t;
 
 typedef struct linux_sigaction32 {
   uint32_t handler;
@@ -113,6 +181,13 @@ typedef struct linux_sigaction32 {
   uint32_t restorer;
   uint64_t mask;
 } linux_sigaction32_t;
+
+typedef struct linux_user_desc32 {
+  uint32_t entry_number;
+  uint32_t base_addr;
+  uint32_t limit;
+  uint32_t flags;
+} linux_user_desc32_t;
 
 typedef struct linux_epoll_event {
   uint32_t events;
@@ -388,6 +463,107 @@ static int linux_copy_to_user(void *dst, const void *src, uint32_t len) {
   return 0;
 }
 
+static int linux_set_thread_area(uint32_t uaddr) {
+  if (!uaddr)
+    return -LINUX_EFAULT;
+  linux_user_desc32_t desc;
+  if (!syscall_user_range_ok((void *)(uintptr_t)uaddr, sizeof(desc)))
+    return -LINUX_EFAULT;
+  memcpy(&desc, (const void *)(uintptr_t)uaddr, sizeof(desc));
+  if (!current_task)
+    return -LINUX_EINVAL;
+
+  current_task->tls_base = desc.base_addr;
+  gdt_set_tls_base(desc.base_addr);
+  uint16_t sel = gdt_get_tls_selector();
+  asm volatile("movw %0, %%gs" : : "rm"(sel));
+  desc.entry_number = 5;
+  return linux_copy_to_user((void *)(uintptr_t)uaddr, &desc, sizeof(desc));
+}
+
+static int linux_get_thread_area(uint32_t uaddr) {
+  if (!uaddr)
+    return -LINUX_EFAULT;
+  if (!current_task)
+    return -LINUX_EINVAL;
+  linux_user_desc32_t desc;
+  memset(&desc, 0, sizeof(desc));
+  desc.entry_number = 5;
+  desc.base_addr = current_task->tls_base;
+  return linux_copy_to_user((void *)(uintptr_t)uaddr, &desc, sizeof(desc));
+}
+
+static int linux_set_tid_address(uint32_t uaddr) {
+  if (!current_task)
+    return -LINUX_EINVAL;
+  current_task->clear_tid_addr = uaddr;
+  return current_task->pid;
+}
+
+static int linux_clone(uint32_t flags, uint32_t child_stack, uint32_t ptid,
+                       uint32_t tls, uint32_t ctid) {
+  if (!current_task)
+    return -LINUX_EINVAL;
+  if (!(flags & CLONE_VM))
+    return -LINUX_ENOSYS;
+
+  task_t *child = task_clone_current(child_stack);
+  if (!child)
+    return -LINUX_ENOMEM;
+
+  if (flags & CLONE_SETTLS) {
+    linux_user_desc32_t desc;
+    if (syscall_user_range_ok((void *)(uintptr_t)tls, sizeof(desc))) {
+      memcpy(&desc, (const void *)(uintptr_t)tls, sizeof(desc));
+      child->tls_base = desc.base_addr;
+    }
+  }
+
+  if (flags & CLONE_PARENT_SETTID) {
+    if (syscall_user_range_ok((void *)(uintptr_t)ptid, sizeof(uint32_t)))
+      *(uint32_t *)(uintptr_t)ptid = (uint32_t)child->pid;
+  }
+
+  if (flags & CLONE_CHILD_SETTID) {
+    if (syscall_user_range_ok((void *)(uintptr_t)ctid, sizeof(uint32_t)))
+      *(uint32_t *)(uintptr_t)ctid = (uint32_t)child->pid;
+  }
+
+  if (flags & CLONE_CHILD_CLEARTID)
+    child->clear_tid_addr = ctid;
+
+  return child->pid;
+}
+
+static int linux_mmap_load_file(uint32_t addr, uint32_t len, int fd,
+                                uint64_t file_off) {
+  if (!current_task || fd < 0 || fd >= MAX_FILES_PER_PROCESS)
+    return -LINUX_EBADF;
+  file_t *f = current_task->files[fd];
+  if (!f || !f->node || !f->node->ops || !f->node->ops->read)
+    return -LINUX_EBADF;
+
+  uint32_t remaining = len;
+  uint32_t dst = addr;
+  uint64_t off = file_off;
+  uint8_t tmp[256];
+  while (remaining > 0) {
+    uint32_t chunk = remaining > sizeof(tmp) ? sizeof(tmp) : remaining;
+    int r = f->node->ops->read(f->node, (uint32_t)off, tmp, chunk);
+    if (r <= 0)
+      break;
+    if (!syscall_user_range_ok((void *)(uintptr_t)dst, (uint32_t)r))
+      return -LINUX_EFAULT;
+    memcpy((void *)(uintptr_t)dst, tmp, (uint32_t)r);
+    dst += (uint32_t)r;
+    off += (uint32_t)r;
+    remaining -= (uint32_t)r;
+    if ((uint32_t)r < chunk)
+      break;
+  }
+  return 0;
+}
+
 static void linux_fill_utsname(struct linux_utsname *u) {
   if (!u)
     return;
@@ -459,6 +635,89 @@ static int linux_sys_time(uint32_t a1) {
   return (int)now;
 }
 
+static uint16_t linux_mode_from_vnode(vnode_t *n) {
+  if (!n)
+    return 0;
+  switch (n->type) {
+  case VNODE_DIR:
+    return 0040000 | 0755;
+  case VNODE_DEV:
+    return 0020000 | 0666;
+  case VNODE_FILE:
+  default:
+    return 0100000 | 0644;
+  }
+}
+
+static int linux_fill_stat32(vnode_t *node, linux_stat32_t *st) {
+  if (!node || !st)
+    return -LINUX_EINVAL;
+  memset(st, 0, sizeof(*st));
+  st->st_mode = linux_mode_from_vnode(node);
+  st->st_nlink = 1;
+  st->st_uid = 0;
+  st->st_gid = 0;
+  uint64_t size = node->size;
+  st->st_size = (size > 0xFFFFFFFFu) ? 0xFFFFFFFFu : (uint32_t)size;
+  st->st_blksize = 512;
+  st->st_blocks = (uint32_t)((size + 511ULL) / 512ULL);
+  uint32_t now = timer_uptime_seconds();
+  st->st_atime = now;
+  st->st_mtime = now;
+  st->st_ctime = now;
+  return 0;
+}
+
+static int linux_sys_stat32(const char *path, linux_stat32_t *out) {
+  if (!path || !out)
+    return -LINUX_EFAULT;
+  auto user_strnlen = [&](const char *s, uint32_t max) -> int {
+    for (uint32_t i = 0; i < max; i++) {
+      if (!syscall_user_range_ok((const void *)(uintptr_t)(s + i), 1))
+        return -1;
+      if (s[i] == 0)
+        return (int)i;
+    }
+    return -1;
+  };
+  if (user_strnlen(path, 256) < 0)
+    return -LINUX_EFAULT;
+  vnode_t *node = vfs_resolve(path);
+  if (!node)
+    return -LINUX_ENOENT;
+  linux_stat32_t st;
+  linux_fill_stat32(node, &st);
+  return linux_copy_to_user(out, &st, sizeof(st));
+}
+
+static int linux_sys_fstat32(int fd, linux_stat32_t *out) {
+  if (!out)
+    return -LINUX_EFAULT;
+  if (!current_task || fd < 0 || fd >= MAX_FILES_PER_PROCESS)
+    return -LINUX_EBADF;
+  file_t *f = current_task->files[fd];
+  if (!f || !f->node)
+    return -LINUX_EBADF;
+  linux_stat32_t st;
+  linux_fill_stat32(f->node, &st);
+  return linux_copy_to_user(out, &st, sizeof(st));
+}
+
+static int linux_sys_clock_gettime(uint32_t clk_id, uint32_t out_ptr) {
+  if (!out_ptr)
+    return -LINUX_EFAULT;
+  linux_timespec32_t ts;
+  uint32_t now_ms = timer_uptime_ms();
+  if (clk_id == 0) {
+    ts.tv_sec = (int32_t)timer_uptime_seconds();
+    ts.tv_nsec = 0;
+  } else {
+    ts.tv_sec = (int32_t)(now_ms / 1000);
+    ts.tv_nsec = (int32_t)((now_ms % 1000) * 1000000);
+  }
+  return linux_copy_to_user((void *)(uintptr_t)out_ptr, &ts, sizeof(ts));
+}
+
 int linux_syscall_dispatch_i386(uint32_t num, uint32_t a1, uint32_t a2,
                                 uint32_t a3, uint32_t a4, uint32_t a5,
                                 uint32_t a6) {
@@ -482,6 +741,71 @@ int linux_syscall_dispatch_i386(uint32_t num, uint32_t a1, uint32_t a2,
 
   case LINUX_NR_open:
     return syscall_dispatch_chrys(SYS_OPEN, a1, a2, 0, 0, 0, 0);
+
+  case LINUX_NR_openat:
+    return syscall_dispatch_chrys(SYS_OPEN, a2, a3, 0, 0, 0, 0);
+
+  case LINUX_NR_lseek: {
+    int fd = (int)a1;
+    int32_t off = (int32_t)a2;
+    int whence = (int)a3;
+    if (!current_task || fd < 0 || fd >= MAX_FILES_PER_PROCESS)
+      return -LINUX_EBADF;
+    file_t *f = current_task->files[fd];
+    if (!f)
+      return -LINUX_EBADF;
+    int64_t new_off = 0;
+    switch (whence) {
+    case 0:
+      new_off = off;
+      break;
+    case 1:
+      new_off = (int64_t)f->offset + off;
+      break;
+    case 2:
+      new_off = off;
+      break;
+    default:
+      return -LINUX_EINVAL;
+    }
+    if (new_off < 0)
+      return -LINUX_EINVAL;
+    f->offset = (uint32_t)new_off;
+    return (int)f->offset;
+  }
+
+  case LINUX_NR__llseek: {
+    int fd = (int)a1;
+    uint64_t off = ((uint64_t)a2 << 32) | a3;
+    uint64_t *res = (uint64_t *)(uintptr_t)a4;
+    int whence = (int)a5;
+    if (!current_task || fd < 0 || fd >= MAX_FILES_PER_PROCESS)
+      return -LINUX_EBADF;
+    file_t *f = current_task->files[fd];
+    if (!f)
+      return -LINUX_EBADF;
+    if (!syscall_user_range_ok(res, sizeof(uint64_t)))
+      return -LINUX_EFAULT;
+    int64_t new_off = 0;
+    switch (whence) {
+    case 0:
+      new_off = (int64_t)off;
+      break;
+    case 1:
+      new_off = (int64_t)f->offset + (int64_t)off;
+      break;
+    case 2:
+      new_off = (int64_t)off;
+      break;
+    default:
+      return -LINUX_EINVAL;
+    }
+    if (new_off < 0)
+      return -LINUX_EINVAL;
+    f->offset = (uint32_t)new_off;
+    *res = (uint64_t)new_off;
+    return 0;
+  }
 
   case LINUX_NR_close:
     if (a1 >= TASK_LINUX_EPOLL_FD_BASE)
@@ -531,6 +855,83 @@ int linux_syscall_dispatch_i386(uint32_t num, uint32_t a1, uint32_t a2,
       return -LINUX_ENOMEM;
     fdp[0] = rfd;
     fdp[1] = wfd;
+    return 0;
+  }
+
+  case LINUX_NR_brk: {
+    uint32_t res = user32_brk(current_task, a1);
+    return (int)res;
+  }
+
+  case LINUX_NR_mmap:
+  case LINUX_NR_mmap2: {
+    linux_mmap_arg_t args;
+    if (num == LINUX_NR_mmap) {
+      linux_mmap_arg_t *uargs = (linux_mmap_arg_t *)(uintptr_t)a1;
+      if (!syscall_user_range_ok(uargs, sizeof(args)))
+        return -LINUX_EFAULT;
+      memcpy(&args, uargs, sizeof(args));
+    } else {
+      args.addr = a1;
+      args.len = a2;
+      args.prot = a3;
+      args.flags = a4;
+      args.fd = a5;
+      args.offset = a6;
+    }
+    uint32_t addr = user32_mmap(current_task, args.addr, args.len,
+                                (int)args.prot, (int)args.flags);
+    if ((int32_t)addr < 0)
+      return -LINUX_ENOMEM;
+    if (!(args.flags & MAP_ANONYMOUS) && (int)args.fd >= 0) {
+      uint64_t file_off =
+          (num == LINUX_NR_mmap2) ? ((uint64_t)args.offset << 12)
+                                  : (uint64_t)args.offset;
+      int r = linux_mmap_load_file(addr, args.len, (int)args.fd, file_off);
+      if (r < 0) {
+        user32_munmap(current_task, addr, args.len);
+        return r;
+      }
+    }
+    return (int)addr;
+  }
+
+  case LINUX_NR_munmap:
+    if (user32_munmap(current_task, a1, a2) < 0)
+      return -LINUX_ENOMEM;
+    return 0;
+
+  case LINUX_NR_mprotect:
+    if (user32_mprotect(current_task, a1, a2, (int)a3) < 0)
+      return -LINUX_ENOMEM;
+    return 0;
+
+  case LINUX_NR_stat:
+    return linux_sys_stat32((const char *)(uintptr_t)a1,
+                            (linux_stat32_t *)(uintptr_t)a2);
+
+  case LINUX_NR_lstat:
+    return linux_sys_stat32((const char *)(uintptr_t)a1,
+                            (linux_stat32_t *)(uintptr_t)a2);
+
+  case LINUX_NR_fstat:
+    return linux_sys_fstat32((int)a1, (linux_stat32_t *)(uintptr_t)a2);
+
+  case LINUX_NR_clock_gettime:
+    return linux_sys_clock_gettime(a1, a2);
+
+  case LINUX_NR_nanosleep: {
+    if (!a1)
+      return -LINUX_EFAULT;
+    linux_timespec32_t ts;
+    if (!syscall_user_range_ok((void *)(uintptr_t)a1, sizeof(ts)))
+      return -LINUX_EFAULT;
+    memcpy(&ts, (const void *)(uintptr_t)a1, sizeof(ts));
+    if (ts.tv_sec < 0 || ts.tv_nsec < 0)
+      return -LINUX_EINVAL;
+    uint64_t ms = (uint64_t)ts.tv_sec * 1000ULL +
+                  (uint64_t)ts.tv_nsec / 1000000ULL;
+    sleep((uint32_t)ms);
     return 0;
   }
 
@@ -712,6 +1113,21 @@ int linux_syscall_dispatch_i386(uint32_t num, uint32_t a1, uint32_t a2,
       sleep(1);
     }
   }
+
+  case LINUX_NR_clone:
+    return linux_clone(a1, a2, a3, a4, a5);
+
+  case LINUX_NR_gettid:
+    return current_task ? current_task->pid : 1;
+
+  case LINUX_NR_set_tid_address:
+    return linux_set_tid_address(a1);
+
+  case LINUX_NR_set_thread_area:
+    return linux_set_thread_area(a1);
+
+  case LINUX_NR_get_thread_area:
+    return linux_get_thread_area(a1);
 
   case LINUX_NR_rt_sigaction: {
     int sig = (int)a1;

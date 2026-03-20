@@ -86,6 +86,7 @@
 #include "user/user.h"
 #include "video/fb_console.h"
 #include "video/framebuffer.h"
+#include "video/kms.h"
 #include "video/gpu.h"
 #include "video/gpu_bochs.h"
 #include "vt/vt.h"
@@ -619,6 +620,13 @@ extern "C" void kernel_main(uint32_t magic, uint32_t addr) {
     }
   }
 
+  /* Initialize KMS (DRM-lite) after framebuffer is ready */
+  if (kms_init() == 0) {
+    serial("[KMS] KMS device ready (/dev/dri/card0)\n");
+  } else {
+    serial("[KMS] KMS unavailable (no primary GPU)\n");
+  }
+
   /* Visual test: Draw a blue rectangle to confirm video works */
   if (magic == MULTIBOOT2_BOOTLOADER_MAGIC || magic == MULTIBOOT_MAGIC) {
     /* Visual test: Draw a blue rectangle to confirm video works */
@@ -830,7 +838,8 @@ extern "C" void kernel_main(uint32_t magic, uint32_t addr) {
     /* Unified Input Loop (text-mode only). */
     if (!win_is_gui_running()) {
       input_event_t ev;
-      while (input_pop(&ev)) {
+      int input_budget = 256;
+      while (input_budget-- > 0 && input_pop(&ev)) {
         if (ev.type == INPUT_KEYBOARD && ev.pressed) {
           /* For now assuming keycode is ASCII for demo */
           serial("[KERNEL] Input: %c (0x%x)\n", (char)ev.keycode, ev.keycode);

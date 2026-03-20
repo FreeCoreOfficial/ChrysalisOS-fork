@@ -163,6 +163,7 @@ static int procfs_read(struct vnode *n, uint32_t off, uint8_t *buf,
   int len = procfs_format(pn, tmp, sizeof(tmp));
   if (len <= 0)
     return 0;
+  pn->vnode.size = (uint64_t)len;
   if (off >= (uint32_t)len)
     return 0;
   uint32_t to_copy = size;

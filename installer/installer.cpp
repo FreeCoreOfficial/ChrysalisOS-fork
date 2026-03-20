@@ -18,6 +18,8 @@
 #include "../os/kernel/string.h"
 
 #include "../os/kernel/crypto/sha256.h"
+#include "../os/kernel/input/input.h"
+#include "../os/kernel/usb/usb_core.h"
 
 /* Local BPB struct for installer debug dump */
 struct fat_bpb {
@@ -94,7 +96,6 @@ void ata_set_allow_mbr_write(int allow);
 }
 
 /* Forward declarations for menu/input helpers used below */
-static uint8_t kbd_getscancode();
 static char kbd_getchar();
 
 static bool has_extension(const char *name, const char *ext) {
@@ -685,11 +686,24 @@ static const int UI_SCREEN_H = 25;
 static const int UI_BAR_X = 12;
 static const int UI_BAR_Y = 13;
 static const int UI_BAR_W = 56;
+static const int UI_LABEL_X = 10;
+static const int UI_VALUE_X = 24;
+static const int UI_VALUE_W = 46;
+static const int UI_INPUT_X = 24;
+static const int UI_INPUT_W = 30;
 static int ui_progress_anim_tick = 0;
 static int ui_last_percent = -1;
 
 static const uint32_t UI_DELAY_MAJOR_ITERS = 3500000U;
 static const uint32_t UI_DELAY_MINOR_ITERS = 700000U;
+
+static const uint8_t UI_BG = 0x17;          /* Blue background, light gray */
+static const uint8_t UI_PANEL = 0x1F;       /* Blue background, white */
+static const uint8_t UI_PANEL_MUTED = 0x1B; /* Blue background, light cyan */
+static const uint8_t UI_PANEL_TITLE = 0x1E; /* Blue background, yellow */
+static const uint8_t UI_HEADER = 0x3F;      /* Cyan background, white */
+static const uint8_t UI_FOOTER = 0x1E;      /* Blue background, yellow */
+static uint8_t ui_input_color = 0x1F;
 
 static int ui_clamp_int(int value, int min_v, int max_v) {
   if (value < min_v)
@@ -761,24 +775,24 @@ static void ui_write_line(int x, int y, int w, uint8_t color,
   ui_write_at(x, y, color, text);
 }
 
-static void ui_draw_box(int x, int y, int w, int h, uint8_t border_color,
-                        uint8_t fill_color) {
-  if (w < 2 || h < 2)
+static void ui_center_text(int y, uint8_t color, const char *text) {
+  if (!text)
     return;
-  ui_fill_rect_textmode(x + 1, y + 1, w - 2, h - 2, fill_color);
+  size_t len = strlen(text);
+  int x = 0;
+  if ((int)len < UI_SCREEN_W)
+    x = (UI_SCREEN_W - (int)len) / 2;
+  ui_write_at(x, y, color, text);
+}
 
-  terminal_putentryat('+', border_color, x, y);
-  terminal_putentryat('+', border_color, x + w - 1, y);
-  terminal_putentryat('+', border_color, x, y + h - 1);
-  terminal_putentryat('+', border_color, x + w - 1, y + h - 1);
-
-  for (int i = 1; i < w - 1; i++) {
-    terminal_putentryat('-', border_color, x + i, y);
-    terminal_putentryat('-', border_color, x + i, y + h - 1);
-  }
-  for (int i = 1; i < h - 1; i++) {
-    terminal_putentryat('|', border_color, x, y + i);
-    terminal_putentryat('|', border_color, x + w - 1, y + i);
+static void ui_draw_panel(int x, int y, int w, int h, uint8_t color,
+                          uint8_t shadow_color) {
+  ui_fill_rect_textmode(x, y, w, h, color);
+  if (shadow_color) {
+    if (x + w < UI_SCREEN_W)
+      ui_fill_rect_textmode(x + w, y + 1, 1, h, shadow_color);
+    if (y + h < UI_SCREEN_H)
+      ui_fill_rect_textmode(x + 1, y + h, w, 1, shadow_color);
   }
 }
 
@@ -820,27 +834,28 @@ static void ui_append_str(char *out, size_t out_sz, const char *src) {
 }
 
 static void ui_draw_header(const char *title) {
-  ui_fill_rect_textmode(0, 0, UI_SCREEN_W, 1, 0x70);
-  ui_write_at(1, 0, 0x70, title ? title : "");
+  ui_fill_rect_textmode(0, 0, UI_SCREEN_W, 1, UI_HEADER);
+  if (title)
+    ui_center_text(0, UI_HEADER, title);
 }
 
 static void ui_draw_footer(const char *text) {
-  ui_fill_rect_textmode(0, UI_SCREEN_H - 1, UI_SCREEN_W, 1, 0x70);
-  ui_write_at(1, UI_SCREEN_H - 1, 0x70, text ? text : "");
+  ui_fill_rect_textmode(0, UI_SCREEN_H - 1, UI_SCREEN_W, 1, UI_FOOTER);
+  if (text)
+    ui_center_text(UI_SCREEN_H - 1, UI_FOOTER, text);
 }
 
 static void ui_draw_welcome_screen(bool scan_ok, int present_count,
                                    int chrysalis_count, int other_os_count) {
-  terminal_set_color(0x1F);
+  terminal_set_color(UI_BG);
   terminal_clear();
-  ui_draw_header(
-      " Chrysalis OS Setup                                      [Installer]");
-  ui_fill_rect_textmode(0, 1, UI_SCREEN_W, UI_SCREEN_H - 2, 0x1F);
-  ui_draw_box(4, 3, 72, 16, 0x70, 0x1F);
+  ui_draw_header("ChrysalisOS Setup");
+  ui_fill_rect_textmode(0, 1, UI_SCREEN_W, UI_SCREEN_H - 2, UI_BG);
+  ui_draw_panel(6, 3, 68, 16, UI_PANEL, 0x10);
 
-  ui_write_at(8, 5, 0x1F, "Welcome to Chrysalis OS Setup");
-  ui_write_at(8, 6, 0x1F,
-              "This program will install or upgrade Chrysalis OS.");
+  ui_write_at(10, 5, UI_PANEL_TITLE, "Welcome");
+  ui_write_at(10, 6, UI_PANEL_MUTED,
+              "This will install or upgrade ChrysalisOS.");
 
   char part_line[80];
   part_line[0] = 0;
@@ -860,34 +875,36 @@ static void ui_draw_welcome_screen(bool scan_ok, int present_count,
     ui_append_str(part_line, sizeof(part_line), num);
     ui_append_str(part_line, sizeof(part_line), ")");
   }
-  ui_write_at(8, 8, 0x1F, part_line);
+  ui_write_at(10, 8, UI_PANEL_MUTED, part_line);
 
-  ui_write_at(8, 10, 0x1F, "Please choose an option:");
-  ui_write_at(10, 12, 0x1F,
-              "[1] Fresh Install  - Wipes disk and installs a new system");
-  ui_write_at(10, 13, 0x1F,
-              "[2] Upgrade        - Keeps files and updates system");
-  ui_write_at(10, 14, 0x1F,
-              "[P] Partition Mgr  - Detect other OS and choose target");
-  ui_write_at(10, 15, 0x1F,
-              "[J] Recovery Shell - Opens a command shell");
-  ui_write_at(10, 16, 0x1F,
-              "[0] Shutdown       - Power off the machine");
+  ui_write_at(10, 10, UI_PANEL_TITLE, "Choose an option");
+  ui_write_at(12, 12, UI_PANEL,
+              "1  Fresh Install   - Wipes disk, installs new system");
+  ui_write_at(12, 13, UI_PANEL,
+              "2  Upgrade         - Keeps files and updates system");
+  ui_write_at(12, 14, UI_PANEL,
+              "P  Partition Mgr   - Detect other OS, choose target");
+  ui_write_at(12, 15, UI_PANEL,
+              "J  Recovery Shell  - Opens a command shell");
+  ui_write_at(12, 16, UI_PANEL,
+              "0  Shutdown        - Power off");
 
-  ui_draw_footer("Keys: [1][2][P][J][0]    [F3] Exit");
+  ui_draw_footer("Press 1/2/P/J/0 to continue");
 }
 
 static void ui_draw_user_setup_screen(void) {
-  terminal_set_color(0x1F);
+  terminal_set_color(UI_BG);
   terminal_clear();
-  ui_draw_header(
-      " Chrysalis OS - User Setup                               [Installer]");
-  ui_fill_rect_textmode(0, 1, UI_SCREEN_W, UI_SCREEN_H - 2, 0x1F);
-  ui_draw_box(4, 3, 72, 16, 0x70, 0x1F);
-  ui_write_at(8, 5, 0x1F, "Please create your user account:");
-  ui_write_at(8, 8, 0x1F, "Username:");
-  ui_write_at(8, 10, 0x1F, "Password:");
-  ui_write_at(8, 12, 0x1F, "Device Name:");
+  ui_draw_header("ChrysalisOS User Setup");
+  ui_fill_rect_textmode(0, 1, UI_SCREEN_W, UI_SCREEN_H - 2, UI_BG);
+  ui_draw_panel(6, 3, 68, 16, UI_PANEL, 0x10);
+  ui_write_at(10, 5, UI_PANEL_TITLE, "Create your account");
+  ui_write_at(10, 8, UI_PANEL, "Username:");
+  ui_write_at(10, 10, UI_PANEL, "Password:");
+  ui_write_at(10, 12, UI_PANEL, "Device Name:");
+  ui_fill_rect_textmode(UI_INPUT_X, 8, UI_INPUT_W, 1, UI_PANEL_MUTED);
+  ui_fill_rect_textmode(UI_INPUT_X, 10, UI_INPUT_W, 1, UI_PANEL_MUTED);
+  ui_fill_rect_textmode(UI_INPUT_X, 12, UI_INPUT_W, 1, UI_PANEL_MUTED);
   ui_draw_footer("Press Enter after each field");
 }
 
@@ -912,37 +929,68 @@ static void ui_make_progress_text(int percent, char *out, size_t out_sz) {
 }
 
 static void ui_draw_progress_frame(bool upgrade_mode) {
-  terminal_set_color(0x1F);
+  terminal_set_color(UI_BG);
   terminal_clear();
 
   if (upgrade_mode) {
-    ui_draw_header(" Chrysalis OS Upgrade in progress...           [Installer]");
+    ui_draw_header("ChrysalisOS Upgrade");
   } else {
-    ui_draw_header(
-        " Chrysalis OS Installation in progress...      [Installer]");
+    ui_draw_header("ChrysalisOS Installation");
   }
 
-  terminal_set_color(0x1F);
-  ui_fill_rect_textmode(0, 1, UI_SCREEN_W, UI_SCREEN_H - 2, 0x1F);
+  terminal_set_color(UI_BG);
+  ui_fill_rect_textmode(0, 1, UI_SCREEN_W, UI_SCREEN_H - 2, UI_BG);
+  ui_draw_panel(6, 3, 68, 16, UI_PANEL, 0x10);
 
-  ui_write_line(4, 4, 72, 0x1F,
-                "Please wait while setup installs Chrysalis OS.");
-  ui_write_line(4, 5, 72, 0x1F, "Do not power off your computer.");
-  ui_write_line(4, 8, 72, 0x1F, "Stage:");
-  ui_write_line(4, 9, 72, 0x1F, "Detail:");
-  ui_write_line(4, 11, 72, 0x1F, "Progress: 0%");
+  ui_write_at(UI_LABEL_X, 5, UI_PANEL_TITLE, "Installing system components");
+  ui_write_at(UI_LABEL_X, 6, UI_PANEL_MUTED, "Do not power off your computer.");
+  ui_write_at(UI_LABEL_X, 8, UI_PANEL, "Stage:");
+  ui_write_at(UI_LABEL_X, 9, UI_PANEL, "Detail:");
+  ui_write_at(UI_LABEL_X, 11, UI_PANEL, "Progress: 0%");
 
-  ui_fill_rect_textmode(UI_BAR_X - 2, UI_BAR_Y - 1, UI_BAR_W + 4, 3, 0x17);
-  terminal_putentryat('[', 0x70, UI_BAR_X - 1, UI_BAR_Y);
+  ui_fill_rect_textmode(UI_BAR_X - 2, UI_BAR_Y - 1, UI_BAR_W + 4, 3, UI_BG);
+  terminal_putentryat('[', UI_PANEL_MUTED, UI_BAR_X - 1, UI_BAR_Y);
   for (int i = 0; i < UI_BAR_W; i++) {
-    terminal_putentryat('-', 0x17, UI_BAR_X + i, UI_BAR_Y);
+    terminal_putentryat('.', UI_PANEL_MUTED, UI_BAR_X + i, UI_BAR_Y);
   }
-  terminal_putentryat(']', 0x70, UI_BAR_X + UI_BAR_W, UI_BAR_Y);
-  ui_write_at(UI_BAR_X - 2, UI_BAR_Y + 1, 0x1F, "0%");
-  ui_write_at(UI_BAR_X + UI_BAR_W - 2, UI_BAR_Y + 1, 0x1F, "100%");
+  terminal_putentryat(']', UI_PANEL_MUTED, UI_BAR_X + UI_BAR_W, UI_BAR_Y);
+  ui_write_at(UI_BAR_X - 2, UI_BAR_Y + 1, UI_PANEL_MUTED, "0%");
+  ui_write_at(UI_BAR_X + UI_BAR_W - 3, UI_BAR_Y + 1, UI_PANEL_MUTED, "100%");
 
-  ui_draw_footer("Please wait...");
+  ui_draw_footer("Installing... please wait");
   ui_progress_anim_tick = 0;
+}
+
+static void ui_draw_success_screen(bool upgrade_mode) {
+  terminal_set_color(UI_BG);
+  terminal_clear();
+  ui_draw_header(upgrade_mode ? "ChrysalisOS Upgrade Complete"
+                              : "ChrysalisOS Installation Complete");
+  ui_fill_rect_textmode(0, 1, UI_SCREEN_W, UI_SCREEN_H - 2, UI_BG);
+  ui_draw_panel(6, 3, 68, 18, UI_PANEL, 0x10);
+
+  ui_write_at(10, 5, UI_PANEL_TITLE,
+              upgrade_mode ? "Upgrade finished" : "Installation finished");
+  ui_write_at(10, 6, UI_PANEL_MUTED,
+              "ChrysalisOS is ready to boot.");
+
+  char line[80];
+  line[0] = 0;
+#ifdef CHRYVER
+  ui_append_str(line, sizeof(line), "Version: ");
+  ui_append_str(line, sizeof(line), CHRYVER);
+#else
+  ui_append_str(line, sizeof(line), "Version: unknown");
+#endif
+  ui_write_at(10, 8, UI_PANEL, line);
+  ui_write_at(10, 9, UI_PANEL, "Website: chrysalisos.netlify.app");
+
+  ui_write_at(10, 11, UI_PANEL_TITLE, "Choose what to do next");
+  ui_write_at(12, 13, UI_PANEL, "M  Shutdown  - Power off the computer");
+  ui_write_at(12, 14, UI_PANEL, "R  Reboot    - Boot into ChrysalisOS");
+  ui_write_at(12, 15, UI_PANEL, "J  Recovery  - Open recovery shell");
+
+  ui_draw_footer("Press M / R / J");
 }
 
 static void ui_progress_update(int percent, const char *stage,
@@ -951,28 +999,28 @@ static void ui_progress_update(int percent, const char *stage,
   int changed_percent = (pct != ui_last_percent);
   int filled = (pct * UI_BAR_W) / 100;
 
-  ui_fill_rect_textmode(12, 8, 64, 1, 0x1F);
-  ui_fill_rect_textmode(12, 9, 64, 1, 0x1F);
-  ui_write_at(12, 8, 0x1F, stage ? stage : "");
-  ui_write_at(12, 9, 0x1F, detail ? detail : "");
+  ui_fill_rect_textmode(UI_VALUE_X, 8, UI_VALUE_W, 1, UI_PANEL);
+  ui_fill_rect_textmode(UI_VALUE_X, 9, UI_VALUE_W, 1, UI_PANEL);
+  ui_write_at(UI_VALUE_X, 8, UI_PANEL, stage ? stage : "");
+  ui_write_at(UI_VALUE_X, 9, UI_PANEL_MUTED, detail ? detail : "");
 
   char progress_text[32];
   ui_make_progress_text(pct, progress_text, sizeof(progress_text));
-  ui_write_line(4, 11, 72, 0x1F, progress_text);
+  ui_write_line(UI_LABEL_X, 11, 60, UI_PANEL, progress_text);
 
-  terminal_putentryat('[', 0x70, UI_BAR_X - 1, UI_BAR_Y);
-  terminal_putentryat(']', 0x70, UI_BAR_X + UI_BAR_W, UI_BAR_Y);
+  terminal_putentryat('[', UI_PANEL_MUTED, UI_BAR_X - 1, UI_BAR_Y);
+  terminal_putentryat(']', UI_PANEL_MUTED, UI_BAR_X + UI_BAR_W, UI_BAR_Y);
   for (int i = 0; i < UI_BAR_W; i++) {
     if (i < filled) {
-      terminal_putentryat('=', 0x1B, UI_BAR_X + i, UI_BAR_Y);
+      terminal_putentryat('=', 0x3F, UI_BAR_X + i, UI_BAR_Y);
     } else {
-      terminal_putentryat('-', 0x17, UI_BAR_X + i, UI_BAR_Y);
+      terminal_putentryat('.', UI_PANEL_MUTED, UI_BAR_X + i, UI_BAR_Y);
     }
   }
 
   if (filled > 0) {
     int hi = ui_progress_anim_tick % filled;
-    terminal_putentryat('=', 0x3F, UI_BAR_X + hi, UI_BAR_Y);
+    terminal_putentryat('>', UI_PANEL_TITLE, UI_BAR_X + hi, UI_BAR_Y);
   }
   ui_progress_anim_tick++;
   ui_last_percent = pct;
@@ -995,15 +1043,23 @@ static int installer_count_modules(uint32_t addr) {
   return module_count;
 }
 
-/* Keyboard polling for menu */
-static uint8_t kbd_getscancode() {
-  while (!(inb(0x64) & 1))
-    ; // wait for output buffer full
-  return inb(0x60);
+/* Keyboard polling for menu (USB + PS/2) */
+static int usb_try_getchar(char *out) {
+  input_event_t ev;
+  usb_poll();
+  while (input_pop(&ev)) {
+    if (ev.type == INPUT_KEYBOARD && ev.pressed) {
+      *out = (char)ev.keycode;
+      return 1;
+    }
+  }
+  return 0;
 }
 
-static char kbd_getchar() {
-  uint8_t scancode = kbd_getscancode();
+static int ps2_try_getchar(char *out) {
+  if (!(inb(0x64) & 1))
+    return 0;
+  uint8_t scancode = inb(0x60);
   if (scancode & 0x80)
     return 0; // ignore release
   static const char map[] = {
@@ -1012,9 +1068,21 @@ static char kbd_getchar() {
       'o', 'p', '[',  ']',  '\n', 0,   'a', 's',  'd', 'f', 'g', 'h',
       'j', 'k', 'l',  ';',  '\'', '`', 0,   '\\', 'z', 'x', 'c', 'v',
       'b', 'n', 'm',  ',',  '.',  '/', 0,   '*',  0,   ' '};
-  if (scancode < sizeof(map))
-    return map[scancode];
+  if (scancode < sizeof(map)) {
+    *out = map[scancode];
+    return (*out != 0);
+  }
   return 0;
+}
+
+static char kbd_getchar() {
+  char c = 0;
+  while (1) {
+    if (usb_try_getchar(&c))
+      return c;
+    if (ps2_try_getchar(&c))
+      return c;
+  }
 }
 
 /* Simple input helper */
@@ -1027,7 +1095,7 @@ static void get_input(char *buf, int max) {
     } else if (c == '\b') {
       if (i > 0) {
         i--;
-        terminal_putentryat(' ', 0x1F, terminal_get_cursor_x() - 1,
+        terminal_putentryat(' ', ui_input_color, terminal_get_cursor_x() - 1,
                             terminal_get_cursor_y());
         terminal_set_cursor_pos(terminal_get_cursor_x() - 1,
                                 terminal_get_cursor_y());
@@ -1049,7 +1117,7 @@ static void get_password(char *buf, int max) {
     } else if (c == '\b') {
       if (i > 0) {
         i--;
-        terminal_putentryat(' ', 0x1F, terminal_get_cursor_x() - 1,
+        terminal_putentryat(' ', ui_input_color, terminal_get_cursor_x() - 1,
                             terminal_get_cursor_y());
         terminal_set_cursor_pos(terminal_get_cursor_x() - 1,
                                 terminal_get_cursor_y());
@@ -1064,6 +1132,7 @@ static void get_password(char *buf, int max) {
 
 static void recovery_shell() {
   terminal_clear();
+  ui_input_color = 0x07;
 
   // Try to mount FAT32 if not already done
   serial("[RECOVERY] Attempting to mount filesystem...\n");
@@ -1185,6 +1254,10 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   serial_init();
   serial("\n\n[INSTALLER] Starting Chrysalis OS Installer...\n");
 
+  /* Initialize input + USB (for bare-metal USB keyboards) */
+  input_init();
+  usb_core_init();
+
   /* 0. Welcome Menu */
   installer_partition_info_t detected_parts[4];
   bool has_valid_mbr = false;
@@ -1305,11 +1378,12 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   if (!upgrade_mode) {
     ui_progress_update(20, "User setup", "Collecting account information...");
     ui_draw_user_setup_screen();
-    terminal_set_cursor_pos(18, 8);
+    ui_input_color = UI_PANEL_MUTED;
+    terminal_set_cursor_pos(UI_INPUT_X, 8);
     get_input(username, 32);
-    terminal_set_cursor_pos(18, 10);
+    terminal_set_cursor_pos(UI_INPUT_X, 10);
     get_password(password, 32);
-    terminal_set_cursor_pos(18, 12);
+    terminal_set_cursor_pos(UI_INPUT_X, 12);
     get_input(hostname, 32);
 
     serial("[INSTALLER] User setup: user='%s' host='%s'\n", username, hostname);
@@ -1890,48 +1964,7 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
 
   /* 8. Success Screen */
   while (true) {
-    terminal_clear();
-    terminal_set_color(0x70);
-    for (int x = 0; x < 80; x++)
-      terminal_putentryat(' ', 0x70, x, 0);
-    terminal_printf(" Chrysalis OS %s Complete                                 "
-                    "        [Success]",
-                    upgrade_mode ? "Upgrade" : "Installation");
-
-    terminal_set_color(0x1F);
-    terminal_printf("\n\n\n");
-    terminal_printf(
-        "    ************************************************************\n");
-    terminal_printf(
-        "    *                                                          *\n");
-    terminal_printf(
-        "    *             ChrysalisOS installed successfully            *\n");
-    terminal_printf(
-        "    *                                                          *\n");
-    terminal_printf(
-        "    ************************************************************\n\n");
-
-#ifdef CHRYVER
-    terminal_printf("    Version  = %s\n", CHRYVER);
-#else
-    terminal_printf("    Version  = unknown\n");
-#endif
-    terminal_printf("    Website  = https://chrysalisos.netlify.app\n\n");
-    terminal_printf(
-        "    The installation has finished. Please choose how to proceed:\n\n");
-
-    terminal_printf("    [M] Shutdown  - Safely turn off the computer.\n");
-    terminal_printf("    [R] Reboot    - Restart to boot into Chrysalis OS.\n");
-    terminal_printf("    [J] Recovery  - Drop into recovery shell.\n\n");
-
-    terminal_printf("\n\n\n\n\n\n");
-
-    // Footer bar
-    terminal_set_color(0x70);
-    for (int x = 0; x < 80; x++)
-      terminal_putentryat(' ', 0x70, x, 24);
-    terminal_printf(" [M,R,J] Select Action");
-    terminal_set_color(0x1F);
+    ui_draw_success_screen(upgrade_mode);
 
     bool back_to_menu = false;
     while (!back_to_menu) {
