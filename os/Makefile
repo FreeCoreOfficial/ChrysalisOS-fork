@@ -1074,6 +1074,9 @@ $(BUILD)/colors/cl.o: kernel/colors/cl.c | dirs
 # USERLAND (LibPetal & Apps)
 # -------------------------
 
+HOSTCC ?= gcc
+HOSTCFLAGS ?= -O2 -Wall -Wextra -fno-plt -no-pie
+
 $(BUILD)/user/libpetal.o: user/libpetal/src/libpetal.c | dirs
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -1132,6 +1135,33 @@ petal_apps: $(PETAL_APPS) $(PETAL_LIBS)
 $(ISO)/system/lib/libc.so: $(LIBC_PIC_OBJS) | dirs
 	@mkdir -p $(ISO)/system/lib
 	$(LD) -shared -m elf_i386 $(LIBC_PIC_OBJS) -o $@
+
+# -------------------------
+# LINUX ABI TEST BINARIES
+# -------------------------
+
+LINUX_TEST_SRC = user/tests/linux_hello.c
+LINUX_TESTS = $(ISO)/system/tests/linux-hello64 $(ISO)/system/tests/linux-hello32
+
+linux_tests: $(LINUX_TESTS)
+
+$(BUILD)/tests/linux-hello64: $(LINUX_TEST_SRC) | dirs
+	@mkdir -p $(dir $@)
+	$(HOSTCC) $(HOSTCFLAGS) -Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2 \
+		$< -o $@
+
+$(BUILD)/tests/linux-hello32: $(LINUX_TEST_SRC) | dirs
+	@mkdir -p $(dir $@)
+	$(HOSTCC) $(HOSTCFLAGS) -m32 -Wl,--dynamic-linker=/lib/ld-linux.so.2 \
+		$< -o $@
+
+$(ISO)/system/tests/linux-hello64: $(BUILD)/tests/linux-hello64 | dirs
+	@mkdir -p $(dir $@)
+	cp $< $@
+
+$(ISO)/system/tests/linux-hello32: $(BUILD)/tests/linux-hello32 | dirs
+	@mkdir -p $(dir $@)
+	cp $< $@
 
 $(BUILD)/surface.o: kernel/video/surface.c | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -1263,10 +1293,18 @@ icons:
 		echo "[ICONS] Wallpaper copied to $(ISO)/system/bg.bmp"; \
 	else echo "WARN: bg.bmp not found in tools/icons/out/"; fi
 
-iso: all iso/boot/grub/grub.cfg icons
+iso: all linux_tests iso/boot/grub/grub.cfg icons
 	@mkdir -p $(ISO)/boot/grub
 	@mkdir -p $(ISO)/system/pkg/installed
 	@cp kernel/chryspkg/catalog.json $(ISO)/system/pkg/catalog.json
+	@if [ -d ../toolchain/linux-sysroot/lib ] || [ -d ../toolchain/linux-sysroot/lib64 ]; then \
+		echo "[LINUX] Copying userland sysroot..."; \
+		mkdir -p $(ISO)/lib $(ISO)/lib64; \
+		cp -a ../toolchain/linux-sysroot/lib/* $(ISO)/lib/ 2>/dev/null || true; \
+		cp -a ../toolchain/linux-sysroot/lib64/* $(ISO)/lib64/ 2>/dev/null || true; \
+	else \
+		echo "[LINUX] No linux-sysroot found in toolchain/linux-sysroot"; \
+	fi
 	@echo "[GRUB] Installing theme..."
 	@mkdir -p $(ISO)/boot/grub/themes/chrysalis
 	@cp ../grub-theme/* $(ISO)/boot/grub/themes/chrysalis/ 2>/dev/null || true
@@ -1291,7 +1329,7 @@ assets:
 # -------------------------
 # HELP
 # -------------------------
-
+# OUTDATED COMMANDS USE COMMANDS FROM PACKAGE.JSON
 help:
 	@echo ""
 	@echo "Chrysalis OS - Makefile commands"

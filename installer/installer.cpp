@@ -1445,6 +1445,8 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
                         '/', 'i', 'c', 'o', 'n', 's', 0};
   char services_dir[18] = {'/', 's', 'y', 's', 't', 'e', 'm',
                            '/', 's', 'e', 'r', 'v', 'i', 'c', 'e', 's', 0};
+  char tests_dir[15] = {'/', 's', 'y', 's', 't', 'e', 'm',
+                        '/', 't', 'e', 's', 't', 's', 0};
   char themes_dir[18] = {'/', 'b', 'o', 'o', 't', '/', 'g', 'r', 'u',
                          'b', '/', 't', 'h', 'e', 'm', 'e', 's', 0};
   char theme_dir[28] = {'/', 'b', 'o', 'o', 't', '/', 'g', 'r', 'u', 'b',
@@ -1479,6 +1481,10 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   mr = fat32_create_directory_verified(services_dir, 1);
   if (mr != 0 && !upgrade_mode) {
     serial("[INSTALLER] WARN: mkdir /system/services failed (err=%d)\n", mr);
+  }
+  mr = fat32_create_directory_verified(tests_dir, 1);
+  if (mr != 0 && !upgrade_mode) {
+    serial("[INSTALLER] WARN: mkdir /system/tests failed (err=%d)\n", mr);
   }
   mr = fat32_create_directory_verified(themes_dir, 1);
   if (mr != 0 && !upgrade_mode) {
@@ -1516,6 +1522,8 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   size_t bg_bmp_size = 0;
   void *kernel64_data = NULL;
   size_t kernel64_size = 0;
+  int have_linux_hello32 = 0;
+  int have_linux_hello64 = 0;
 
   int module_total = installer_count_modules(addr);
   if (module_total <= 0)
@@ -1624,6 +1632,20 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
           size_t off = strlen(path);
           memcpy(path + off, current_mod_name, strlen(current_mod_name) + 1);
           serial("[INSTALLER] Dynamic App: %s -> %s\n", current_mod_name, path);
+          fat32_create_file_verified(path, (void *)(uintptr_t)mod->mod_start,
+                                     (uint32_t)(mod->mod_end - mod->mod_start),
+                                     0);
+          kmalloc_reset();
+        } else if (strcmp(current_mod_name, "linux-hello32") == 0 ||
+                   strcmp(current_mod_name, "linux-hello64") == 0) {
+          if (strcmp(current_mod_name, "linux-hello32") == 0)
+            have_linux_hello32 = 1;
+          if (strcmp(current_mod_name, "linux-hello64") == 0)
+            have_linux_hello64 = 1;
+          char path[64] = "/system/tests/";
+          size_t off = strlen(path);
+          memcpy(path + off, current_mod_name, strlen(current_mod_name) + 1);
+          serial("[INSTALLER] Test binary: %s -> %s\n", current_mod_name, path);
           fat32_create_file_verified(path, (void *)(uintptr_t)mod->mod_start,
                                      (uint32_t)(mod->mod_end - mod->mod_start),
                                      0);
@@ -1746,6 +1768,10 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
                   "  terminal_output console\n");
     ui_append_str(grub_cfg, sizeof(grub_cfg),
                   "  multiboot2 /boot/chrysalis/kernel64.bin\n");
+    if (have_linux_hello64) {
+      ui_append_str(grub_cfg, sizeof(grub_cfg),
+                    "  module2 /system/tests/linux-hello64 linux-hello64\n");
+    }
     ui_append_str(grub_cfg, sizeof(grub_cfg), "  boot\n}\n\n");
 
     ui_append_str(grub_cfg, sizeof(grub_cfg),
@@ -1756,6 +1782,10 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
                   "  terminal_output console\n");
     ui_append_str(grub_cfg, sizeof(grub_cfg),
                   "  multiboot2 /boot/chrysalis/kernel64.bin linuxabi=1\n");
+    if (have_linux_hello64) {
+      ui_append_str(grub_cfg, sizeof(grub_cfg),
+                    "  module2 /system/tests/linux-hello64 linux-hello64\n");
+    }
     ui_append_str(grub_cfg, sizeof(grub_cfg), "  boot\n}\n\n");
   }
 

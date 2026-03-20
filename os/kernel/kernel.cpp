@@ -445,6 +445,19 @@ extern "C" void kernel_main(uint32_t magic, uint32_t addr) {
   // 5) Optional boot logo
   bootlogo_show();
 
+  // 19) Heap + buddy allocator + kmalloc (must be ready before fs_init)
+  extern uint8_t __heap_start;
+  extern uint8_t __heap_end;
+
+  // defensive check: heap range must make sense
+  if (&__heap_end <= &__heap_start) {
+    panic_if_fatal("Heap region invalid (heap_end <= heap_start)");
+  }
+
+  heap_init(&__heap_start, (size_t)(&__heap_end - &__heap_start));
+  buddy_init_from_heap();
+  kmalloc_init();
+
   // 6) Filesystem core: initialize and mount a minimal root
   fs_init();
   if (!ramfs_root()) {
@@ -470,19 +483,6 @@ extern "C" void kernel_main(uint32_t magic, uint32_t addr) {
 
   // 8) Shell: text UI
   // shell_init(); // Moved later (after WM init) to run inside a window
-
-  // 19) Heap + buddy allocator + kmalloc (MOVED UP - CRITICAL for drivers)
-  extern uint8_t __heap_start;
-  extern uint8_t __heap_end;
-
-  // defensive check: heap range must make sense
-  if (&__heap_end <= &__heap_start) {
-    panic_if_fatal("Heap region invalid (heap_end <= heap_start)");
-  }
-
-  heap_init(&__heap_start, (size_t)(&__heap_end - &__heap_start));
-  buddy_init_from_heap();
-  kmalloc_init();
 
   /* Register multiboot modules directly in RAMFS (don't copy - just point to
    * them) */

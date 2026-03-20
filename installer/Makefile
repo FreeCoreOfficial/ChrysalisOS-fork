@@ -195,6 +195,8 @@ installer.iso: $(BUILD)/installer.elf
 	@if [ -d ../os/iso/icons ]; then cp ../os/iso/icons/*.bmp $(ISO)/icons/; else echo "WARNING: icons bmp not found!"; fi
 	@mkdir -p $(ISO)/system/apps
 	@if [ -d ../os/iso/system/apps ]; then cp ../os/iso/system/apps/*.petal $(ISO)/system/apps/; else echo "WARNING: petal apps not found!"; fi
+	@mkdir -p $(ISO)/system/tests
+	@if [ -d ../os/iso/system/tests ]; then cp ../os/iso/system/tests/* $(ISO)/system/tests/ 2>/dev/null || true; else echo "WARNING: system tests not found!"; fi
 	@mkdir -p $(ISO)/system
 	@if [ -f ../os/iso/system/bg.bmp ]; then \
 		cp ../os/iso/system/bg.bmp $(ISO)/system/bg.bmp; \
@@ -237,6 +239,10 @@ installer.iso: $(BUILD)/installer.elf
 	@for f in $(ISO)/system/apps/*.petal; do \
 		nm=$$(basename $$f); \
 		echo "  module2 /system/apps/$$nm $$nm" >> $(ISO)/boot/grub/grub.cfg; \
+	done
+	@for f in $(ISO)/system/tests/*; do \
+		nm=$$(basename $$f); \
+		echo "  module2 /system/tests/$$nm $$nm" >> $(ISO)/boot/grub/grub.cfg; \
 	done
 	@if [ -f $(ISO)/system/bg.bmp ]; then \
 		echo '  module2 /system/bg.bmp bg.bmp' >> $(ISO)/boot/grub/grub.cfg; \
