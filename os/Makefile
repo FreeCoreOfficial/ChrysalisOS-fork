@@ -304,6 +304,11 @@ OBJS64 = \
 	$(BUILD64)/sched/task64.o \
 	$(BUILD64)/drivers/serial.o \
 	$(BUILD64)/string.o \
+	$(BUILD64)/video/gpu.o \
+	$(BUILD64)/video/gpu_bochs.o \
+	$(BUILD64)/hardware/pci.o \
+	$(BUILD64)/input/input.o \
+	$(BUILD64)/time/timer.o \
 
 
 
@@ -358,6 +363,9 @@ dirs64: $(BUILD64)
 	mkdir -p $(BUILD64)/linux_compat
 	mkdir -p $(BUILD64)/sched
 	mkdir -p $(BUILD64)/user
+	mkdir -p $(BUILD64)/video
+	mkdir -p $(BUILD64)/input
+	mkdir -p $(BUILD64)/hardware
 
 
 
@@ -598,6 +606,26 @@ $(BUILD64)/video/kms.o: kernel/video/kms.c | dirs64
 $(BUILD64)/linux_compat/linux_syscall_x86_64.o: kernel/linux_compat/linux_syscall_x86_64.cpp | dirs64
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS64) -c $< -o $@
+
+$(BUILD64)/video/gpu.o: kernel/video/gpu.c | dirs64
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS64) -c $< -o $@
+
+$(BUILD64)/video/gpu_bochs.o: kernel/video/gpu_bochs.c | dirs64
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS64) -c $< -o $@
+
+$(BUILD64)/hardware/pci.o: kernel/hardware/pci.cpp | dirs64
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS64) -c $< -o $@
+
+$(BUILD64)/input/input.o: kernel/input/input.c | dirs64
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS64) -c $< -o $@
+
+$(BUILD64)/time/timer.o: kernel/time/timer.c | dirs64
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS64) -c $< -o $@
 
 $(BUILD64)/user/hello64.o: user/hello64.S | dirs64
 	@mkdir -p $(dir $@)
@@ -1147,7 +1175,8 @@ $(ISO)/system/lib/libc.so: $(LIBC_PIC_OBJS) | dirs
 
 LINUX_TEST_SRC = user/tests/linux_hello.c
 HELLO_LIBC_SRC = user/hello_libc.c
-LINUX_TESTS = $(ISO)/system/tests/linux-hello64 $(ISO)/system/tests/linux-hello32 $(ISO)/system/tests/hello-libc
+LINUX_TEST_M2_SRC = user/tests/linux_test_m2.c
+LINUX_TESTS = $(ISO)/system/tests/linux-hello64 $(ISO)/system/tests/linux-hello32 $(ISO)/system/tests/hello-libc $(ISO)/system/tests/linux-test-m2
 
 linux_tests: $(LINUX_TESTS)
 
@@ -1178,6 +1207,14 @@ $(ISO)/system/tests/hello-libc: $(BUILD)/tests/hello-libc | dirs
 	@mkdir -p $(dir $@)
 	cp $< $@
 
+$(BUILD)/tests/linux-test-m2: $(LINUX_TEST_M2_SRC) | dirs
+	@mkdir -p $(dir $@)
+	$(HOSTCC) $(HOSTCFLAGS) -Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2 \
+		$< -o $@
+
+$(ISO)/system/tests/linux-test-m2: $(BUILD)/tests/linux-test-m2 | dirs
+	@mkdir -p $(dir $@)
+	cp $< $@
 $(BUILD)/surface.o: kernel/video/surface.c | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 

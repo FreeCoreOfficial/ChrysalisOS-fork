@@ -21,6 +21,11 @@
 #include "smp/multiboot.h"
 #include "string.h"
 #include "time/clock.h"
+#include "video/gpu.h"
+#include "video/gpu_bochs.h"
+#include "video/kms.h"
+#include "input/input.h"
+#include "hardware/pci.h"
 
 extern "C" void paging64_init(void);
 extern "C" void idt64_init(void);
@@ -538,6 +543,8 @@ extern "C" void kernel_main64(unsigned long long magic,
                                    sizeof(g_kernel_stack0)));
   idt64_init();
   syscall64_init();
+  pci_init();
+  gpu_bochs_init();
 
   /* Disable Legacy PIC to prevent IRQs aliasing CPU Exceptions (e.g. IRQ0 -> Vector 8/Double Fault) */
   outb(0x21, 0xFF);
@@ -566,6 +573,11 @@ extern "C" void kernel_main64(unsigned long long magic,
   serial_write_string("\r\n");
 
   time_init();
+  gpu_init();
+  pci_init();
+  gpu_bochs_init();
+  kms_init();
+  input_init();
   vfs_mount("/", ramfs_root());
   vfs_mount("/dev", devfs_root());
   vfs_mount("/proc", procfs_root());

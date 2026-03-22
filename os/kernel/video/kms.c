@@ -1,12 +1,16 @@
 #include "kms.h"
-
-#ifndef __x86_64__
 #include "gpu.h"
 #include "../mem/kmalloc.h"
 #include "../string.h"
+#include "../linux_compat/linux_abi.h"
 
+#ifdef __x86_64__
+#define copy_to_user(d, s, n) (memcpy(d, s, n), 0)
+#define copy_from_user(d, s, n) (memcpy(d, s, n), 0)
+#else
 extern int copy_from_user(void *dst, const void *src, uint32_t size);
 extern int copy_to_user(void *dst, const void *src, uint32_t size);
+#endif
 
 typedef struct kms_buf {
   uint32_t handle;
@@ -81,9 +85,41 @@ int kms_init(void) {
   return g_kms_gpu ? 0 : -1;
 }
 
+static int drm_ioctl_version(void *arg) {
+  struct linux_drm_version v;
+  memset(&v, 0, sizeof(v));
+  v.version_major = 1;
+  v.version_minor = 0;
+  v.version_patchlevel = 0;
+  return copy_to_user(arg, &v, sizeof(v));
+}
+
+static int drm_ioctl_get_resources(void *arg) {
+  struct linux_drm_mode_card_res res;
+  memset(&res, 0, sizeof(res));
+  if (!g_kms_gpu) return -1;
+
+  res.count_fbs = 0;
+  res.count_crtcs = 1;
+  res.count_connectors = 1;
+  res.count_encoders = 1;
+  res.min_width = res.max_width = g_kms_gpu->width;
+  res.min_height = res.max_height = g_kms_gpu->height;
+  
+  return copy_to_user(arg, &res, sizeof(res));
+}
+
 int kms_ioctl(uint32_t cmd, void *arg) {
   if (!g_kms_gpu)
     return -1;
+
+  /* Handle Linux DRM ioctls */
+  switch (cmd) {
+    case DRM_IOCTL_VERSION: return drm_ioctl_version(arg);
+    case DRM_IOCTL_GET_RESOURCES: return drm_ioctl_get_resources(arg);
+    case DRM_IOCTL_SET_MASTER: return 0;
+    case DRM_IOCTL_DROP_MASTER: return 0;
+  }
 
   switch (cmd) {
   case KMS_IOCTL_GET_INFO: {
@@ -191,11 +227,3 @@ int kms_ioctl(uint32_t cmd, void *arg) {
     return -1;
   }
 }
-#else
-int kms_init(void) { return -1; }
-int kms_ioctl(uint32_t cmd, void *arg) {
-  (void)cmd;
-  (void)arg;
-  return -1;
-}
-#endif

@@ -70,20 +70,24 @@ static void serial_write_int(int32_t v)
     serial_write_uint((uint32_t)v);
 }
 
-static void serial_write_hex(uint32_t v)
+extern "C" void serial_write_hex(uint64_t v)
 {
     serial_write_string("0x");
-    for (int i = 28; i >= 0; i -= 4) {
+#if defined(__x86_64__)
+    for (int i = 60; i >= 0; i -= 4) {
         uint8_t d = (v >> i) & 0xF;
         serial_write(d < 10 ? '0' + d : 'a' + d - 10);
     }
+#else
+    for (int i = 28; i >= 0; i -= 4) {
+        uint8_t d = (uint8_t)((v >> i) & 0xF);
+        serial_write(d < 10 ? '0' + d : 'a' + d - 10);
+    }
+#endif
 }
 
-void serial_printf(const char* fmt, ...)
+extern "C" void serial_vprintf(const char* fmt, va_list args)
 {
-    va_list args;
-    va_start(args, fmt);
-
     while (*fmt) {
         if (*fmt != '%') {
             serial_write(*fmt++);
@@ -106,15 +110,11 @@ void serial_printf(const char* fmt, ...)
             serial_write_uint(va_arg(args, uint32_t));
             break;
         case 'x':
-            serial_write_hex(va_arg(args, uint32_t));
+            serial_write_hex(va_arg(args, uint64_t));
             break;
         case 'p': {
-#if defined(__x86_64__) || defined(_M_X64)
             uintptr_t v = (uintptr_t)va_arg(args, void*);
-            serial_write_hex((uint32_t)v);
-#else
-            serial_write_hex((uint32_t)va_arg(args, void*));
-#endif
+            serial_write_hex((uint64_t)v);
             break;
         }
         case '%':
@@ -127,6 +127,22 @@ void serial_printf(const char* fmt, ...)
         }
         fmt++;
     }
+}
 
+extern "C" void serial_printf(const char* fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    serial_vprintf(fmt, args);
     va_end(args);
 }
+
+#ifdef __x86_64__
+extern "C" void serial(const char* fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    serial_vprintf(fmt, args);
+    va_end(args);
+}
+#endif

@@ -14,21 +14,6 @@
 #include "../../time/timer.h"
 #endif
 
-typedef enum {
-  DEV_TTY = 1,
-  DEV_NULL,
-  DEV_ZERO,
-  DEV_FB0,
-  DEV_DRI_DIR,
-  DEV_DRI_CARD0
-} dev_type_t;
-
-typedef struct dev_node {
-  vnode_t vnode;
-  const char *name;
-  dev_type_t type;
-} dev_node_t;
-
 static fs_ops_t devfs_ops;
 static dev_node_t dev_root;
 static dev_node_t dev_tty;
@@ -37,6 +22,19 @@ static dev_node_t dev_zero;
 static dev_node_t dev_fb0;
 static dev_node_t dev_dri;
 static dev_node_t dev_card0;
+static dev_node_t dev_input;
+static dev_node_t dev_event0;
+static dev_node_t dev_event1;
+static dev_node_t dev_console;
+
+#include "../../input/input.h"
+#include "../../linux_compat/linux_abi.h"
+#ifdef __x86_64__
+#include "../../linux_compat/linux_syscall_x86_64.h"
+#define copy_to_user(d, s, n) (memcpy(d, s, n), 0)
+#else
+extern int copy_to_user(void *dst, const void *src, uint32_t size);
+#endif
 
 static int devfs_open(struct vnode *n) {
   (void)n;
@@ -65,6 +63,7 @@ static int devfs_read(struct vnode *n, uint32_t off, uint8_t *buf,
     return 0;
   dev_node_t *dn = (dev_node_t *)n;
   switch (dn->type) {
+  case DEV_CONSOLE:
   case DEV_TTY: {
     uint32_t read = 0;
     while (read < size) {
@@ -126,6 +125,16 @@ static int devfs_read(struct vnode *n, uint32_t off, uint8_t *buf,
     return 0;
   case DEV_DRI_DIR:
     return 0;
+  case DEV_INPUT_EVENT0:
+  case DEV_INPUT_EVENT1: {
+    struct linux_input_event ev;
+    if (size < sizeof(ev)) return 0;
+    if (input_pop_evdev(&ev)) {
+      memcpy(buf, &ev, sizeof(ev));
+      return (int)sizeof(ev);
+    }
+    return 0;
+  }
   default:
     return 0;
   }
@@ -226,6 +235,12 @@ static int devfs_readdir(struct vnode *dir, uint32_t index, struct vnode **out) 
     case 4:
       *out = &dev_dri.vnode;
       return 1;
+    case 5:
+      *out = &dev_input.vnode;
+      return 1;
+    case 6:
+      *out = &dev_console.vnode;
+      return 1;
     default:
       *out = NULL;
       return 0;
@@ -238,6 +253,19 @@ static int devfs_readdir(struct vnode *dir, uint32_t index, struct vnode **out) 
     }
     *out = NULL;
     return 0;
+  }
+  if (dir == &dev_input.vnode) {
+    switch (index) {
+    case 0:
+      *out = &dev_event0.vnode;
+      return 1;
+    case 1:
+      *out = &dev_event1.vnode;
+      return 1;
+    default:
+      *out = NULL;
+      return 0;
+    }
   }
   return 0;
 }
@@ -280,6 +308,14 @@ vnode_t *devfs_root(void) {
   devfs_init_node(&dev_dri, "dri", VNODE_DIR, DEV_DRI_DIR, &dev_root.vnode);
   devfs_init_node(&dev_card0, "card0", VNODE_DEV, DEV_DRI_CARD0,
                   &dev_dri.vnode);
+  devfs_init_node(&dev_input, "input", VNODE_DIR, DEV_INPUT_DIR,
+                  &dev_root.vnode);
+  devfs_init_node(&dev_console, "console", VNODE_DEV, DEV_CONSOLE,
+                  &dev_root.vnode);
+  devfs_init_node(&dev_event0, "event0", VNODE_DEV, DEV_INPUT_EVENT0,
+                  &dev_input.vnode);
+  devfs_init_node(&dev_event1, "event1", VNODE_DEV, DEV_INPUT_EVENT1,
+                  &dev_input.vnode);
 
   return &dev_root.vnode;
 }

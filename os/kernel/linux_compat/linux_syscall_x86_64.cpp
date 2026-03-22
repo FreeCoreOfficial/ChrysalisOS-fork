@@ -11,10 +11,12 @@
 #include "../arch/x86_64/syscall64.h"
 #include "../fs/pipe/pipe.h"
 #include "../fs/vfs/vfs.h"
+#include "../fs/vfs/vnode.h"
 #include "../fs/vfs/fs_ops.h"
-#include "../arch/x86_64/syscall64.h"
 #include "../drivers/serial.h"
 #include "../hardware/msr.h"
+#include "../video/kms.h"
+#include "../fs/devfs/devfs.h"
 
 
 
@@ -45,6 +47,7 @@
 #define LINUX_NR_lstat 6
 #define LINUX_NR_lseek 8
 #define LINUX_NR_mmap 9
+#define LINUX_NR_ioctl 16
 #define LINUX_NR_mprotect 10
 #define LINUX_NR_munmap 11
 #define LINUX_NR_brk 12
@@ -58,6 +61,10 @@
 #define LINUX_NR_sysinfo 99
 #define LINUX_NR_getuid 102
 #define LINUX_NR_getgid 104
+#define LINUX_NR_geteuid 107
+#define LINUX_NR_getegid 108
+#define LINUX_NR_setuid 105
+#define LINUX_NR_setgid 106
 #define LINUX_NR_getppid 110
 #define LINUX_NR_time 201
 #define LINUX_NR_clock_gettime 228
@@ -209,7 +216,6 @@ typedef struct futex_waiter64 {
   int in_use;
   int woken;
 } futex_waiter64_t;
-
 #define FUTEX64_MAX_WAITERS 128
 static futex_waiter64_t g_futex64_waiters[FUTEX64_MAX_WAITERS];
 
@@ -1249,7 +1255,18 @@ static int linux_syscall_dispatch_x86_64_impl(uint64_t num, uint64_t a1, uint64_
     return 0;
 
   case LINUX_NR_getuid:
+    return task64_current() ? (int)task64_current()->uid : 0;
   case LINUX_NR_getgid:
+    return task64_current() ? (int)task64_current()->gid : 0;
+  case LINUX_NR_geteuid:
+    return task64_current() ? (int)task64_current()->euid : 0;
+  case LINUX_NR_getegid:
+    return task64_current() ? (int)task64_current()->egid : 0;
+  case LINUX_NR_setuid:
+    if (task64_current()) task64_current()->uid = (uint32_t)a1;
+    return 0;
+  case LINUX_NR_setgid:
+    if (task64_current()) task64_current()->gid = (uint32_t)a1;
     return 0;
 
   case LINUX_NR_uname:
@@ -1318,6 +1335,21 @@ static int linux_syscall_dispatch_x86_64_impl(uint64_t num, uint64_t a1, uint64_
       total += r;
     }
     return total;
+  }
+
+  case LINUX_NR_ioctl: {
+    int fd = (int)a1;
+    uint32_t cmd = (uint32_t)a2;
+    void *arg = (void *)(uintptr_t)a3;
+    /* For /dev/dri/card0, redirect to kms_ioctl */
+    file_t *f = syscall64_get_file(fd);
+    if (f && f->node && f->node->type == VNODE_DEV) {
+        dev_node_t *dn = (dev_node_t *)f->node;
+        if (dn->type == DEV_DRI_CARD0) {
+            return kms_ioctl(cmd, arg);
+        }
+    }
+    return -LINUX_EINVAL;
   }
 
   default:

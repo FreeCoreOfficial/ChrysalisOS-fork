@@ -52,6 +52,10 @@ typedef struct task64 {
 
   void *epoll_table[32];
   char exe_path[128];
+
+  uint32_t uid, gid;
+  uint32_t euid, egid;
+  uint64_t sleep_until;
 } task64_t;
 
 

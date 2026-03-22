@@ -15,6 +15,7 @@ void serial_write_string(const char* str);
 
 /* NEW */
 void serial_printf(const char* fmt, ...);
+void serial_write_hex(uint64_t val);
 
 #ifdef __cplusplus
 }

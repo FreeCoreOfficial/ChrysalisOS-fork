@@ -85,7 +85,8 @@ typedef enum {
   PROC_CPUINFO,
   PROC_CMDLINE,
   PROC_SELF,
-  PROC_SELF_EXE
+  PROC_SELF_EXE,
+  PROC_SELF_MAPS
 } proc_type_t;
 
 typedef struct proc_node {
@@ -103,6 +104,27 @@ static proc_node_t proc_cpuinfo;
 static proc_node_t proc_cmdline;
 static proc_node_t proc_self;
 static proc_node_t proc_self_exe;
+static proc_node_t proc_self_maps;
+
+#ifdef __x86_64__
+#include "../../sched/task64.h"
+#include "../../mem/user64_vm.h"
+#endif
+
+static int procfs_format_maps(char *out, size_t cap) {
+#ifdef __x86_64__
+  task64_t *t = task64_current();
+  if (!t) return 0;
+  
+  /* Mock maps output for now since iteration over vm_regions is not exposed */
+  return snprintf(out, cap, "00400000-00401000 r-xp 00000000 00:00 0 [exe]\n"
+                            "70000000-70040000 r-xp 00000000 00:00 0 [ld]\n"
+                            "7ffff000-80000000 rw-p 00000000 00:00 0 [stack]\n");
+#else
+  (void)cap;
+  return snprintf(out, 64, "32-bit maps not implemented\n");
+#endif
+}
 
 static int procfs_open(struct vnode *n) {
   (void)n;
@@ -158,6 +180,8 @@ static int procfs_format(proc_node_t *pn, char *out, size_t cap) {
                     "ChrysalisOS CPU\n");
   case PROC_CMDLINE:
     return snprintf(out, cap, "\n");
+  case PROC_SELF_MAPS:
+    return procfs_format_maps(out, cap);
   default:
     return 0;
   }
@@ -168,7 +192,7 @@ static int procfs_read(struct vnode *n, uint32_t off, uint8_t *buf,
   if (!n || !buf || size == 0)
     return 0;
   proc_node_t *pn = (proc_node_t *)n;
-  char tmp[512];
+  char tmp[1024]; /* Increased size for maps */
   int len = procfs_format(pn, tmp, sizeof(tmp));
   if (len <= 0)
     return 0;
@@ -256,6 +280,9 @@ static int procfs_readdir_self(struct vnode *dir, uint32_t index,
   case 0:
     *out = &proc_self_exe.vnode;
     return 1;
+  case 1:
+    *out = &proc_self_maps.vnode;
+    return 1;
   default:
     *out = NULL;
     return 0;
@@ -309,6 +336,8 @@ vnode_t *procfs_root(void) {
   procfs_init_node(&proc_self, "self", VNODE_DIR, PROC_SELF, &proc_root.vnode);
   proc_self.vnode.ops = &proc_self_ops;
   procfs_init_node(&proc_self_exe, "exe", VNODE_LNK, PROC_SELF_EXE,
+                   &proc_self.vnode);
+  procfs_init_node(&proc_self_maps, "maps", VNODE_FILE, PROC_SELF_MAPS,
                    &proc_self.vnode);
 
 

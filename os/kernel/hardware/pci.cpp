@@ -1,6 +1,12 @@
 // kernel/hardware/pci.cpp
 #include "pci.h"
+#ifndef __x86_64__
 #include "../terminal.h"
+#else
+#include "../drivers/serial.h"
+#define terminal_writestring serial_write_string
+#define terminal_writehex serial_write_hex
+#endif
 #include "../arch/i386/io.h"
 
 #define PCI_CONFIG_ADDRESS 0xCF8

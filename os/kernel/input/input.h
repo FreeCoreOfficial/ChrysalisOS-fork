@@ -31,6 +31,9 @@ void input_push_key(uint32_t keycode, bool pressed);
 void input_signal_ready(void);
 bool input_is_ready(void);
 
+struct linux_input_event;
+bool input_pop_evdev(struct linux_input_event *out_event);
+
 /* USB Keyboard State */
 void input_set_usb_keyboard_active(bool active);
 bool input_is_usb_keyboard_active(void);

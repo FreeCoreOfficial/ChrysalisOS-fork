@@ -1,20 +1,57 @@
 #include "input.h"
+#include "../linux_compat/linux_abi.h"
+#include "../time/timer.h"
 
-/* Kernel logging helper */
 extern void serial(const char *fmt, ...);
 
 #define INPUT_QUEUE_SIZE 512
+#define EVDEV_QUEUE_SIZE 1024
 
 static input_event_t queue[INPUT_QUEUE_SIZE];
 static int head = 0;
 static int tail = 0;
+
+static struct linux_input_event evdev_queue[EVDEV_QUEUE_SIZE];
+static int evdev_head = 0;
+static int evdev_tail = 0;
+
 static volatile bool input_ready = false;
 static volatile bool usb_keyboard_active = false;
+
+static void evdev_push(uint16_t type, uint16_t code, int32_t value) {
+    struct linux_input_event ev;
+    uint32_t ms = timer_uptime_ms();
+    ev.time.tv_sec = ms / 1000;
+    ev.time.tv_usec = (ms % 1000) * 1000;
+    ev.type = type;
+    ev.code = code;
+    ev.value = value;
+
+    int next = (evdev_head + 1) % EVDEV_QUEUE_SIZE;
+    if (next != evdev_tail) {
+        evdev_queue[evdev_head] = ev;
+        evdev_head = next;
+    }
+
+    /* Standard evdev practice: send a SYN_REPORT after each physical event */
+    if (type != EV_SYN) {
+        ev.type = EV_SYN;
+        ev.code = SYN_REPORT;
+        ev.value = 0;
+        next = (evdev_head + 1) % EVDEV_QUEUE_SIZE;
+        if (next != evdev_tail) {
+            evdev_queue[evdev_head] = ev;
+            evdev_head = next;
+        }
+    }
+}
 
 void input_init(void) {
     head = 0;
     tail = 0;
-    serial("[INPUT] subsystem initialized\n");
+    evdev_head = 0;
+    evdev_tail = 0;
+    serial("[INPUT] subsystem initialized with evdev support\n");
 }
 
 void input_push(input_event_t event) {
@@ -27,26 +64,23 @@ void input_push(input_event_t event) {
         }
     }
 
+    /* Push to native queue */
     int next = (head + 1) % INPUT_QUEUE_SIZE;
-    if (next == tail) {
-        /* Queue full: drop mouse-move, otherwise try to drop oldest mouse-move */
-        if (event.type == INPUT_MOUSE_MOVE) {
-            return;
-        }
-        if (queue[tail].type == INPUT_MOUSE_MOVE) {
-            tail = (tail + 1) % INPUT_QUEUE_SIZE;
-        } else {
-            /* Full of non-mouse events, drop this event */
-            return;
-        }
-        next = (head + 1) % INPUT_QUEUE_SIZE;
-        if (next == tail) {
-            return;
-        }
+    if (next != tail) {
+        queue[head] = event;
+        head = next;
     }
 
-    queue[head] = event;
-    head = next;
+    /* Push to evdev queue */
+    if (event.type == INPUT_KEYBOARD) {
+        evdev_push(EV_KEY, (uint16_t)event.keycode, event.pressed ? 1 : 0);
+    } else if (event.type == INPUT_MOUSE_MOVE) {
+        evdev_push(EV_REL, REL_X, event.mouse_x);
+        evdev_push(EV_REL, REL_Y, event.mouse_y);
+    } else if (event.type == INPUT_MOUSE_CLICK) {
+        /* Left button code is 0x110 (BTN_LEFT) */
+        evdev_push(EV_KEY, 0x110, event.pressed ? 1 : 0);
+    }
 }
 
 bool input_pop(input_event_t *out_event) {
@@ -56,6 +90,15 @@ bool input_pop(input_event_t *out_event) {
     
     *out_event = queue[tail];
     tail = (tail + 1) % INPUT_QUEUE_SIZE;
+    return true;
+}
+
+bool input_pop_evdev(struct linux_input_event *out_event) {
+    if (evdev_head == evdev_tail) {
+        return false;
+    }
+    *out_event = evdev_queue[evdev_tail];
+    evdev_tail = (evdev_tail + 1) % EVDEV_QUEUE_SIZE;
     return true;
 }
 

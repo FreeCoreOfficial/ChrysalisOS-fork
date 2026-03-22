@@ -2,9 +2,13 @@
 #include "gpu_bochs.h"
 #include "gpu.h"
 #include "../drivers/serial.h"
+#ifndef __x86_64__
 #include "../mm/vmm.h"
 #include "../memory/pmm.h"
 #include "../mm/paging.h"
+#else
+#include "../arch/x86_64/paging64.h"
+#endif
 #include "../arch/i386/io.h"
 
 /* Bochs VBE Extensions (BGA) Definitions */
@@ -30,8 +34,11 @@
 #define BOCHS_VENDOR_ID             0x1234
 #define BOCHS_DEVICE_ID             0x1111
 
-/* Virtual address for Bochs LFB (Must not conflict with VESA 0xE0000000 or ACPI 0xE1000000) */
+#ifndef __x86_64__
 #define BOCHS_LFB_VIRT_BASE         0xE2000000
+#else
+#define BOCHS_LFB_VIRT_BASE         0xFFFFFFFFC0000000ULL
+#endif
 
 /* PCI Configuration Ports */
 #define PCI_CONFIG_ADDRESS          0xCF8
@@ -227,6 +234,7 @@ device_found:
     fb_size = (fb_size + 0xFFF) & 0xFFFFF000;
 
     /* Reserve PMM */
+#ifndef __x86_64__
     pmm_reserve_area(bar0, fb_size);
 
     /* Map to Virtual Memory */
@@ -235,12 +243,15 @@ device_found:
     
     /* Force TLB flush */
     asm volatile("mov %%cr3, %%eax; mov %%eax, %%cr3" ::: "eax", "memory");
+#else
+    /* On 64-bit, we map pages one by one */
+    for (uint64_t i = 0; i < fb_size; i += 4096) {
+        paging64_map_page(BOCHS_LFB_VIRT_BASE + i, (uint64_t)bar0 + i, 0x03 | 0x10 | 0x08); /* Present, RW, PCD, PWT */
+    }
+#endif
 
     bochs_device.virt_addr = (void*)BOCHS_LFB_VIRT_BASE;
     serial("[GPU] Bochs framebuffer mapped: phys=0x%x virt=0x%x size=%d\n", bar0, BOCHS_LFB_VIRT_BASE, fb_size);
-
-    /* Set the mode */
-    bochs_set_mode(&bochs_device, width, height, bpp);
 
     /* Register with Core */
     gpu_register_device(&bochs_device);

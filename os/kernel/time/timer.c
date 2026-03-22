@@ -23,7 +23,9 @@ void timer_init(uint32_t frequency) {
   tick_hz = frequency;
   ticks = 0;
 
+#ifndef __x86_64__
   irq_install_handler(0, timer_irq_handler);
+#endif
 
   // Configurare Hardware PIT (Programmable Interval Timer)
   // Frecvența de bază: 1193180 Hz. Divizor = 1193180 / Hz dorit.
@@ -54,6 +56,10 @@ uint32_t timer_uptime_ms(void) {
     return 0;
   return ((uint32_t)ticks * 1000) / tick_hz;
 }
+#ifdef __x86_64__
+#include "../sched/task64.h"
+#endif
+
 void sleep(uint32_t ms) {
   if (tick_hz == 0)
     return;
@@ -62,11 +68,20 @@ void sleep(uint32_t ms) {
   if (wait_ticks == 0)
     wait_ticks = 1;
 
+#ifdef __x86_64__
+  task64_t *curr = task64_current();
+  if (curr) {
+      curr->sleep_until = timer_ticks() + wait_ticks;
+      curr->state = TASK64_SLEEPING;
+      task64_yield();
+  } else {
+#else
   if (current_task) {
     current_task->sleep_until = timer_ticks() + wait_ticks;
     current_task->state = TASK_SLEEPING;
     yield();
   } else {
+#endif
     /* Fallback for when scheduler not initialized */
     uint64_t start = timer_ticks();
     while ((timer_ticks() - start) < wait_ticks) {
