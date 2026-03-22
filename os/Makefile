@@ -280,6 +280,7 @@ OBJS64 = \
 	$(BUILD64)/kernel64.o \
 	$(BUILD64)/arch/idt64.o \
 	$(BUILD64)/arch/isr64.o \
+	$(BUILD64)/arch/gdt64.o \
 	$(BUILD64)/arch/paging64.o \
 	$(BUILD64)/arch/pmm64.o \
 	$(BUILD64)/arch/rtc64.o \
@@ -809,6 +810,10 @@ $(BUILD)/arch/x86_64/longmode.o: kernel/arch/x86_64/longmode.cpp | dirs
 
 $(BUILD64)/arch/multiboot2_header64.o: arch/i386/multiboot2_header.c | dirs64
 	$(CC) $(CFLAGS64) -DNO_FRAMEBUFFER -c $< -o $@
+
+$(BUILD64)/arch/gdt64.o: kernel/arch/x86_64/gdt64.cpp | dirs64
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS64) -c $< -o $@
 
 $(BUILD)/elf.o: kernel/elf/elf.c | dirs
 	$(CC) $(CFLAGS) -c $< -o $@

@@ -6,6 +6,7 @@
 #include "../mem/kmalloc.h"
 #include "../mem/user64_vm.h"
 #include "../sched/task64.h"
+#include "../drivers/serial.h"
 #include "../fs/fs.h"
 #ifndef __x86_64__
 #include "../cmds/fat.h"
@@ -189,7 +190,9 @@ static int map_user_segment(uint64_t vaddr, uint64_t memsz, uint64_t flags) {
     map_flags |= 0x4; /* USER */
     if (paging64_map_page(va, phys, map_flags) < 0)
       return -1;
-    memset((void *)(uint64_t)phys, 0, 0x1000);
+    /* Zero via the virtual address (not the physical frame address) so we
+      don't corrupt kernel memory near the bump-allocator watermark. */
+    memset((void *)(uintptr_t)va, 0, 0x1000);
   }
   return 0;
 }
@@ -202,7 +205,8 @@ static int map_user_stack(uint64_t top, uint64_t bytes) {
       return -1;
     if (paging64_map_page(va, phys, 0x7) < 0)
       return -1;
-    memset((void *)(uint64_t)phys, 0, 0x1000);
+    /* Zero via virtual address — same fix as map_user_segment. */
+    memset((void *)(uintptr_t)va, 0, 0x1000);
   }
   return 0;
 }
@@ -845,6 +849,38 @@ static int exec64_from_buffer(const uint8_t *file_data, size_t file_size,
                                   images[0].entry, images[0].phdr,
                                   images[0].phent, images[0].phnum, at_base,
                                   at_tls);
+
+  serial_write_string("[K64] user entry bytes: ");
+  const uint8_t *entry_ptr = (const uint8_t *)(uintptr_t)entry;
+  for (int i = 0; i < 16; ++i) {
+    serial_printf("%x ", (uint32_t)entry_ptr[i]);
+  }
+  serial_write_string("\r\n");
+  /*serial_write_string("[K64] DEBUG: NEW KERNEL IS EXECUTING EXEC64_FROM_BUFFER!\r\n");*/
+
+  uint64_t *pml4 = paging64_get_pml4();
+  if (pml4) {
+    uint64_t pml4_i = (entry >> 39) & 0x1FF;
+    uint64_t pdpt_i = (entry >> 30) & 0x1FF;
+    uint64_t pd_i = (entry >> 21) & 0x1FF;
+    uint64_t pt_i = (entry >> 12) & 0x1FF;
+    uint64_t pml4e = pml4[pml4_i];
+    uint64_t *pdpt = (uint64_t *)(uintptr_t)(pml4e & ~0xFFFULL);
+    uint64_t pdpte = pdpt ? pdpt[pdpt_i] : 0;
+    uint64_t *pd = (uint64_t *)(uintptr_t)(pdpte & ~0xFFFULL);
+    uint64_t pde = pd ? pd[pd_i] : 0;
+    uint64_t *pt = (uint64_t *)(uintptr_t)(pde & ~0xFFFULL);
+    uint64_t pte = pt ? pt[pt_i] : 0;
+    serial_write_string("[K64] entry PTE: ");
+    serial_printf("%p", (void *)(uintptr_t)pte);
+    serial_write_string(" PML4E:");
+    serial_printf("%p", (void *)(uintptr_t)pml4e);
+    serial_write_string(" PDPTE:");
+    serial_printf("%p", (void *)(uintptr_t)pdpte);
+    serial_write_string(" PDE:");
+    serial_printf("%p", (void *)(uintptr_t)pde);
+    serial_write_string("\r\n");
+  }
 
   user64_init_process(image_end);
   task64_set_user_stack(rsp);

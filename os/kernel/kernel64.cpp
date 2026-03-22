@@ -7,8 +7,10 @@
 #include <stddef.h>
 
 #include "arch/i386/io.h"
+#include "arch/x86_64/gdt64.h"
 #include "arch/x86_64/pmm64.h"
 #include "drivers/serial.h"
+#include "hardware/msr.h"
 #include "fs/devfs/devfs.h"
 #include "fs/procfs/procfs.h"
 #include "fs/ramfs/ramfs.h"
@@ -36,6 +38,14 @@ static mb64_module g_mb_modules[32];
 static int g_mb_module_count = 0;
 uint32_t g_total_ram_mb = 0;
 static uint64_t g_mb_module_max_end = 0;
+extern "C" uint8_t g_syscall_stack[16384];
+extern "C" uint64_t g_syscall_stack_top;
+extern "C" uint64_t g_syscall_user_rsp;
+
+alignas(16) uint8_t g_syscall_stack[16384];
+uint64_t g_syscall_stack_top =
+    (uint64_t)(uintptr_t)g_syscall_stack + sizeof(g_syscall_stack);
+uint64_t g_syscall_user_rsp = 0;
 
 static volatile uint16_t *g_vga = (uint16_t *)0xB8000;
 static int g_vga_row = 0;
@@ -46,6 +56,98 @@ static bool g_force_pic = false;
 static bool g_boot_gui = false;
 static bool g_linux_abi = false;
 static uint8_t g_heap64[4 * 1024 * 1024];
+alignas(16) static uint8_t g_kernel_stack0[16384];
+
+static bool mb2_valid(uint64_t info) {
+  if (!info)
+    return false;
+  uint32_t total = *(uint32_t *)(uintptr_t)info;
+  if (total < 16 || total > (1u << 20))
+    return false;
+  return true;
+}
+
+static void mb2_scan(uint64_t info, const char **out_cmdline) {
+  if (!mb2_valid(info))
+    return;
+  struct multiboot2_tag *tag =
+      (struct multiboot2_tag *)((uintptr_t)info + 8);
+  while (tag->type != MULTIBOOT2_TAG_TYPE_END) {
+    if (tag->type == MULTIBOOT2_TAG_TYPE_CMDLINE) {
+      struct multiboot2_tag_string *cs =
+          (struct multiboot2_tag_string *)tag;
+      if (out_cmdline)
+        *out_cmdline = cs->string;
+    }
+    if (tag->type == MULTIBOOT2_TAG_TYPE_BASIC_MEMINFO) {
+      struct multiboot2_tag_basic_meminfo *mem =
+          (struct multiboot2_tag_basic_meminfo *)tag;
+      if (g_total_ram_mb == 0)
+        g_total_ram_mb = (mem->mem_lower + mem->mem_upper) / 1024;
+    } else if (tag->type == MULTIBOOT2_TAG_TYPE_MMAP) {
+      struct multiboot2_tag_mmap *mmap =
+          (struct multiboot2_tag_mmap *)tag;
+      uint64_t total_bytes = 0;
+      for (struct multiboot2_mmap_entry *entry = mmap->entries;
+           (uint8_t *)entry < (uint8_t *)mmap + mmap->common.size;
+           entry = (struct multiboot2_mmap_entry *)((uint8_t *)entry +
+                                                    mmap->entry_size)) {
+        if (entry->type == MULTIBOOT2_MEMORY_AVAILABLE) {
+          total_bytes += entry->len;
+        }
+      }
+      g_total_ram_mb = total_bytes / (1024 * 1024);
+    } else if (tag->type == MULTIBOOT2_TAG_TYPE_MODULE) {
+      struct multiboot2_tag_module *mod =
+          (struct multiboot2_tag_module *)tag;
+      if (g_mb_module_count < 32) {
+        g_mb_modules[g_mb_module_count].start = mod->mod_start;
+        g_mb_modules[g_mb_module_count].end = mod->mod_end;
+        g_mb_modules[g_mb_module_count].name = mod->string;
+        g_mb_module_count++;
+      }
+      if (mod->mod_end > g_mb_module_max_end)
+        g_mb_module_max_end = mod->mod_end;
+    }
+    tag = (struct multiboot2_tag *)((uint8_t *)tag + ((tag->size + 7) & ~7));
+  }
+}
+
+static void mb2_dump(uint64_t info) {
+  if (!info) {
+    serial_write_string("[K64] MB2 info=0\r\n");
+    return;
+  }
+  uint32_t total = *(uint32_t *)(uintptr_t)info;
+  uint32_t reserved = *(uint32_t *)(uintptr_t)(info + 4);
+  serial_write_string("[K64] MB2 info=");
+  serial_printf("%p", (void *)(uintptr_t)info);
+  serial_write_string(" size=");
+  serial_printf("%u", total);
+  serial_write_string(" reserved=");
+  serial_printf("%u", reserved);
+  serial_write_string("\r\n");
+
+  struct multiboot2_tag *tag =
+      (struct multiboot2_tag *)((uintptr_t)info + 8);
+  int idx = 0;
+  while (tag->type != MULTIBOOT2_TAG_TYPE_END && idx < 32) {
+    serial_write_string("[K64] MB2 tag ");
+    serial_printf("%d", idx);
+    serial_write_string(": type=");
+    serial_printf("%u", tag->type);
+    serial_write_string(" size=");
+    serial_printf("%u", tag->size);
+    serial_write_string("\r\n");
+    tag = (struct multiboot2_tag *)((uint8_t *)tag + ((tag->size + 7) & ~7));
+    idx++;
+  }
+  serial_write_string("[K64] MB2 tag end: type=");
+  serial_printf("%u", tag->type);
+  serial_write_string(" size=");
+  serial_printf("%u", tag->size);
+  serial_write_string("\r\n");
+}
 
 static void vga_clear(void) {
   for (int y = 0; y < 25; y++) {
@@ -105,6 +207,10 @@ static void vga_puts(const char *s) {
   while (*s)
     vga_putc(*s++);
 }
+
+extern "C" void vga_puts_k64(const char *s) { vga_puts(s); }
+extern "C" void vga_putc_k64(char c) { vga_putc(c); }
+
 
 static void vga_put_u32(uint32_t v) {
   char buf[16];
@@ -380,63 +486,54 @@ extern "C" void kernel_main64(unsigned long long magic,
   vga_clear();
   vga_puts("ChrysalisOS 64-bit kernel (prototype)\n");
 
+  const char *boot_cmdline = NULL;
+  mb2_scan(info, &boot_cmdline);
+  if (boot_cmdline) {
+    parse_cmdline(boot_cmdline);
+  }
+
   paging64_init();
+  gdt64_init((uint64_t)(uintptr_t)(g_kernel_stack0 +
+                                   sizeof(g_kernel_stack0)));
   idt64_init();
   syscall64_init();
+
+  /* Disable Legacy PIC to prevent IRQs aliasing CPU Exceptions (e.g. IRQ0 -> Vector 8/Double Fault) */
+  outb(0x21, 0xFF);
+  outb(0xA1, 0xFF);
+
   serial_init();
   serial_write_string("[K64] serial online\r\n");
+  {
+    uint32_t lo = 0, hi = 0;
+    rdmsr(0xC0000080u, &lo, &hi);
+    serial_write_string("[K64] EFER=");
+    serial_printf("hi=0x%x lo=0x%x\r\n", hi, lo);
+    rdmsr(0xC0000081u, &lo, &hi);
+    serial_write_string("[K64] STAR=");
+    serial_printf("hi=0x%x lo=0x%x\r\n", hi, lo);
+    rdmsr(0xC0000082u, &lo, &hi);
+    serial_write_string("[K64] LSTAR=");
+    serial_printf("hi=0x%x lo=0x%x\r\n", hi, lo);
+  }
+  mb2_dump(info);
   heap_init(g_heap64, sizeof(g_heap64));
+  static uint8_t g_ist1_stack[8192];
+  tss64_set_ist1((uint64_t)(uintptr_t)(g_ist1_stack + sizeof(g_ist1_stack)));
+  serial_write_string("[K64] IST1=");
+  serial_printf("%p", (void *)(uintptr_t)tss64_get_ist1());
+  serial_write_string("\r\n");
 
   time_init();
   vfs_mount("/", ramfs_root());
   vfs_mount("/dev", devfs_root());
   vfs_mount("/proc", procfs_root());
 
-  const char *boot_cmdline = NULL;
-
-  if (info) {
-    struct multiboot2_tag *tag =
-        (struct multiboot2_tag *)((uintptr_t)info + 8);
-    while (tag->type != MULTIBOOT2_TAG_TYPE_END) {
-      if (tag->type == MULTIBOOT2_TAG_TYPE_CMDLINE) {
-        struct multiboot2_tag_string *cs =
-            (struct multiboot2_tag_string *)tag;
-        boot_cmdline = cs->string;
-        parse_cmdline(boot_cmdline);
-        syscall64_set_linux_abi(g_linux_abi ? 1 : 0);
-      }
-      if (tag->type == MULTIBOOT2_TAG_TYPE_BASIC_MEMINFO) {
-        struct multiboot2_tag_basic_meminfo *mem =
-            (struct multiboot2_tag_basic_meminfo *)tag;
-        if (g_total_ram_mb == 0)
-          g_total_ram_mb = (mem->mem_lower + mem->mem_upper) / 1024;
-      } else if (tag->type == MULTIBOOT2_TAG_TYPE_MMAP) {
-        struct multiboot2_tag_mmap *mmap =
-            (struct multiboot2_tag_mmap *)tag;
-        uint64_t total_bytes = 0;
-        for (struct multiboot2_mmap_entry *entry = mmap->entries;
-             (uint8_t *)entry < (uint8_t *)mmap + mmap->common.size;
-             entry = (struct multiboot2_mmap_entry *)((uint8_t *)entry +
-                                                      mmap->entry_size)) {
-          if (entry->type == MULTIBOOT2_MEMORY_AVAILABLE) {
-            total_bytes += entry->len;
-          }
-        }
-        g_total_ram_mb = total_bytes / (1024 * 1024);
-      } else if (tag->type == MULTIBOOT2_TAG_TYPE_MODULE) {
-        struct multiboot2_tag_module *mod =
-            (struct multiboot2_tag_module *)tag;
-        if (g_mb_module_count < 32) {
-          g_mb_modules[g_mb_module_count].start = mod->mod_start;
-          g_mb_modules[g_mb_module_count].end = mod->mod_end;
-          g_mb_modules[g_mb_module_count].name = mod->string;
-          g_mb_module_count++;
-        }
-        if (mod->mod_end > g_mb_module_max_end)
-          g_mb_module_max_end = mod->mod_end;
-      }
-      tag = (struct multiboot2_tag *)((uint8_t *)tag + ((tag->size + 7) & ~7));
-    }
+  syscall64_set_linux_abi(g_linux_abi ? 1 : 0);
+  if (!mb2_valid(info)) {
+    serial_write_string("[K64] WARN: multiboot2 info invalid\r\n");
+  } else if (g_mb_module_count == 0) {
+    serial_write_string("[K64] WARN: no multiboot modules detected\r\n");
   }
 
   vga_puts("RAM detected: ");
@@ -474,14 +571,60 @@ extern "C" void kernel_main64(unsigned long long magic,
 }
 
 extern "C" void isr64_handler(uint64_t *stack) {
-  uint64_t rip = stack ? stack[0] : 0;
-  uint64_t cs = stack ? stack[1] : 0;
-  uint64_t rflags = stack ? stack[2] : 0;
-  uint64_t err = stack ? stack[3] : 0;
+  if (!stack) {
+    serial_write_string("[K64] isr64_handler: null stack!\r\n");
+    for (;;) asm volatile("hlt");
+  }
+
+  /*
+   * Stack layout at entry (built by isr64.S + CPU):
+   *
+   * For ISR_ERR (exceptions that push an error code):
+   *   [rsp+0]  = vector number (pushed by macro)
+   *   [rsp+8]  = error code    (pushed by CPU)
+   *   [rsp+16] = RIP
+   *   [rsp+24] = CS
+   *   [rsp+32] = RFLAGS
+   *   [rsp+40] = RSP  (only present when CS shows a CPL change, i.e. ring-3)
+   *   [rsp+48] = SS   (only present when CS shows a CPL change)
+   *
+   * For ISR_NOERR (no error code):
+   *   [rsp+0]  = vector number (pushed by macro)
+   *   [rsp+8]  = 0             (dummy pushed by macro)
+   *   [rsp+16] = RIP
+   *   [rsp+24] = CS
+   *   [rsp+32] = RFLAGS
+   *   [rsp+40] = RSP  (only if CPL change)
+   *   [rsp+48] = SS   (only if CPL change)
+   *
+   * In both cases indices [0..4] (vec, err/0, rip, cs, rflags) are valid.
+   * Indices [5] and [6] (rsp, ss) are only valid when the saved CS has
+   * RPL=3 (i.e. the exception came from user mode, CS & 3 == 3).
+   */
+  uint64_t vec    = stack[0];
+  uint64_t err    = stack[1];
+  uint64_t rip    = stack[2];
+  uint64_t cs     = stack[3];
+  uint64_t rflags = stack[4];
+  uint64_t rsp    = 0;
+  uint64_t ss     = 0;
+
+  /* RSP and SS are only pushed by the CPU when there is a privilege-level
+   * change (ring-3 → ring-0). With IST (used for #DF and #NMI) the CPU
+   * ALWAYS saves the full 5-word frame including SS/RSP.*/
+  bool has_rsp_ss = ((cs & 3) == 3) || (vec == 8) || (vec == 2);
+  if (has_rsp_ss) {
+    rsp = stack[5];
+    ss  = stack[6];
+  }
+
   uint64_t cr2 = 0;
   asm volatile("mov %%cr2, %0" : "=r"(cr2));
+
   vga_puts("\n[K64] Unhandled exception.\n");
-  serial_write_string("\r\n[K64] Unhandled exception. RIP=");
+  serial_write_string("\r\n[K64] Unhandled exception. VEC=");
+  serial_printf("%p", (void *)(uintptr_t)vec);
+  serial_write_string(" RIP=");
   serial_printf("%p", (void *)(uintptr_t)rip);
   serial_write_string(" CS=");
   serial_printf("%p", (void *)(uintptr_t)cs);
@@ -489,9 +632,22 @@ extern "C" void isr64_handler(uint64_t *stack) {
   serial_printf("%p", (void *)(uintptr_t)rflags);
   serial_write_string(" ERR=");
   serial_printf("%p", (void *)(uintptr_t)err);
+  serial_write_string(" RSP=");
+  serial_printf("%p", (void *)(uintptr_t)rsp);
+  serial_write_string(" SS=");
+  serial_printf("%p", (void *)(uintptr_t)ss);
   serial_write_string(" CR2=");
   serial_printf("%p", (void *)(uintptr_t)cr2);
   serial_write_string("\r\n");
+
+  /* Dump raw stack words for easier post-mortem debugging. */
+  serial_write_string("[K64] raw stack[0..9]:");
+  for (int i = 0; i < 10; i++) {
+    serial_write_string(" ");
+    serial_printf("%p", (void *)(uintptr_t)stack[i]);
+  }
+  serial_write_string("\r\n");
+
   for (;;) {
     asm volatile("hlt");
   }

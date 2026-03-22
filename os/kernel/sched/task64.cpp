@@ -1,6 +1,7 @@
 #include "task64.h"
 #include "../mem/kmalloc.h"
 #include "../hardware/msr.h"
+#include "../arch/x86_64/gdt64.h"
 #include "../string.h"
 #include <stddef.h>
 
@@ -23,6 +24,11 @@ static inline void task64_set_kernel_gs(task64_t *t) {
   if (!t)
     return;
   wrmsr64(MSR_KERNEL_GS_BASE, (uint64_t)(uintptr_t)&t->gs);
+  tss64_set_rsp0(t->gs.kernel_stack);
+  /* NOTE: do NOT overwrite IST1 here. IST1 is a dedicated double-fault
+   * stack set once in kernel_main64 via tss64_set_ist1(). Clobbering it
+   * per-task causes #DF to land on the same stack as the primary fault
+   * handler, producing a corrupted/shifted exception frame. */
 }
 
 static void task64_idle(void *arg) {

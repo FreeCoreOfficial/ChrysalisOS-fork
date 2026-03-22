@@ -22,6 +22,10 @@ extern "C" void syscall64_entry(void);
 typedef uint64_t (*syscall64_fn)(uint64_t, uint64_t, uint64_t, uint64_t,
                                  uint64_t, uint64_t);
 
+extern "C" void vga_puts_k64(const char *s);
+extern "C" void vga_putc_k64(char c);
+
+
 static constexpr uint64_t k_sys_enosys = (uint64_t)-38;
 static constexpr int k_syscall_table_size = 128;
 static syscall64_fn g_syscall_table[k_syscall_table_size];
@@ -42,6 +46,7 @@ static uint64_t sys_write64(uint64_t fd, uint64_t buf, uint64_t size,
   if (fd == 1 || fd == 2 || fd == 0) {
     for (uint64_t i = 0; i < size; ++i) {
       serial_write(s[i]);
+      vga_putc_k64(s[i]);
     }
     return size;
   }
@@ -134,9 +139,15 @@ static uint64_t sys_ioctl64(uint64_t fd, uint64_t cmd, uint64_t arg,
 
 static uint64_t sys_exit64(uint64_t code, uint64_t, uint64_t, uint64_t,
                            uint64_t, uint64_t) {
-  serial_write_string("[K64] sys_exit ");
-  serial_printf("%d", (int)code);
-  serial_write_string("\r\n");
+  (void)code;
+  serial_write_string("[K64] hello64 module exited\r\n");
+  vga_puts_k64("[K64] hello64 module exited\n");
+  
+  if (auto *t = task64_current()) {
+    t->state = TASK64_ZOMBIE;
+  }
+  task64_yield();
+  
   for (;;) {
     asm volatile("hlt");
   }
@@ -185,8 +196,24 @@ void syscall64_init(void) {
   lo |= 1u; /* SCE */
   wrmsr(MSR_EFER, lo, hi);
 
-  /* STAR: kernel CS = 0x08, user SS = 0x18, user CS = 0x20 */
-  uint64_t star = ((uint64_t)0x0010 << 48) | ((uint64_t)0x0008 << 32);
+  /*
+   * STAR MSR Layout for SYSCALL/SYSRET (Bits 63:32):
+   * 
+   * [47:32] = Target CS for SYSCALL (kernel code).
+   *           SYSCALL loads CS from STAR[47:32] and SS from STAR[47:32] + 8.
+   *           We want CS=0x08 (kernel code), SS=0x10 (kernel data).
+   *           So STAR[47:32] = 0x0008.
+   *
+   * [63:48] = Target CS/SS for SYSRET (user code/data).
+   *           SYSRET computes CS as STAR[63:48] + 16, and SS as STAR[63:48] + 8.
+   *           We want CS=0x23 (user code, RPL=3) and SS=0x1B (user data, RPL=3).
+   *           Solving: CS base = 0x23 - 16 = 0x13.
+   *                    SS base = 0x1B - 8 = 0x13.
+   *           So STAR[63:48] = 0x0013.
+   *
+   * Combining: 0x0013 (high 16 bits) and 0x0008 (low 16 bits) -> 0x00130008.
+   */
+  uint64_t star = ((uint64_t)0x0013 << 48) | ((uint64_t)0x0008 << 32);
   wrmsr(MSR_STAR, (uint32_t)(star & 0xFFFFFFFFu),
         (uint32_t)(star >> 32));
 
@@ -195,7 +222,7 @@ void syscall64_init(void) {
   wrmsr(MSR_LSTAR, (uint32_t)(lstar & 0xFFFFFFFFu),
         (uint32_t)(lstar >> 32));
 
-  /* FMASK: clear IF on entry */
+  /* FMASK: clear IF (bit 9) on entry to disable interrupts during entry setup */
   wrmsr(MSR_FMASK, 1u << 9, 0);
 
   init_syscall_table();
@@ -221,15 +248,25 @@ uint64_t syscall64_dispatch(uint64_t num, uint64_t a1, uint64_t a2,
                             uint64_t a3, uint64_t a4, uint64_t a5,
                             uint64_t a6) {
   if (g_linux_abi_mode) {
-    return (uint64_t)linux_syscall_dispatch_x86_64(num, a1, a2, a3, a4, a5,
-                                                   a6);
+    int ret = linux_syscall_dispatch_x86_64(num, a1, a2, a3, a4, a5, a6);
+    if (ret == -38) { // LINUX_ENOSYS
+      serial_write_string("[K64] unknown syscall\r\n");
+      vga_puts_k64("[K64] unknown syscall\n");
+    }
+    return (uint64_t)ret;
   }
-  if (num >= (uint64_t)k_syscall_table_size)
+  return syscall64_dispatch_native(num, a1, a2, a3, a4, a5, a6);
+}
+
+uint64_t syscall64_dispatch_native(uint64_t num, uint64_t a1, uint64_t a2,
+                                   uint64_t a3, uint64_t a4, uint64_t a5,
+                                   uint64_t a6) {
+  if (num >= (uint64_t)k_syscall_table_size || !g_syscall_table[num]) {
+    serial_write_string("[K64] unknown syscall\r\n");
+    vga_puts_k64("[K64] unknown syscall\n");
     return k_sys_enosys;
-  syscall64_fn fn = g_syscall_table[num];
-  if (!fn)
-    return k_sys_enosys;
-  return fn(a1, a2, a3, a4, a5, a6);
+  }
+  return g_syscall_table[num](a1, a2, a3, a4, a5, a6);
 }
 
 extern "C" void __syscall_handler(syscall64_state_t *state) {

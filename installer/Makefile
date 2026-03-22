@@ -184,6 +184,8 @@ $(BUILD)/installer.elf: $(OBJS)
 
 # ISO creation
 installer.iso: $(BUILD)/installer.elf
+	@# Always rebuild OS ISO so kernel64/modules stay in sync with installer.
+	@$(MAKE) -C ../os iso
 	@echo "[ISO] Preparing assets..."
 	@mkdir -p $(ISO)/boot/chrysalis
 	@mkdir -p $(ISO)/boot/grub
@@ -191,6 +193,7 @@ installer.iso: $(BUILD)/installer.elf
 	@# Copy Assets from Main OS Build
 	@if [ -f ../os/iso/boot/kernel.bin ]; then cp ../os/iso/boot/kernel.bin $(ISO)/boot/chrysalis/; else echo "WARNING: kernel.bin not found!"; fi
 	@if [ -f ../os/iso/boot/kernel64.bin ]; then cp ../os/iso/boot/kernel64.bin $(ISO)/boot/chrysalis/; else echo "WARNING: kernel64.bin not found!"; fi
+	@if [ -f ../os/iso/boot/hello64.elf ]; then cp ../os/iso/boot/hello64.elf $(ISO)/boot/chrysalis/; else echo "WARNING: hello64.elf not found!"; fi
 	@mkdir -p $(ISO)/icons
 	@if [ -d ../os/iso/icons ]; then cp ../os/iso/icons/*.bmp $(ISO)/icons/; else echo "WARNING: icons bmp not found!"; fi
 	@mkdir -p $(ISO)/system/apps
@@ -231,6 +234,9 @@ installer.iso: $(BUILD)/installer.elf
 	@echo '  module2 /boot/chrysalis/kernel.bin kernel.bin' >> $(ISO)/boot/grub/grub.cfg
 	@if [ -f $(ISO)/boot/chrysalis/kernel64.bin ]; then \
 		echo '  module2 /boot/chrysalis/kernel64.bin kernel64.bin' >> $(ISO)/boot/grub/grub.cfg; \
+	fi
+	@if [ -f $(ISO)/boot/chrysalis/hello64.elf ]; then \
+		echo '  module2 /boot/chrysalis/hello64.elf hello64.elf' >> $(ISO)/boot/grub/grub.cfg; \
 	fi
 	@for f in $(ISO)/icons/*.bmp; do \
 		nm=$$(basename $$f); \

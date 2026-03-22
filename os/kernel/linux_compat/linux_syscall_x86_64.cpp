@@ -12,6 +12,8 @@
 #include "../fs/pipe/pipe.h"
 #include "../fs/vfs/vfs.h"
 #include "../fs/vfs/fs_ops.h"
+#include "../arch/x86_64/syscall64.h"
+
 
 #define LINUX_EFAULT 14
 #define LINUX_EAGAIN 11
@@ -25,9 +27,7 @@
 #define LINUX_ETIMEDOUT 110
 
 #if defined(__x86_64__)
-extern "C" uint64_t syscall64_dispatch(uint64_t num, uint64_t a1, uint64_t a2,
-                                       uint64_t a3, uint64_t a4, uint64_t a5,
-                                       uint64_t a6);
+
 
 /* Minimal x86_64 Linux syscall numbers (subset) */
 #define LINUX_NR_read 0
@@ -292,7 +292,7 @@ static int futex64_wait_impl(uint64_t uaddr, uint32_t expected,
       futex64_free_waiter(w);
       return -LINUX_ETIMEDOUT;
     }
-    syscall64_dispatch(SYS_SLEEP, 1, 0, 0, 0, 0, 0);
+    syscall64_dispatch_native(SYS_SLEEP, 1, 0, 0, 0, 0, 0);
   }
   futex64_free_waiter(w);
   return 0;
@@ -649,7 +649,7 @@ static int linux_sys_nanosleep(uint64_t a1) {
     return -LINUX_EINVAL;
   uint64_t ms = (uint64_t)req.tv_sec * 1000ULL +
                 (uint64_t)req.tv_nsec / 1000000ULL;
-  syscall64_dispatch(SYS_SLEEP, ms, 0, 0, 0, 0, 0);
+  syscall64_dispatch_native(SYS_SLEEP, ms, 0, 0, 0, 0, 0);
   return 0;
 }
 
@@ -727,16 +727,16 @@ int linux_syscall_dispatch_x86_64(uint64_t num, uint64_t a1, uint64_t a2,
   switch (num) {
   case LINUX_NR_exit:
   case LINUX_NR_exit_group:
-    return (int)syscall64_dispatch(SYS_EXIT, a1, 0, 0, 0, 0, 0);
+    return (int)syscall64_dispatch_native(SYS_EXIT, a1, 0, 0, 0, 0, 0);
 
   case LINUX_NR_read:
-    return (int)syscall64_dispatch(SYS_READ, a1, a2, a3, 0, 0, 0);
+    return (int)syscall64_dispatch_native(SYS_READ, a1, a2, a3, 0, 0, 0);
 
   case LINUX_NR_write:
-    return (int)syscall64_dispatch(SYS_WRITE, a1, a2, a3, 0, 0, 0);
+    return (int)syscall64_dispatch_native(SYS_WRITE, a1, a2, a3, 0, 0, 0);
 
   case LINUX_NR_open:
-    return (int)syscall64_dispatch(SYS_OPEN, a1, a2, 0, 0, 0, 0);
+    return (int)syscall64_dispatch_native(SYS_OPEN, a1, a2, 0, 0, 0, 0);
 
   case LINUX_NR_stat:
     return linux_sys_stat64((const char *)(uintptr_t)a1,
@@ -777,12 +777,12 @@ int linux_syscall_dispatch_x86_64(uint64_t num, uint64_t a1, uint64_t a2,
   }
 
   case LINUX_NR_openat:
-    return (int)syscall64_dispatch(SYS_OPEN, a2, a3, 0, 0, 0, 0);
+    return (int)syscall64_dispatch_native(SYS_OPEN, a2, a3, 0, 0, 0, 0);
 
   case LINUX_NR_close:
     if (a1 >= TASK_LINUX_EPOLL_FD_BASE)
       return epoll64_close(task64_current(), (int)a1);
-    return (int)syscall64_dispatch(SYS_CLOSE, a1, 0, 0, 0, 0, 0);
+    return (int)syscall64_dispatch_native(SYS_CLOSE, a1, 0, 0, 0, 0, 0);
 
   case LINUX_NR_pipe:
   case LINUX_NR_pipe2: {
@@ -864,7 +864,7 @@ int linux_syscall_dispatch_x86_64(uint64_t num, uint64_t a1, uint64_t a2,
         return ready;
       if (timeout > 0 && (int)(linux_now_ms() - start) >= timeout)
         return 0;
-      syscall64_dispatch(SYS_SLEEP, 1, 0, 0, 0, 0, 0);
+      syscall64_dispatch_native(SYS_SLEEP, 1, 0, 0, 0, 0, 0);
     }
   }
 
@@ -992,7 +992,7 @@ int linux_syscall_dispatch_x86_64(uint64_t num, uint64_t a1, uint64_t a2,
         return 0;
       if (timeout > 0 && (int)(linux_now_ms() - start_ms) >= timeout)
         return 0;
-      syscall64_dispatch(SYS_SLEEP, 1, 0, 0, 0, 0, 0);
+      syscall64_dispatch_native(SYS_SLEEP, 1, 0, 0, 0, 0, 0);
     }
   }
 
@@ -1136,7 +1136,7 @@ int linux_syscall_dispatch_x86_64(uint64_t num, uint64_t a1, uint64_t a2,
     return 0;
 
   case LINUX_NR_sched_yield:
-    return (int)syscall64_dispatch(SYS_YIELD, 0, 0, 0, 0, 0, 0);
+    return (int)syscall64_dispatch_native(SYS_YIELD, 0, 0, 0, 0, 0, 0);
 
   case LINUX_NR_nanosleep:
     return linux_sys_nanosleep(a1);

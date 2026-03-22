@@ -1522,8 +1522,11 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   size_t bg_bmp_size = 0;
   void *kernel64_data = NULL;
   size_t kernel64_size = 0;
+  void *hello64_data = NULL;
+  size_t hello64_size = 0;
   int have_linux_hello32 = 0;
   int have_linux_hello64 = 0;
+  int have_hello64 = 0;
 
   int module_total = installer_count_modules(addr);
   if (module_total <= 0)
@@ -1584,6 +1587,11 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
           kernel64_data = (void *)(uintptr_t)mod->mod_start;
           kernel64_size = mod->mod_end - mod->mod_start;
           serial("[INSTALLER] Assigned to kernel64.bin\n");
+        } else if (strcmp(current_mod_name, "hello64.elf") == 0) {
+          hello64_data = (void *)(uintptr_t)mod->mod_start;
+          hello64_size = mod->mod_end - mod->mod_start;
+          have_hello64 = 1;
+          serial("[INSTALLER] Assigned to hello64.elf\n");
         } else if (m_boot == 0) {
           boot_img = (void *)(uintptr_t)mod->mod_start;
           boot_img_size = mod->mod_end - mod->mod_start;
@@ -1649,6 +1657,18 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
           fat32_create_file_verified(path, (void *)(uintptr_t)mod->mod_start,
                                      (uint32_t)(mod->mod_end - mod->mod_start),
                                      0);
+          if (strcmp(current_mod_name, "linux-hello64") == 0) {
+            char boot_path[64] = "/boot/chrysalis/";
+            size_t boff = strlen(boot_path);
+            memcpy(boot_path + boff, current_mod_name,
+                   strlen(current_mod_name) + 1);
+            serial("[INSTALLER] Test mirror: %s -> %s\n", current_mod_name,
+                   boot_path);
+            fat32_create_file_verified(boot_path,
+                                       (void *)(uintptr_t)mod->mod_start,
+                                       (uint32_t)(mod->mod_end - mod->mod_start),
+                                       0);
+          }
           kmalloc_reset();
         } else {
           serial("[INSTALLER] Module '%s' did not match any expected file.\n",
@@ -1770,7 +1790,13 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
                   "  multiboot2 /boot/chrysalis/kernel64.bin\n");
     if (have_linux_hello64) {
       ui_append_str(grub_cfg, sizeof(grub_cfg),
+                    "  module2 /boot/chrysalis/linux-hello64 linux-hello64\n");
+      ui_append_str(grub_cfg, sizeof(grub_cfg),
                     "  module2 /system/tests/linux-hello64 linux-hello64\n");
+    }
+    if (have_hello64) {
+      ui_append_str(grub_cfg, sizeof(grub_cfg),
+                    "  module2 /boot/chrysalis/hello64.elf hello64.elf\n");
     }
     ui_append_str(grub_cfg, sizeof(grub_cfg), "  boot\n}\n\n");
 
@@ -1784,7 +1810,13 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
                   "  multiboot2 /boot/chrysalis/kernel64.bin linuxabi=1\n");
     if (have_linux_hello64) {
       ui_append_str(grub_cfg, sizeof(grub_cfg),
+                    "  module2 /boot/chrysalis/linux-hello64 linux-hello64\n");
+      ui_append_str(grub_cfg, sizeof(grub_cfg),
                     "  module2 /system/tests/linux-hello64 linux-hello64\n");
+    }
+    if (have_hello64) {
+      ui_append_str(grub_cfg, sizeof(grub_cfg),
+                    "  module2 /boot/chrysalis/hello64.elf hello64.elf\n");
     }
     ui_append_str(grub_cfg, sizeof(grub_cfg), "  boot\n}\n\n");
   }
@@ -1896,6 +1928,19 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
                                          (uint32_t)kernel64_size, 1);
     if (r64 != 0) {
       serial("[INSTALLER] WARN: Failed to write kernel64.bin (err=%d)\n", r64);
+    }
+  }
+
+  if (hello64_data && hello64_size > 0) {
+    ui_progress_update(95, "Installing hello64.elf",
+                       "Writing /boot/chrysalis/hello64.elf...");
+    serial("[INSTALLER] Installing hello64.elf (%d bytes)...\n",
+           (int)hello64_size);
+    int r64 = fat32_create_file_verified("/boot/chrysalis/hello64.elf",
+                                         hello64_data,
+                                         (uint32_t)hello64_size, 1);
+    if (r64 != 0) {
+      serial("[INSTALLER] WARN: Failed to write hello64.elf (err=%d)\n", r64);
     }
   }
 

@@ -30,6 +30,10 @@ void syscall64_set_linux_abi(int enabled);
 uint64_t syscall64_dispatch(uint64_t num, uint64_t a1, uint64_t a2,
                             uint64_t a3, uint64_t a4, uint64_t a5,
                             uint64_t a6);
+uint64_t syscall64_dispatch_native(uint64_t num, uint64_t a1,
+                                   uint64_t a2, uint64_t a3,
+                                   uint64_t a4, uint64_t a5,
+                                   uint64_t a6);
 void __syscall_handler(syscall64_state_t *state);
 syscall64_state_t *syscall64_get_state(void);
 struct file *syscall64_get_file(int fd);
