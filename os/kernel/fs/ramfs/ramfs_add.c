@@ -152,21 +152,27 @@ static struct FSNode* ramfs_find_path(const char* path) {
             return NULL;
         memcpy(name, start, len);
         name[len] = 0;
+        
         cur = ramfs_find_child(cur, name);
-        if (!cur)
+        if (!cur) {
             return NULL;
+        }
     }
     return cur;
 }
+
+
 
 void ramfs_create_file(const char* name, const void* data, size_t len) {
     FSNode* root = ramfs_fs_root();
     if (!root || !name)
         return;
-
+        
     const char* p = name;
+
     if (*p == '/')
         p++;
+
 
     FSNode* dir = root;
     const char* last = p;

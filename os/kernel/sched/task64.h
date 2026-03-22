@@ -51,7 +51,9 @@ typedef struct task64 {
   uint64_t clear_tid_addr;
 
   void *epoll_table[32];
+  char exe_path[128];
 } task64_t;
+
 
 void task64_init(void);
 task64_t *task64_create(const char *name, void (*entry)(void *), void *arg);

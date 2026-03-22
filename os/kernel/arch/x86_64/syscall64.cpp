@@ -91,13 +91,36 @@ static uint64_t sys_open64(uint64_t path_ptr, uint64_t flags, uint64_t,
     return k_sys_enosys;
   const char *path = (const char *)(uintptr_t)path_ptr;
   vnode_t *node = vfs_resolve(path);
-  if (!node)
-    return k_sys_enosys;
+  if (!node) {
+    serial_write_string("[K64] sys_open64: vfs_resolve failed for '");
+    serial_write_string(path);
+    serial_write_string("'\r\n");
+    return (uint64_t)-2; // LINUX_ENOENT
+  }
+  serial_write_string("[K64] sys_open64: vfs_resolve SUCCESS for '");
+  serial_write_string(path);
+  serial_write_string("'\r\n");
+
+  /* DIAGNOSTIC: Trace first 16 bytes of the file */
+  if (node->ops && node->ops->read) {
+      uint8_t hdr[16];
+      int hr = node->ops->read(node, 0, hdr, 16);
+      if (hr > 0) {
+          serial_write_string("[K64] file header: ");
+          for (int i = 0; i < hr; i++) {
+              serial_printf("%x ", (uint32_t)hdr[i]);
+          }
+          serial_write_string("\r\n");
+      }
+  }
+
   if (node->ops && node->ops->open) {
     if (node->ops->open(node) < 0)
-      return k_sys_enosys;
+      return (uint64_t)-5; // EIO or similar
   }
-  for (int i = 0; i < MAX_FILES_PER_PROCESS; ++i) {
+
+  for (int i = 3; i < MAX_FILES_PER_PROCESS; ++i) {
+
     if (!g_files[i]) {
       file_t *f = (file_t *)kmalloc(sizeof(file_t));
       if (!f)
@@ -248,13 +271,9 @@ uint64_t syscall64_dispatch(uint64_t num, uint64_t a1, uint64_t a2,
                             uint64_t a3, uint64_t a4, uint64_t a5,
                             uint64_t a6) {
   if (g_linux_abi_mode) {
-    int ret = linux_syscall_dispatch_x86_64(num, a1, a2, a3, a4, a5, a6);
-    if (ret == -38) { // LINUX_ENOSYS
-      serial_write_string("[K64] unknown syscall\r\n");
-      vga_puts_k64("[K64] unknown syscall\n");
-    }
-    return (uint64_t)ret;
+    return (uint64_t)linux_syscall_dispatch_x86_64(num, a1, a2, a3, a4, a5, a6);
   }
+
   return syscall64_dispatch_native(num, a1, a2, a3, a4, a5, a6);
 }
 

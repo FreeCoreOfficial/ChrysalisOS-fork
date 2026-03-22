@@ -135,10 +135,20 @@ _start64:
     or eax, 1 << 8
     wrmsr
 
+    ; Enable SSE
+    mov eax, cr0
+    and ax, 0xFFFB              ; Clear EM (bit 2)
+    or ax, 0x0002               ; Set MP (bit 1)
+    mov cr0, eax
+    mov eax, cr4
+    or eax, (3 << 9)            ; Set OSFXSR (bit 9) and OSXMMEXCPT (bit 10)
+    mov cr4, eax
+
     ; Debug marker D
     mov edi, 0xB8000
     mov ax, 0x1F44            ; 'D'
     mov [edi + 6], ax
+
 
     ; Enable paging (CR0.PG)
     mov eax, cr0

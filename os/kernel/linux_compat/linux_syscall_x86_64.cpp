@@ -13,6 +13,10 @@
 #include "../fs/vfs/vfs.h"
 #include "../fs/vfs/fs_ops.h"
 #include "../arch/x86_64/syscall64.h"
+#include "../drivers/serial.h"
+#include "../hardware/msr.h"
+
+
 
 
 #define LINUX_EFAULT 14
@@ -25,6 +29,8 @@
 #define LINUX_EBADF 9
 #define LINUX_ESRCH 3
 #define LINUX_ETIMEDOUT 110
+#define LINUX_AT_FDCWD -100
+
 
 #if defined(__x86_64__)
 
@@ -58,6 +64,15 @@
 #define LINUX_NR_exit 60
 #define LINUX_NR_exit_group 231
 #define LINUX_NR_openat 257
+#define LINUX_NR_access 21
+#define LINUX_NR_newfstatat 262
+#define LINUX_NR_writev 20
+#define LINUX_NR_pread64 17
+#define LINUX_NR_set_robust_list 273
+#define LINUX_NR_rseq 334
+
+
+
 #define LINUX_NR_futex 202
 #define LINUX_NR_rt_sigaction 13
 #define LINUX_NR_rt_sigprocmask 14
@@ -75,6 +90,8 @@
 #define LINUX_NR_arch_prctl 158
 #define LINUX_NR_gettid 186
 #define LINUX_NR_set_tid_address 218
+#define LINUX_NR_readlink 89
+
 
 #define FUTEX_WAIT 0
 #define FUTEX_WAKE 1
@@ -87,6 +104,19 @@
 #define FUTEX_BITSET_MATCH_ANY 0xFFFFFFFFu
 #define FUTEX_OP_SET 0
 #define FUTEX_OP_ADD 1
+
+#define ARCH_SET_GS 0x1001
+#define ARCH_SET_FS 0x1002
+#define ARCH_GET_FS 0x1003
+#define ARCH_GET_GS 0x1004
+
+#ifndef MSR_FS_BASE
+#define MSR_FS_BASE 0xC0000100u
+#endif
+#ifndef MSR_GS_BASE
+#define MSR_GS_BASE 0xC0000101u
+#endif
+
 #define FUTEX_OP_OR 2
 #define FUTEX_OP_ANDN 3
 #define FUTEX_OP_XOR 4
@@ -212,25 +242,35 @@ static int linux_mmap_load_file(uint64_t addr, uint64_t len, int fd,
   if (!f || !f->node || !f->node->ops || !f->node->ops->read)
     return -LINUX_EBADF;
 
+  serial_write_string("[LINUX] mmap_load: addr=");
+  serial_printf("0x%x", addr);
+  serial_write_string(" len=");
+  serial_printf("%u", len);
+  serial_write_string(" off=");
+  serial_printf("%u", file_off);
+  serial_write_string("\r\n");
+
   uint64_t remaining = len;
   uint64_t dst = addr;
-  uint64_t off = file_off;
+  uint64_t off_curr = file_off;
   uint8_t tmp[256];
   while (remaining > 0) {
     uint32_t chunk =
         remaining > sizeof(tmp) ? (uint32_t)sizeof(tmp) : (uint32_t)remaining;
-    int r = f->node->ops->read(f->node, (uint32_t)off, tmp, chunk);
+    int r = f->node->ops->read(f->node, (uint32_t)off_curr, tmp, chunk);
     if (r <= 0)
       break;
     memcpy((void *)(uintptr_t)dst, tmp, (uint32_t)r);
     dst += (uint32_t)r;
-    off += (uint32_t)r;
+    off_curr += (uint32_t)r;
     remaining -= (uint32_t)r;
     if ((uint32_t)r < chunk)
       break;
   }
   return 0;
 }
+
+
 
 static inline uint64_t linux_now_ms(void) {
   struct datetime t;
@@ -573,11 +613,13 @@ static uint16_t linux_mode_from_vnode(vnode_t *n) {
 static int linux_fill_stat64(vnode_t *node, linux_stat64_t *st) {
   if (!node || !st)
     return -LINUX_EINVAL;
-  memset(st, 0, sizeof(*st));
+  st->st_dev = 1;
+  st->st_ino = (uint64_t)(uintptr_t)node;
   st->st_mode = linux_mode_from_vnode(node);
   st->st_nlink = 1;
   st->st_uid = 0;
   st->st_gid = 0;
+
   uint64_t size = node->size;
   st->st_size = (int64_t)size;
   st->st_blksize = 512;
@@ -599,8 +641,23 @@ static int linux_sys_stat64(const char *path, linux_stat64_t *out) {
     return -LINUX_ENOENT;
   linux_stat64_t st;
   linux_fill_stat64(node, &st);
-  return linux_copy_to_user(out, &st, sizeof(st));
+  return linux_copy_to_user((void *)(uintptr_t)out, &st, sizeof(st));
 }
+
+
+static int linux_sys_readlink(const char *path, char *buf, uint32_t bufsize) {
+  if (!path || !buf || bufsize == 0)
+    return -LINUX_EFAULT;
+  vnode_t *node = vfs_resolve(path);
+  if (!node)
+    return -LINUX_ENOENT;
+  if (node->type != VNODE_LNK || !node->ops || !node->ops->readlink) {
+    /* If it's not a link, Linux readlink returns EINVAL */
+    return -LINUX_EINVAL;
+  }
+  return node->ops->readlink(node, buf, bufsize);
+}
+
 
 static int linux_sys_fstat64(int fd, linux_stat64_t *out) {
   if (!out)
@@ -660,6 +717,10 @@ static int linux_sys_arch_prctl(uint64_t code, uint64_t addr) {
   switch (code) {
   case ARCH_SET_FS:
     t->gs.fs_base = addr;
+    wrmsr(MSR_FS_BASE, (uint32_t)addr, (uint32_t)(addr >> 32));
+    return 0;
+  case ARCH_SET_GS:
+    wrmsr(MSR_GS_BASE, (uint32_t)addr, (uint32_t)(addr >> 32));
     return 0;
   case ARCH_GET_FS:
     if (!addr)
@@ -670,6 +731,7 @@ static int linux_sys_arch_prctl(uint64_t code, uint64_t addr) {
     return -LINUX_EINVAL;
   }
 }
+
 
 static task64_t *task64_clone_current(uint64_t child_stack, uint64_t fs_base) {
   task64_t *parent = task64_current();
@@ -715,16 +777,11 @@ static task64_t *task64_clone_current(uint64_t child_stack, uint64_t fs_base) {
   return child;
 }
 
-int linux_syscall_dispatch_x86_64(uint64_t num, uint64_t a1, uint64_t a2,
+static int linux_syscall_dispatch_x86_64_impl(uint64_t num, uint64_t a1, uint64_t a2,
                                   uint64_t a3, uint64_t a4, uint64_t a5,
                                   uint64_t a6) {
-  (void)a4;
-  (void)a5;
-  (void)a6;
-
-  signal64_dispatch(task64_current(), syscall64_get_state());
-
   switch (num) {
+
   case LINUX_NR_exit:
   case LINUX_NR_exit_group:
     return (int)syscall64_dispatch_native(SYS_EXIT, a1, 0, 0, 0, 0, 0);
@@ -776,8 +833,23 @@ int linux_syscall_dispatch_x86_64(uint64_t num, uint64_t a1, uint64_t a2,
     return (int)new_off;
   }
 
-  case LINUX_NR_openat:
+  case LINUX_NR_openat: {
+    int dirfd = (int)a1;
+    const char *path = (const char *)(uintptr_t)a2;
+    serial_write_string("[K64] openat path=");
+    serial_write_string(path ? path : "(null)");
+    serial_write_string("\r\n");
+    if (path && path[0] == '/') {
+      return (int)syscall64_dispatch_native(SYS_OPEN, a2, a3, 0, 0, 0, 0);
+    }
+
+    if (dirfd == LINUX_AT_FDCWD) {
+      return (int)syscall64_dispatch_native(SYS_OPEN, a2, a3, 0, 0, 0, 0);
+    }
+    /* Fallback to normal open for now; full dirfd support requires VFS changes */
     return (int)syscall64_dispatch_native(SYS_OPEN, a2, a3, 0, 0, 0, 0);
+  }
+
 
   case LINUX_NR_close:
     if (a1 >= TASK_LINUX_EPOLL_FD_BASE)
@@ -1112,6 +1184,16 @@ int linux_syscall_dispatch_x86_64(uint64_t num, uint64_t a1, uint64_t a2,
   }
 
   case LINUX_NR_mmap: {
+    serial_write_string("[LINUX] mmap: addr=");
+    serial_printf("0x%x", a1);
+    serial_write_string(" len=");
+    serial_printf("%u", a2);
+    serial_write_string(" fd=");
+    serial_printf("%d", (int)a5);
+    serial_write_string(" off=");
+    serial_printf("%u", a6);
+    serial_write_string("\r\n");
+
     uint64_t addr = user64_mmap(a1, a2, (int)a3, (int)a4);
     if ((int64_t)addr < 0)
       return -LINUX_ENOMEM;
@@ -1125,6 +1207,7 @@ int linux_syscall_dispatch_x86_64(uint64_t num, uint64_t a1, uint64_t a2,
     return (int)addr;
   }
 
+
   case LINUX_NR_munmap:
     if (user64_munmap(a1, a2) < 0)
       return -LINUX_ENOMEM;
@@ -1137,6 +1220,20 @@ int linux_syscall_dispatch_x86_64(uint64_t num, uint64_t a1, uint64_t a2,
 
   case LINUX_NR_sched_yield:
     return (int)syscall64_dispatch_native(SYS_YIELD, 0, 0, 0, 0, 0, 0);
+
+
+  case LINUX_NR_pread64: {
+    int fd = (int)a1;
+    void *buf = (void *)(uintptr_t)a2;
+    size_t count = (size_t)a3;
+    uint64_t offset = a4;
+    file_t *f = syscall64_get_file(fd);
+    if (!f || !f->node || !f->node->ops || !f->node->ops->read)
+      return -LINUX_EBADF;
+    int bytes = f->node->ops->read(f->node, (uint32_t)offset, (uint8_t *)buf, (uint32_t)count);
+    return bytes;
+  }
+
 
   case LINUX_NR_nanosleep:
     return linux_sys_nanosleep(a1);
@@ -1156,6 +1253,13 @@ int linux_syscall_dispatch_x86_64(uint64_t num, uint64_t a1, uint64_t a2,
   case LINUX_NR_uname:
     return linux_sys_uname(a1);
 
+  case LINUX_NR_set_robust_list:
+    return 0;
+
+  case LINUX_NR_rseq:
+    return 0;
+
+
   case LINUX_NR_sysinfo:
     return linux_sys_sysinfo(a1);
 
@@ -1168,10 +1272,82 @@ int linux_syscall_dispatch_x86_64(uint64_t num, uint64_t a1, uint64_t a2,
   case LINUX_NR_clock_gettime:
     return linux_sys_clock_gettime(a1, a2);
 
+  case LINUX_NR_readlink:
+    return linux_sys_readlink((const char *)(uintptr_t)a1,
+                               (char *)(uintptr_t)a2, (uint32_t)a3);
+
+
+  case LINUX_NR_access: {
+    const char *path = (const char *)(uintptr_t)a1;
+    vnode_t *node = vfs_resolve(path);
+    if (!node)
+      return -LINUX_ENOENT;
+    return 0;
+  }
+
+  case LINUX_NR_newfstatat: {
+    int dirfd = (int)a1;
+    const char *path = (const char *)(uintptr_t)a2;
+    linux_stat64_t *out = (linux_stat64_t *)(uintptr_t)a3;
+    if (path && path[0] == '/') {
+      return linux_sys_stat64(path, out);
+    }
+    if (dirfd == LINUX_AT_FDCWD) {
+      return linux_sys_stat64(path, out);
+    }
+    return -LINUX_ENOSYS;
+  }
+
+  case LINUX_NR_writev: {
+    int fd = (int)a1;
+    struct iovec {
+      uint64_t base;
+      uint64_t len;
+    } *iov = (iovec *)(uintptr_t)a2;
+    int count = (int)a3;
+    if (!iov || count <= 0)
+      return -LINUX_EINVAL;
+    int total = 0;
+    for (int i = 0; i < count; i++) {
+      int r = (int)syscall64_dispatch_native(SYS_WRITE, (uint64_t)fd,
+                                              iov[i].base, iov[i].len, 0, 0, 0);
+      if (r < 0)
+        return r;
+      total += r;
+    }
+    return total;
+  }
+
   default:
+    serial_write_string("[K64] unknown linux syscall rax=");
+    serial_printf("%u", num);
+    serial_write_string("\r\n");
     return -LINUX_ENOSYS;
   }
 }
+
+int linux_syscall_dispatch_x86_64(uint64_t num, uint64_t a1, uint64_t a2,
+                                  uint64_t a3, uint64_t a4, uint64_t a5,
+                                  uint64_t a6) {
+  signal64_dispatch(task64_current(), syscall64_get_state());
+
+  serial_write_string("[LINUX] syscall rax=");
+  serial_printf("%u", num);
+  serial_write_string("\r\n");
+
+  int ret = linux_syscall_dispatch_x86_64_impl(num, a1, a2, a3, a4, a5, a6);
+
+  serial_write_string("[LINUX] syscall rax=");
+  serial_printf("%u", num);
+  serial_write_string(" ret=");
+  serial_printf("%d", ret);
+  serial_write_string("\r\n");
+
+  return ret;
+}
+
+
+
 
 #else
 

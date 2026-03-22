@@ -93,7 +93,17 @@ typedef struct {
 #define AT_PAGESZ 6
 #define AT_BASE 7
 #define AT_ENTRY 9
-#define AT_TLS 25
+#define AT_UID 11
+#define AT_EUID 12
+#define AT_GID 13
+#define AT_EGID 14
+#define AT_HWCAP 16
+#define AT_CLKTCK 17
+#define AT_SECURE 23
+#define AT_RANDOM 25
+#define AT_EXECFN 31
+#define AT_TLS 250 // Moved to non-conflicting value
+
 
 typedef struct {
   const char *name;
@@ -377,9 +387,16 @@ static int elf64_resolve_symbol(const elf64_image_t *img, uint32_t sym_index,
                                 uint64_t *out_addr) {
   if (!img || !out_addr)
     return -1;
+  if (sym_index == 0) {
+    *out_addr = 0;
+    return 0;
+  }
   const Elf64_Sym *sym = elf64_get_sym(img, sym_index);
-  if (!sym)
+  if (!sym) {
     return -1;
+  }
+
+
   if (sym->st_shndx != 0) {
     *out_addr = img->load_base + sym->st_value;
     return 0;
@@ -388,6 +405,9 @@ static int elf64_resolve_symbol(const elf64_image_t *img, uint32_t sym_index,
   const char *name = elf64_sym_name(img, sym);
   if (!name)
     return -1;
+
+  /* serial_write_string("[K64]   resolving: "); serial_write_string(name); serial_write_string("\r\n"); */
+
 
   for (int i = 0; i < img_count; i++) {
     elf64_image_t *other = images[i];
@@ -412,15 +432,18 @@ static int elf64_resolve_symbol(const elf64_image_t *img, uint32_t sym_index,
 
   uint8_t bind = ELF64_ST_BIND(sym->st_info);
   if (bind == STB_WEAK) {
+
     *out_addr = 0;
     return 0;
   }
   return -1;
 }
 
+
 static int elf64_apply_relocs(elf64_image_t *img, elf64_image_t **images,
                               int img_count) {
   if (!img)
+
     return -1;
   if (!img->rela_ent)
     img->rela_ent = sizeof(Elf64_Rela);
@@ -453,9 +476,17 @@ static int elf64_apply_relocs(elf64_image_t *img, elf64_image_t **images,
       case R_X86_64_JUMP_SLOT:
         *where = sym_addr + (uint64_t)rela->r_addend;
         break;
+      case 37: /* R_X86_64_IRELATIVE */
+        /* This should call a resolver, but for now we just store the relative addr */
+        /* and hope for the best or that it's not critical for basic output. */
+        *where = img->load_base + (uint64_t)rela->r_addend;
+        break;
       default:
         return -1;
       }
+
+
+
     }
     return 0;
   };
@@ -596,8 +627,8 @@ static uint64_t build_user_stack(char *const argv[], uint64_t stack_top,
   };
 
   push64(0);
-  push64(0);
   push64(AT_NULL);
+
 
   push64(at_entry);
   push64(AT_ENTRY);
@@ -611,10 +642,43 @@ static uint64_t build_user_stack(char *const argv[], uint64_t stack_top,
   push64(AT_PAGESZ);
   push64(at_base);
   push64(AT_BASE);
+
+  /* Pushing 16-byte random seed */
+  for (int i = 0; i < 2; i++) {
+    push64(0x1234567887654321ULL ^ (uint64_t)i); // Placeholder for real RNG
+  }
+  uint64_t random_ptr = sp;
+  push64(random_ptr);
+  push64(AT_RANDOM);
+
+  push64(0); // AT_SECURE
+  push64(AT_SECURE);
+
+  push64(100); // AT_CLKTCK
+  push64(AT_CLKTCK);
+
+  push64(0); // AT_HWCAP
+  push64(AT_HWCAP);
+
+  push64(0); // AT_GID
+  push64(AT_GID);
+  push64(0); // AT_EGID
+  push64(AT_EGID);
+  push64(0); // AT_UID
+  push64(AT_UID);
+  push64(0); // AT_EUID
+  push64(AT_EUID);
+
+  if (argc > 0) {
+    push64(arg_ptrs[0]); // Best effort EXECFN
+    push64(AT_EXECFN);
+  }
+
   if (at_tls) {
     push64(at_tls);
     push64(AT_TLS);
   }
+
 
   push64(0);
   for (int i = envc - 1; i >= 0; i--)
@@ -625,8 +689,10 @@ static uint64_t build_user_stack(char *const argv[], uint64_t stack_top,
     push64(arg_ptrs[i]);
 
   push64((uint64_t)argc);
+  sp &= ~0xFULL;
   return sp;
 }
+
 
 static const char *basename_dir(const char *path, char *buf, size_t buf_sz) {
   if (!buf || buf_sz == 0)
@@ -706,21 +772,31 @@ static int elf64_find_library(const char *name, const char *base_dir,
                               int *out_owned) {
   if (!name || !out_data || !out_size)
     return -1;
+
   if (strchr(name, '/'))
     return read_exec64_path(name, out_data, out_size, out_owned);
 
-  const char *prefixes[] = {base_dir, "/system/lib", "/lib", "/usr/lib",
-                            nullptr};
+  const char *prefixes[] = {base_dir, "/system/lib", "/lib", "/lib64", 
+                            "/lib/x86_64-linux-gnu", "/usr/lib", nullptr};
+
   char path[256];
-  for (int i = 0; prefixes[i]; i++) {
-    if (!prefixes[i] || !prefixes[i][0])
+  for (int i = 0; i < (int)(sizeof(prefixes) / sizeof(prefixes[0])); i++) {
+    const char *prefix = prefixes[i];
+    if (!prefix || !prefix[0])
       continue;
-    if (build_lib_path(prefixes[i], name, path, sizeof(path)) < 0)
+    if (build_lib_path(prefix, name, path, sizeof(path)) < 0)
       continue;
+    
+    serial_write_string("[K64]   trying library path: ");
+    serial_write_string(path);
+    serial_write_string("\r\n");
+
     if (read_exec64_path(path, out_data, out_size, out_owned) == 0)
       return 0;
   }
   return -1;
+
+
 }
 
 static int exec64_from_buffer(const uint8_t *file_data, size_t file_size,
@@ -736,8 +812,11 @@ static int exec64_from_buffer(const uint8_t *file_data, size_t file_size,
   uint64_t main_base = (eh && eh->e_type == ET_DYN) ? ELF64_DYN_BASE : 0;
 
   if (load_elf64_image(file_data, file_size, main_base, &images[0],
-                       interp_path, sizeof(interp_path)) < 0)
+                       interp_path, sizeof(interp_path)) < 0) {
+    serial_write_string("[K64] ERROR: load_elf64_image fail\r\n");
     return -1;
+  }
+
   images[0].name = image_path ? image_path : "app";
   images[0].is_main = 1;
   image_ptrs[0] = &images[0];
@@ -753,16 +832,24 @@ static int exec64_from_buffer(const uint8_t *file_data, size_t file_size,
     size_t interp_size = 0;
     int interp_owned = 0;
     if (read_exec64_path(interp_path, &interp_data, &interp_size,
-                         &interp_owned) < 0)
+                         &interp_owned) < 0) {
+      serial_write_string("[K64] ERROR: could not read interpreter: ");
+      serial_write_string(interp_path);
+      serial_write_string("\r\n");
       return -1;
+    }
+
 
     if (img_count >= (int)(sizeof(images) / sizeof(images[0])))
       return -1;
 
     uint64_t interp_base = ELF64_INTERP_BASE;
     if (load_elf64_image(interp_data, interp_size, interp_base,
-                         &images[img_count], nullptr, 0) < 0)
+                         &images[img_count], nullptr, 0) < 0) {
+      serial_write_string("[K64] ERROR: load_elf64_image interp fail\r\n");
       return -1;
+    }
+
     images[img_count].name = interp_path;
     images[img_count].owned = interp_owned;
     image_ptrs[img_count] = &images[img_count];
@@ -770,44 +857,71 @@ static int exec64_from_buffer(const uint8_t *file_data, size_t file_size,
     img_count++;
   }
 
-  for (int idx = 0; idx < img_count; idx++) {
-    const char *needed[32];
-    int needed_count = elf64_collect_needed(&images[idx], needed, 32);
-    for (int i = 0; i < needed_count; i++) {
-      const char *libname = needed[i];
-      if (!libname || elf64_is_loaded(images, img_count, libname))
-        continue;
+  /* If we have an interpreter, we skip eager loading of other libraries. */
+  /* The dynamic linker will handle it. */
+  if (interp_index < 0) {
+    for (int idx = 0; idx < img_count; idx++) {
+      const char *needed[32];
+      int needed_count = elf64_collect_needed(&images[idx], needed, 32);
+      for (int i = 0; i < needed_count; i++) {
+        const char *libname = needed[i];
+        if (!libname || elf64_is_loaded(images, img_count, libname))
+          continue;
 
-      const uint8_t *lib_data = nullptr;
-      size_t lib_size = 0;
-      int owned = 0;
-      if (elf64_find_library(libname, base_dir, &lib_data, &lib_size, &owned) <
-          0)
-        return -1;
+        const uint8_t *lib_data = nullptr;
+        size_t lib_size = 0;
+        int owned = 0;
+        if (elf64_find_library(libname, base_dir, &lib_data, &lib_size, &owned) <
+            0) {
+          serial_write_string("[K64] ERROR: could not find library: ");
+          serial_write_string(libname);
+          serial_write_string("\r\n");
+          return -1;
+        }
 
-      if (img_count >= (int)(sizeof(images) / sizeof(images[0])))
-        return -1;
+        if (img_count >= (int)(sizeof(images) / sizeof(images[0])))
+          return -1;
 
-      const elf64_ehdr_t *lib_eh = (const elf64_ehdr_t *)lib_data;
-      uint64_t lib_base =
-          (lib_eh && lib_eh->e_type == ET_DYN)
-              ? (ELF64_DYN_BASE + 0x1000000ULL * (uint64_t)img_count)
-              : 0;
+        const elf64_ehdr_t *lib_eh = (const elf64_ehdr_t *)lib_data;
+        uint64_t lib_base =
+            (lib_eh && lib_eh->e_type == ET_DYN)
+                ? (ELF64_DYN_BASE + 0x1000000ULL * (uint64_t)img_count)
+                : 0;
 
-      if (load_elf64_image(lib_data, lib_size, lib_base, &images[img_count],
-                           nullptr, 0) < 0)
-        return -1;
-      images[img_count].name = libname;
-      images[img_count].owned = owned;
-      image_ptrs[img_count] = &images[img_count];
-      img_count++;
+        if (load_elf64_image(lib_data, lib_size, lib_base, &images[img_count],
+                             nullptr, 0) < 0) {
+          serial_write_string("[K64] ERROR: load_elf64_image lib fail\r\n");
+          return -1;
+        }
+        images[img_count].name = libname;
+        images[img_count].owned = owned;
+        image_ptrs[img_count] = &images[img_count];
+        img_count++;
+      }
     }
   }
 
+  /* 
+   * RELOCATE Images.
+   * If there is an interpreter, the kernel ONLY relocates the interpreter.
+   * The host binary images[0] is usually relocated by the interpreter.
+   * HOWEVER, we relocate both images[0] and images[interp_index] if they 
+   * are simple. But many interpreters are self-relocating. 
+   */
   for (int i = 0; i < img_count; i++) {
-    if (elf64_apply_relocs(&images[i], image_ptrs, img_count) < 0)
+    /* If an interpreter exists, it will relocate the app in usermode. */
+    /* The kernel only needs to ensure the interpreter itself is relocated. */
+    if (interp_index >= 0 && i == 0) continue; 
+    
+    if (elf64_apply_relocs(&images[i], image_ptrs, img_count) < 0) {
+
+      serial_write_string("[K64] ERROR: elf64_apply_relocs fail for image: ");
+      serial_write_string(images[i].name ? images[i].name : "???");
+      serial_write_string("\r\n");
       return -1;
+    }
   }
+
 
   uint64_t image_end = 0;
   for (int i = 0; i < img_count; i++) {
@@ -858,7 +972,9 @@ static int exec64_from_buffer(const uint8_t *file_data, size_t file_size,
   serial_write_string("\r\n");
   /*serial_write_string("[K64] DEBUG: NEW KERNEL IS EXECUTING EXEC64_FROM_BUFFER!\r\n");*/
 
+  task64_t *t = task64_current();
   uint64_t *pml4 = paging64_get_pml4();
+
   if (pml4) {
     uint64_t pml4_i = (entry >> 39) & 0x1FF;
     uint64_t pdpt_i = (entry >> 30) & 0x1FF;
@@ -883,7 +999,12 @@ static int exec64_from_buffer(const uint8_t *file_data, size_t file_size,
   }
 
   user64_init_process(image_end);
+  if (image_path && t) {
+    strncpy(t->exe_path, image_path, sizeof(t->exe_path) - 1);
+    t->exe_path[sizeof(t->exe_path) - 1] = 0;
+  }
   task64_set_user_stack(rsp);
+
 
   struct user64_context ctx;
   ctx.rip = entry;

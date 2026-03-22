@@ -3,7 +3,9 @@
 #include "fs_ops.h"
 #include "../../mem/kmalloc.h"
 #include "../../string.h"
+#include "../../drivers/serial.h"
 #include <stdint.h>
+
 
 #define MAX_MOUNTS 8
 
@@ -62,10 +64,14 @@ static mount_t* vfs_find_mount(const char* path) {
             continue;
         if (strncmp(path, m->path, len) != 0)
             continue;
-        if (path[len] != 0 && path[len] != '/')
-            continue;
+        /* Match at boundary: either end of path or next char is / */
+        if (len > 1) {
+            if (path[len] != 0 && path[len] != '/')
+                continue;
+        }
         if (!best || len > best->len)
             best = m;
+
     }
     return best;
 }
@@ -90,14 +96,27 @@ static vnode_t* vfs_find_child(vnode_t* dir, const char* name, size_t len) {
 }
 
 vnode_t* vfs_resolve(const char* path) {
-    if (!path)
+    serial_write_string("[VFS_TRACE] vfs_resolve: Attempting to resolve path '");
+    serial_write_string(path);
+    serial_write_string("'\r\n");
+
+    if (!path) {
+        serial_write_string("[VFS_TRACE] vfs_resolve: Path is NULL, returning NULL.\r\n");
         return NULL;
-    if (path[0] != '/')
+    }
+    if (path[0] != '/') {
+        serial_write_string("[VFS_TRACE] vfs_resolve: Path is not absolute, returning NULL.\r\n");
         return NULL;
+    }
 
     mount_t* m = vfs_find_mount(path);
-    if (!m || !m->root)
-        return NULL;
+    if (!m || !m->root) {
+      serial_write_string("[VFS_TRACE] vfs_resolve: No mount point found for path '");
+      serial_write_string(path);
+      serial_write_string("\r\n");
+      return NULL;
+    }
+
 
     const char* sub = path + m->len;
     if (m->len == 1)
@@ -129,9 +148,15 @@ vnode_t* vfs_resolve(const char* path) {
         }
 
         vnode_t* child = vfs_find_child(cur, start, len);
-        if (!child)
-            return NULL;
+        if (!child) {
+          serial_write_string("[VFS] component not found: ");
+          char tmp[64];
+          if (len < 63) { memcpy(tmp, start, len); tmp[len] = 0; serial_write_string(tmp); }
+          serial_write_string("\r\n");
+          return NULL;
+        }
         cur = child;
     }
     return cur;
+
 }

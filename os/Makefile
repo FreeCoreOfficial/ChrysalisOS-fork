@@ -1146,7 +1146,8 @@ $(ISO)/system/lib/libc.so: $(LIBC_PIC_OBJS) | dirs
 # -------------------------
 
 LINUX_TEST_SRC = user/tests/linux_hello.c
-LINUX_TESTS = $(ISO)/system/tests/linux-hello64 $(ISO)/system/tests/linux-hello32
+HELLO_LIBC_SRC = user/hello_libc.c
+LINUX_TESTS = $(ISO)/system/tests/linux-hello64 $(ISO)/system/tests/linux-hello32 $(ISO)/system/tests/hello-libc
 
 linux_tests: $(LINUX_TESTS)
 
@@ -1165,6 +1166,15 @@ $(ISO)/system/tests/linux-hello64: $(BUILD)/tests/linux-hello64 | dirs
 	cp $< $@
 
 $(ISO)/system/tests/linux-hello32: $(BUILD)/tests/linux-hello32 | dirs
+	@mkdir -p $(dir $@)
+	cp $< $@
+
+$(BUILD)/tests/hello-libc: $(HELLO_LIBC_SRC) | dirs
+	@mkdir -p $(dir $@)
+	$(HOSTCC) $(HOSTCFLAGS) -Iuser -Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2 \
+		$< -o $@
+
+$(ISO)/system/tests/hello-libc: $(BUILD)/tests/hello-libc | dirs
 	@mkdir -p $(dir $@)
 	cp $< $@
 
@@ -1304,9 +1314,12 @@ iso: all linux_tests iso/boot/grub/grub.cfg icons
 	@cp kernel/chryspkg/catalog.json $(ISO)/system/pkg/catalog.json
 	@if [ -d ../toolchain/linux-sysroot/lib ] || [ -d ../toolchain/linux-sysroot/lib64 ]; then \
 		echo "[LINUX] Copying userland sysroot..."; \
-		mkdir -p $(ISO)/lib $(ISO)/lib64; \
-		cp -a ../toolchain/linux-sysroot/lib/* $(ISO)/lib/ 2>/dev/null || true; \
-		cp -a ../toolchain/linux-sysroot/lib64/* $(ISO)/lib64/ 2>/dev/null || true; \
+		mkdir -p $(ISO)/lib $(ISO)/lib64 $(ISO)/lib/x86_64-linux-gnu; \
+		if [ -d ../toolchain/linux-sysroot/lib/x86_64-linux-gnu ]; then \
+			cp -a ../toolchain/linux-sysroot/lib/x86_64-linux-gnu/* $(ISO)/lib/x86_64-linux-gnu/ 2>/dev/null || true; \
+		fi; \
+		cp -an ../toolchain/linux-sysroot/lib/* $(ISO)/lib/ 2>/dev/null || true; \
+		cp -an ../toolchain/linux-sysroot/lib64/* $(ISO)/lib64/ 2>/dev/null || true; \
 	else \
 		echo "[LINUX] No linux-sysroot found in toolchain/linux-sysroot"; \
 	fi

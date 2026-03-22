@@ -36,5 +36,7 @@
 #define SYS_CMD_EXEC_CAPTURE 42
 #define SYS_USER_IS_LOGGED 43
 #define SYS_IOCTL 44
+#define SYS_READLINK 89
+
 
 #endif

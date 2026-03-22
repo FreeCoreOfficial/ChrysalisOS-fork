@@ -9,7 +9,8 @@ extern "C" {
 typedef enum {
     VNODE_FILE,
     VNODE_DIR,
-    VNODE_DEV
+    VNODE_DEV,
+    VNODE_LNK
 } vnode_type_t;
 
 struct fs_ops;

@@ -7,6 +7,11 @@
 #endif
 #include "../../time/clock.h"
 #include "../../memory/pmm.h"
+#ifdef __x86_64__
+#include "../../sched/task64.h"
+#endif
+#include "../../drivers/serial.h"
+
 #ifndef __x86_64__
 #include "../../include/stdio.h"
 #else
@@ -78,7 +83,9 @@ typedef enum {
   PROC_MEMINFO,
   PROC_VERSION,
   PROC_CPUINFO,
-  PROC_CMDLINE
+  PROC_CMDLINE,
+  PROC_SELF,
+  PROC_SELF_EXE
 } proc_type_t;
 
 typedef struct proc_node {
@@ -94,6 +101,8 @@ static proc_node_t proc_meminfo;
 static proc_node_t proc_version;
 static proc_node_t proc_cpuinfo;
 static proc_node_t proc_cmdline;
+static proc_node_t proc_self;
+static proc_node_t proc_self_exe;
 
 static int procfs_open(struct vnode *n) {
   (void)n;
@@ -184,6 +193,28 @@ static uint32_t procfs_poll(struct vnode *n, uint32_t events) {
   return revents;
 }
 
+static int procfs_readlink(struct vnode *n, char *buf, uint32_t bufsize) {
+  if (!n || !buf || bufsize == 0)
+    return -1;
+  proc_node_t *pn = (proc_node_t *)n->internal;
+  if (pn->type == PROC_SELF_EXE) {
+#ifdef __x86_64__
+    task64_t *t = task64_current();
+    if (!t || !t->exe_path[0])
+      return -1;
+    uint32_t len = (uint32_t)strlen(t->exe_path);
+    if (len >= bufsize)
+      len = bufsize - 1;
+    memcpy(buf, t->exe_path, len);
+    buf[len] = 0;
+    return (int)len;
+#else
+    return -1;
+#endif
+  }
+  return -1;
+}
+
 static int procfs_readdir(struct vnode *dir, uint32_t index,
                           struct vnode **out) {
   if (!dir || !out)
@@ -205,6 +236,25 @@ static int procfs_readdir(struct vnode *dir, uint32_t index,
     return 1;
   case 4:
     *out = &proc_cmdline.vnode;
+    return 1;
+  case 5:
+    *out = &proc_self.vnode;
+    return 1;
+  default:
+    *out = NULL;
+    return 0;
+  }
+}
+
+static int procfs_readdir_self(struct vnode *dir, uint32_t index,
+                               struct vnode **out) {
+  if (!dir || !out)
+    return 0;
+  if (dir != &proc_self.vnode)
+    return 0;
+  switch (index) {
+  case 0:
+    *out = &proc_self_exe.vnode;
     return 1;
   default:
     *out = NULL;
@@ -237,6 +287,11 @@ vnode_t *procfs_root(void) {
   procfs_ops.close = procfs_close;
   procfs_ops.poll = procfs_poll;
   procfs_ops.readdir = procfs_readdir;
+  procfs_ops.readlink = procfs_readlink;
+
+  static fs_ops_t proc_self_ops;
+  memcpy(&proc_self_ops, &procfs_ops, sizeof(fs_ops_t));
+  proc_self_ops.readdir = procfs_readdir_self;
 
   procfs_init_node(&proc_root, "proc", VNODE_DIR, PROC_CMDLINE, NULL);
   proc_root.vnode.parent = NULL;
@@ -251,6 +306,11 @@ vnode_t *procfs_root(void) {
                    &proc_root.vnode);
   procfs_init_node(&proc_cmdline, "cmdline", VNODE_FILE, PROC_CMDLINE,
                    &proc_root.vnode);
+  procfs_init_node(&proc_self, "self", VNODE_DIR, PROC_SELF, &proc_root.vnode);
+  proc_self.vnode.ops = &proc_self_ops;
+  procfs_init_node(&proc_self_exe, "exe", VNODE_LNK, PROC_SELF_EXE,
+                   &proc_self.vnode);
+
 
   return &proc_root.vnode;
 }

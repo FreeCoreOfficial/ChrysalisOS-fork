@@ -98,6 +98,8 @@ task64_t *task64_create(const char *name, void (*entry)(void *), void *arg) {
   t->gs.kernel_stack = (uint64_t)(uintptr_t)(stack + k_task64_stack_size);
   t->gs.user_stack = 0;
   t->gs.fs_base = 0;
+  t->exe_path[0] = 0;
+
   t->user_brk_start = 0;
   t->user_brk_end = 0;
   t->user_mmap_base = 0;

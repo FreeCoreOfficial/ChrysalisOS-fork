@@ -135,6 +135,20 @@ uint64_t user64_brk(uint64_t new_brk) {
     return t->user_brk_end;
 
   uint64_t old = t->user_brk_end;
+  if (old == 0) old = t->user_brk_start;
+
+  if (new_brk < old) {
+    uint64_t start = align_up(new_brk);
+    uint64_t end = align_up(old);
+    if (start < end) {
+      for (uint64_t va = start; va < end; va += USER64_PAGE_SIZE) {
+        paging64_unmap_page(va);
+      }
+    }
+    t->user_brk_end = new_brk;
+    return t->user_brk_end;
+  }
+
   uint64_t start = align_up(old);
   uint64_t end = align_up(new_brk);
   for (uint64_t va = start; va < end; va += USER64_PAGE_SIZE) {
@@ -148,6 +162,7 @@ uint64_t user64_brk(uint64_t new_brk) {
   t->user_brk_end = new_brk;
   return t->user_brk_end;
 }
+
 
 uint64_t user64_mmap(uint64_t addr, uint64_t len, int prot, int flags) {
   task64_t *t = task64_current();

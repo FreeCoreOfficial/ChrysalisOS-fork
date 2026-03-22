@@ -35,7 +35,9 @@ struct mb64_module {
 };
 
 static mb64_module g_mb_modules[32];
+static char g_mb_module_names[32][128];
 static int g_mb_module_count = 0;
+
 uint32_t g_total_ram_mb = 0;
 static uint64_t g_mb_module_max_end = 0;
 extern "C" uint8_t g_syscall_stack[16384];
@@ -57,6 +59,32 @@ static bool g_boot_gui = false;
 static bool g_linux_abi = false;
 static uint8_t g_heap64[4 * 1024 * 1024];
 alignas(16) static uint8_t g_kernel_stack0[16384];
+
+static void mb_copy_name(const char *src, char *dst, size_t dst_sz) {
+  if (!dst || dst_sz == 0)
+    return;
+  dst[0] = 0;
+  if (!src)
+    return;
+  while (*src && (unsigned char)*src <= ' ')
+    src++;
+  const char *end = src;
+  while (*end)
+    end++;
+  while (end > src && (unsigned char)end[-1] <= ' ')
+    end--;
+  const char *token = src;
+  for (const char *p = src; p < end; ++p) {
+    if (*p == ' ')
+      token = p + 1;
+  }
+  size_t n = (size_t)(end - token);
+  if (n >= dst_sz)
+    n = dst_sz - 1;
+  memcpy(dst, token, n);
+  dst[n] = 0;
+}
+
 
 static bool mb2_valid(uint64_t info) {
   if (!info)
@@ -101,11 +129,14 @@ static void mb2_scan(uint64_t info, const char **out_cmdline) {
       struct multiboot2_tag_module *mod =
           (struct multiboot2_tag_module *)tag;
       if (g_mb_module_count < 32) {
+        char *namebuf = g_mb_module_names[g_mb_module_count];
+        mb_copy_name(mod->string, namebuf, 128);
         g_mb_modules[g_mb_module_count].start = mod->mod_start;
         g_mb_modules[g_mb_module_count].end = mod->mod_end;
-        g_mb_modules[g_mb_module_count].name = mod->string;
+        g_mb_modules[g_mb_module_count].name = namebuf;
         g_mb_module_count++;
       }
+
       if (mod->mod_end > g_mb_module_max_end)
         g_mb_module_max_end = mod->mod_end;
     }
@@ -330,14 +361,22 @@ static void shell64_cmd_mods(void) {
   serial_write_string("Modules:\r\n");
   for (int i = 0; i < g_mb_module_count; i++) {
     vga_puts("  ");
+    serial_write_string("  ");
     vga_puts(g_mb_modules[i].name ? g_mb_modules[i].name : "(unnamed)");
+    serial_write_string(g_mb_modules[i].name ? g_mb_modules[i].name : "(unnamed)");
     vga_puts(" @");
+    serial_write_string(" @");
     vga_put_hex32(g_mb_modules[i].start);
+    serial_printf("0x%x", (unsigned int)g_mb_modules[i].start);
     vga_puts(" size=");
+    serial_write_string(" size=");
     vga_put_u32(g_mb_modules[i].end - g_mb_modules[i].start);
+    serial_printf("%u", (unsigned int)(g_mb_modules[i].end - g_mb_modules[i].start));
     vga_putc('\n');
+    serial_write_string("\r\n");
   }
 }
+
 
 static void shell64_cmd_ram(void) {
   vga_puts("RAM: ");
@@ -528,6 +567,25 @@ extern "C" void kernel_main64(unsigned long long magic,
   vfs_mount("/", ramfs_root());
   vfs_mount("/dev", devfs_root());
   vfs_mount("/proc", procfs_root());
+
+
+  /* Populate ramfs from multiboot modules */
+  if (g_mb_module_count > 0) {
+    serial_write_string("[K64] Registering modules in RAMFS:\r\n");
+    for (int i = 0; i < g_mb_module_count; i++) {
+        serial_write_string("  - ");
+        serial_write_string(g_mb_modules[i].name);
+        serial_write_string(" size=");
+        serial_printf("%u", (uint32_t)(g_mb_modules[i].end - g_mb_modules[i].start));
+        serial_write_string("\r\n");
+        ramfs_create_file(g_mb_modules[i].name,
+                         (void*)(uintptr_t)g_mb_modules[i].start,
+                         (size_t)(g_mb_modules[i].end - g_mb_modules[i].start));
+
+    }
+  }
+
+
 
   syscall64_set_linux_abi(g_linux_abi ? 1 : 0);
   if (!mb2_valid(info)) {

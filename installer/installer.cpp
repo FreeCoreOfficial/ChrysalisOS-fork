@@ -1486,6 +1486,14 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   if (mr != 0 && !upgrade_mode) {
     serial("[INSTALLER] WARN: mkdir /system/tests failed (err=%d)\n", mr);
   }
+  /* NEW: Library directories for M1 */
+  char lib64_dir[] = "/lib64";
+  mr = fat32_create_directory_verified(lib64_dir, 1);
+  char lib_base_dir[] = "/lib";
+  fat32_create_directory_verified(lib_base_dir, 1);
+  char lib_x64_dir[] = "/lib/x86_64-linux-gnu";
+  fat32_create_directory_verified(lib_x64_dir, 1);
+
   mr = fat32_create_directory_verified(themes_dir, 1);
   if (mr != 0 && !upgrade_mode) {
     serial("[INSTALLER] WARN: mkdir /boot/grub/themes failed (err=%d)\n", mr);
@@ -1670,7 +1678,30 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
                                        0);
           }
           kmalloc_reset();
+        } else if (strcmp(current_mod_name, "ld-linux-x86-64.so.2") == 0) {
+          serial("[INSTALLER] Dynamic Linker: %s -> /lib64/\n", current_mod_name);
+          fat32_create_file_verified("/lib64/ld-linux-x86-64.so.2", 
+                                     (void *)(uintptr_t)mod->mod_start,
+                                     (uint32_t)(mod->mod_end - mod->mod_start), 1);
+          kmalloc_reset();
+        } else if (strcmp(current_mod_name, "libc.so.6") == 0) {
+          serial("[INSTALLER] Libc: %s -> /lib/x86_64-linux-gnu/\n", current_mod_name);
+          fat32_create_file_verified("/lib/x86_64-linux-gnu/libc.so.6", 
+                                     (void *)(uintptr_t)mod->mod_start,
+                                     (uint32_t)(mod->mod_end - mod->mod_start), 1);
+          /* Also mirror to /lib64 for older dynamic linkers */
+          fat32_create_file_verified("/lib64/libc.so.6", 
+                                     (void *)(uintptr_t)mod->mod_start,
+                                     (uint32_t)(mod->mod_end - mod->mod_start), 1);
+          kmalloc_reset();
+        } else if (strcmp(current_mod_name, "hello-libc") == 0) {
+          serial("[INSTALLER] Hello Libc: %s -> /system/tests/\n", current_mod_name);
+          fat32_create_file_verified("/system/tests/hello-libc", 
+                                     (void *)(uintptr_t)mod->mod_start,
+                                     (uint32_t)(mod->mod_end - mod->mod_start), 1);
+          kmalloc_reset();
         } else {
+
           serial("[INSTALLER] Module '%s' did not match any expected file.\n",
                  cmdline);
         }
@@ -1798,6 +1829,13 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
       ui_append_str(grub_cfg, sizeof(grub_cfg),
                     "  module2 /boot/chrysalis/hello64.elf hello64.elf\n");
     }
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib64/ld-linux-x86-64.so.2 /lib64/ld-linux-x86-64.so.2\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib/x86_64-linux-gnu/libc.so.6 /lib/x86_64-linux-gnu/libc.so.6\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /system/tests/hello-libc /system/tests/hello-libc\n");
+
     ui_append_str(grub_cfg, sizeof(grub_cfg), "  boot\n}\n\n");
 
     ui_append_str(grub_cfg, sizeof(grub_cfg),
@@ -1818,6 +1856,13 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
       ui_append_str(grub_cfg, sizeof(grub_cfg),
                     "  module2 /boot/chrysalis/hello64.elf hello64.elf\n");
     }
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib64/ld-linux-x86-64.so.2 /lib64/ld-linux-x86-64.so.2\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib/x86_64-linux-gnu/libc.so.6 /lib/x86_64-linux-gnu/libc.so.6\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /system/tests/hello-libc /system/tests/hello-libc\n");
+
     ui_append_str(grub_cfg, sizeof(grub_cfg), "  boot\n}\n\n");
   }
 

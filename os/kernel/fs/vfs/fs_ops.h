@@ -20,7 +20,11 @@ typedef struct fs_ops {
     /* readdir: for directory nodes; index starts at 0. If no more entries return 0 and set *out = NULL.
        On success return 1 and set *out to the vnode pointer (owned by FS). */
     int (*readdir)(struct vnode* dir, uint32_t index, struct vnode** out);
+
+    /* readlink: for symlink nodes. Returns number of bytes copied to buf (excluding null), or negative on error. */
+    int (*readlink)(struct vnode* node, char* buf, uint32_t bufsize);
 } fs_ops_t;
+
 
 #ifdef __cplusplus
 }

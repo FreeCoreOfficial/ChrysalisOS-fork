@@ -200,6 +200,10 @@ installer.iso: $(BUILD)/installer.elf
 	@if [ -d ../os/iso/system/apps ]; then cp ../os/iso/system/apps/*.petal $(ISO)/system/apps/; else echo "WARNING: petal apps not found!"; fi
 	@mkdir -p $(ISO)/system/tests
 	@if [ -d ../os/iso/system/tests ]; then cp ../os/iso/system/tests/* $(ISO)/system/tests/ 2>/dev/null || true; else echo "WARNING: system tests not found!"; fi
+	@mkdir -p $(ISO)/lib $(ISO)/lib64
+	@cp -a ../os/iso/lib/* $(ISO)/lib/ 2>/dev/null || true
+	@cp -a ../os/iso/lib64/* $(ISO)/lib64/ 2>/dev/null || true
+
 	@mkdir -p $(ISO)/system
 	@if [ -f ../os/iso/system/bg.bmp ]; then \
 		cp ../os/iso/system/bg.bmp $(ISO)/system/bg.bmp; \
@@ -242,6 +246,19 @@ installer.iso: $(BUILD)/installer.elf
 		nm=$$(basename $$f); \
 		echo "  module2 /icons/$$nm $$nm" >> $(ISO)/boot/grub/grub.cfg; \
 	done
+	@for f in $(ISO)/lib/*; do \
+		if [ -f $$f ]; then \
+			nm=$$(basename $$f); \
+			echo "  module2 /lib/$$nm $$nm" >> $(ISO)/boot/grub/grub.cfg; \
+		fi \
+	done
+	@for f in $(ISO)/lib64/*; do \
+		if [ -f $$f ]; then \
+			nm=$$(basename $$f); \
+			echo "  module2 /lib64/$$nm $$nm" >> $(ISO)/boot/grub/grub.cfg; \
+		fi \
+	done
+
 	@for f in $(ISO)/system/apps/*.petal; do \
 		nm=$$(basename $$f); \
 		echo "  module2 /system/apps/$$nm $$nm" >> $(ISO)/boot/grub/grub.cfg; \

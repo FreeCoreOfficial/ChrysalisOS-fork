@@ -237,8 +237,9 @@ typedef struct {
 } mb_file_t;
 
 static mb_file_t g_multiboot_modules[32];
-static char g_multiboot_names[32][32];
+static char g_multiboot_names[32][128];
 static int g_multiboot_module_count = 0;
+
 
 static void mb_copy_name(const char *src, char *dst, size_t dst_sz) {
   if (!dst || dst_sz == 0)
@@ -258,17 +259,14 @@ static void mb_copy_name(const char *src, char *dst, size_t dst_sz) {
     if (*p == ' ')
       token = p + 1;
   }
-  const char *base = token;
-  for (const char *p = token; p < end; ++p) {
-    if (*p == '/' || *p == '\\')
-      base = p + 1;
-  }
-  size_t n = (size_t)(end - base);
+  size_t n = (size_t)(end - token);
   if (n >= dst_sz)
     n = dst_sz - 1;
-  memcpy(dst, base, n);
+  memcpy(dst, token, n);
   dst[n] = 0;
 }
+
+
 
 /* Buddy allocator wrapper that hooks the buddy allocator to the heap region
    defined by the linker script (linker.ld) */
