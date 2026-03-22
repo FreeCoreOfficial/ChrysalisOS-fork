@@ -1177,7 +1177,8 @@ LINUX_TEST_SRC = user/tests/linux_hello.c
 HELLO_LIBC_SRC = user/hello_libc.c
 LINUX_TEST_M2_SRC = user/tests/linux_test_m2.c
 LINUX_TEST_PIPE_SRC = user/tests/linux_test_pipe.c
-LINUX_TESTS = $(ISO)/system/tests/linux-hello64 $(ISO)/system/tests/linux-hello32 $(ISO)/system/tests/hello-libc $(ISO)/system/tests/linux-test-m2 $(ISO)/system/tests/linux-test-pipe
+LINUX_TEST_M3_SRC = user/tests/linux_test_m3.c
+LINUX_TESTS = $(ISO)/system/tests/linux-hello64 $(ISO)/system/tests/linux-hello32 $(ISO)/system/tests/hello-libc $(ISO)/system/tests/linux-test-m2 $(ISO)/system/tests/linux-test-pipe $(ISO)/system/tests/linux-test-m3
 
 linux_tests: $(LINUX_TESTS)
 
@@ -1225,6 +1226,16 @@ $(BUILD)/tests/linux-test-pipe: $(LINUX_TEST_PIPE_SRC) | dirs
 $(ISO)/system/tests/linux-test-pipe: $(BUILD)/tests/linux-test-pipe | dirs
 	@mkdir -p $(dir $@)
 	cp $< $@
+
+$(BUILD)/tests/linux-test-m3: $(LINUX_TEST_M3_SRC) | dirs
+	@mkdir -p $(dir $@)
+	$(HOSTCC) $(HOSTCFLAGS) -Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2 \
+		$< -o $@
+
+$(ISO)/system/tests/linux-test-m3: $(BUILD)/tests/linux-test-m3 | dirs
+	@mkdir -p $(dir $@)
+	cp $< $@
+
 $(BUILD)/surface.o: kernel/video/surface.c | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -1367,6 +1378,14 @@ iso: all linux_tests iso/boot/grub/grub.cfg icons
 		fi; \
 		cp -an ../toolchain/linux-sysroot/lib/* $(ISO)/lib/ 2>/dev/null || true; \
 		cp -an ../toolchain/linux-sysroot/lib64/* $(ISO)/lib64/ 2>/dev/null || true; \
+		if [ -d ../toolchain/linux-sysroot/usr ]; then \
+			echo "[LINUX] Copying usr/ from sysroot..."; \
+			cp -a ../toolchain/linux-sysroot/usr $(ISO)/ 2>/dev/null || true; \
+		fi; \
+		if [ -d ../toolchain/linux-sysroot/etc ]; then \
+			echo "[LINUX] Copying etc/ from sysroot..."; \
+			cp -a ../toolchain/linux-sysroot/etc $(ISO)/ 2>/dev/null || true; \
+		fi; \
 	else \
 		echo "[LINUX] No linux-sysroot found in toolchain/linux-sysroot"; \
 	fi
