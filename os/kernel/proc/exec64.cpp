@@ -102,7 +102,6 @@ typedef struct {
 #define AT_SECURE 23
 #define AT_RANDOM 25
 #define AT_EXECFN 31
-#define AT_TLS 250 // Moved to non-conflicting value
 
 
 typedef struct {
@@ -476,11 +475,12 @@ static int elf64_apply_relocs(elf64_image_t *img, elf64_image_t **images,
       case R_X86_64_JUMP_SLOT:
         *where = sym_addr + (uint64_t)rela->r_addend;
         break;
-      case 37: /* R_X86_64_IRELATIVE */
-        /* This should call a resolver, but for now we just store the relative addr */
-        /* and hope for the best or that it's not critical for basic output. */
-        *where = img->load_base + (uint64_t)rela->r_addend;
+      case 37: /* R_X86_64_IRELATIVE */ {
+        uint64_t (*resolver)() = (uint64_t (*)())(img->load_base + rela->r_addend);
+        *where = resolver();
         break;
+      }
+
       default:
         return -1;
       }
@@ -592,16 +592,17 @@ static int load_elf64_image(const uint8_t *file_data, size_t file_size,
 static uint64_t build_user_stack(char *const argv[], uint64_t stack_top,
                                  uint64_t at_entry, uint64_t at_phdr,
                                  uint64_t at_phent, uint64_t at_phnum,
-                                 uint64_t at_base, uint64_t at_tls) {
+                                 uint64_t at_base) {
   uint64_t sp = stack_top;
 
   int argc = 0;
   while (argv && argv[argc])
     argc++;
 
-  const char *envp[] = {nullptr};
   int envc = 0;
+  char *const envp[] = {nullptr};
 
+  /* 1. Calculate and push strings */
   uint64_t arg_ptrs[64];
   uint64_t env_ptrs[8];
 
@@ -619,77 +620,71 @@ static uint64_t build_user_stack(char *const argv[], uint64_t stack_top,
     env_ptrs[i] = sp;
   }
 
-  sp &= ~0xFULL;
+  /* Calculate stack slots for alignment (System V ABI expects RSP%16 == 0 at _start). */
+  int aux_pairs = 15; /* AT_NULL + others ... */
+  if (argc > 0) aux_pairs++; /* AT_EXECFN */
+
+  const uint64_t random_slots = 2; /* 16 bytes */
+  uint64_t slots = 1 + (uint64_t)(argc + 1) + (uint64_t)(envc + 1) +
+                   (uint64_t)(aux_pairs * 2) + random_slots;
+  
+  /* If slots is odd, add 1 for 16-byte alignment */
+  if (slots % 2 != 0) slots++;
+
+  /* Align sp then "allocate" space for slots */
+  sp = (sp - slots * 8) & ~0xFULL;
+  uint64_t final_sp = sp;
+  sp += slots * 8; /* Reset sp to the point where we begin pushing */
 
   auto push64 = [&](uint64_t v) {
     sp -= 8;
     *(uint64_t *)(uintptr_t)sp = v;
   };
 
+  /* Push AUX vector */
   push64(0);
   push64(AT_NULL);
 
-
-  push64(at_entry);
-  push64(AT_ENTRY);
-  push64(at_phnum);
-  push64(AT_PHNUM);
-  push64(at_phent);
-  push64(AT_PHENT);
-  push64(at_phdr);
-  push64(AT_PHDR);
-  push64(0x1000);
-  push64(AT_PAGESZ);
-  push64(at_base);
-  push64(AT_BASE);
+  push64(at_entry); push64(AT_ENTRY);
+  push64(at_phnum); push64(AT_PHNUM);
+  push64(at_phent); push64(AT_PHENT);
+  push64(at_phdr);  push64(AT_PHDR);
+  push64(0x1000);   push64(AT_PAGESZ);
+  push64(at_base);  push64(AT_BASE);
 
   /* Pushing 16-byte random seed */
   for (int i = 0; i < 2; i++) {
-    push64(0x1234567887654321ULL ^ (uint64_t)i); // Placeholder for real RNG
+    push64(0x1234567887654321ULL ^ (uint64_t)i);
   }
   uint64_t random_ptr = sp;
   push64(random_ptr);
   push64(AT_RANDOM);
 
-  push64(0); // AT_SECURE
-  push64(AT_SECURE);
-
-  push64(100); // AT_CLKTCK
-  push64(AT_CLKTCK);
-
-  push64(0); // AT_HWCAP
-  push64(AT_HWCAP);
-
-  push64(0); // AT_GID
-  push64(AT_GID);
-  push64(0); // AT_EGID
-  push64(AT_EGID);
-  push64(0); // AT_UID
-  push64(AT_UID);
-  push64(0); // AT_EUID
-  push64(AT_EUID);
+  push64(0); push64(AT_SECURE);
+  push64(100); push64(AT_CLKTCK);
+  push64(0); push64(AT_HWCAP);
+  push64(0); push64(AT_GID);
+  push64(0); push64(AT_EGID);
+  push64(0); push64(AT_UID);
+  push64(0); push64(AT_EUID);
 
   if (argc > 0) {
-    push64(arg_ptrs[0]); // Best effort EXECFN
+    push64(arg_ptrs[0]);
     push64(AT_EXECFN);
   }
 
-  if (at_tls) {
-    push64(at_tls);
-    push64(AT_TLS);
-  }
-
-
+  /* Push pointers */
   push64(0);
-  for (int i = envc - 1; i >= 0; i--)
-    push64(env_ptrs[i]);
-
+  for (int i = envc - 1; i >= 0; i--) push64(env_ptrs[i]);
   push64(0);
-  for (int i = argc - 1; i >= 0; i--)
-    push64(arg_ptrs[i]);
+  for (int i = argc - 1; i >= 0; i--) push64(arg_ptrs[i]);
 
+  /* Push argc */
   push64((uint64_t)argc);
-  sp &= ~0xFULL;
+  if ((sp & 0x0FULL) != 0) {
+    serial_printf("[K64] Stack alignment mismatch (expected 16-byte-aligned RSP for _start): sp=%p\r\n",
+                  (void *)(uintptr_t)sp);
+  }
   return sp;
 }
 
@@ -961,8 +956,8 @@ static int exec64_from_buffer(const uint8_t *file_data, size_t file_size,
 
   uint64_t rsp = build_user_stack(argv ? argv : (char *const *)"", stack_top,
                                   images[0].entry, images[0].phdr,
-                                  images[0].phent, images[0].phnum, at_base,
-                                  at_tls);
+                                  images[0].phent, images[0].phnum, at_base);
+
 
   serial_write_string("[K64] user entry bytes: ");
   const uint8_t *entry_ptr = (const uint8_t *)(uintptr_t)entry;
@@ -1016,11 +1011,12 @@ static int exec64_from_buffer(const uint8_t *file_data, size_t file_size,
   return 0;
 }
 
-int exec64_from_module(void *start, uint64_t size) {
+int exec64_from_module(void *start, uint64_t size, const char *image_path) {
   char *argv[] = {(char *)"module", nullptr};
   return exec64_from_buffer((const uint8_t *)start, (size_t)size, argv,
-                            nullptr);
+                            image_path);
 }
+
 
 int execve_linux_x86_64_full(const char *filename, char *const argv[]) {
   size_t file_size = 0;

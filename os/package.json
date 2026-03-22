@@ -27,6 +27,7 @@
     "// --- Main Production Workflow --- //": "",
     
     "build": "make clean && make dirs && make && make iso",
+    "ldebugx64": "make all && make iso && npm run run:iso64",
     "full": "npm run build && npm run installer:build",
     "boot": "npm run run:hdd",
     "boot:x64": "npm run run:hdd64",

@@ -12,6 +12,7 @@ static task64_t *g_task64_current = nullptr;
 static uint64_t g_task64_next_id = 1;
 
 static const uint64_t k_task64_stack_size = 16 * 1024;
+static const uint32_t MSR_FS_BASE = 0xC0000100u;
 static const uint32_t MSR_GS_BASE = 0xC0000101u;
 static const uint32_t MSR_KERNEL_GS_BASE = 0xC0000102u;
 
@@ -24,6 +25,7 @@ static inline void task64_set_kernel_gs(task64_t *t) {
   if (!t)
     return;
   wrmsr64(MSR_KERNEL_GS_BASE, (uint64_t)(uintptr_t)&t->gs);
+  wrmsr64(MSR_FS_BASE, t->gs.fs_base);
   tss64_set_rsp0(t->gs.kernel_stack);
   /* NOTE: do NOT overwrite IST1 here. IST1 is a dedicated double-fault
    * stack set once in kernel_main64 via tss64_set_ist1(). Clobbering it

@@ -613,7 +613,9 @@ static uint16_t linux_mode_from_vnode(vnode_t *n) {
 static int linux_fill_stat64(vnode_t *node, linux_stat64_t *st) {
   if (!node || !st)
     return -LINUX_EINVAL;
+  memset(st, 0, sizeof(*st));
   st->st_dev = 1;
+
   st->st_ino = (uint64_t)(uintptr_t)node;
   st->st_mode = linux_mode_from_vnode(node);
   st->st_nlink = 1;

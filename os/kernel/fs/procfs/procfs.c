@@ -203,11 +203,11 @@ static int procfs_readlink(struct vnode *n, char *buf, uint32_t bufsize) {
     if (!t || !t->exe_path[0])
       return -1;
     uint32_t len = (uint32_t)strlen(t->exe_path);
-    if (len >= bufsize)
-      len = bufsize - 1;
+    if (len > bufsize)
+      len = bufsize;
     memcpy(buf, t->exe_path, len);
-    buf[len] = 0;
     return (int)len;
+
 #else
     return -1;
 #endif

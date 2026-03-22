@@ -420,8 +420,9 @@ static void shell64_cmd_runmod(int argc, char **argv) {
     return;
   }
   serial_write_string("[K64] Executing module...\r\n");
-  exec64_from_module((void *)(uintptr_t)start, size);
+  exec64_from_module((void *)(uintptr_t)start, size, g_mb_modules[idx].name);
   serial_write_string("[K64] exec64_from_module returned\r\n");
+
 }
 
 static void runuser_task(void *arg) {
@@ -433,8 +434,9 @@ static void runuser_task(void *arg) {
   uint64_t start = g_mb_modules[idx].start;
   uint64_t size = g_mb_modules[idx].end - g_mb_modules[idx].start;
   serial_write_string("[K64] runuser launching module...\r\n");
-  exec64_from_module((void *)(uintptr_t)start, size);
+  exec64_from_module((void *)(uintptr_t)start, size, g_mb_modules[idx].name);
   serial_write_string("[K64] runuser returned to kernel\r\n");
+
 }
 
 static void shell64_cmd_runuser(int argc, char **argv) {
