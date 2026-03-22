@@ -410,24 +410,46 @@ static void shell64_cmd_linuxabi(int argc, char **argv) {
 
 static void shell64_cmd_runmod(int argc, char **argv) {
   if (argc < 2) {
-    serial_write_string("Usage: runmod <index>\r\n");
+    serial_write_string("Usage: runmod <index|path>\r\n");
     return;
   }
-  int idx = atoi(argv[1]);
-  if (idx < 0 || idx >= g_mb_module_count) {
-    serial_write_string("Invalid module index\r\n");
-    return;
-  }
-  uint64_t start = g_mb_modules[idx].start;
-  uint64_t size = g_mb_modules[idx].end - g_mb_modules[idx].start;
-  if (start == 0 || size == 0) {
-    serial_write_string("Module empty\r\n");
-    return;
-  }
-  serial_write_string("[K64] Executing module...\r\n");
-  exec64_from_module((void *)(uintptr_t)start, size, g_mb_modules[idx].name);
-  serial_write_string("[K64] exec64_from_module returned\r\n");
+  
+  const void *data = nullptr;
+  size_t size = 0;
+  const char *name = nullptr;
 
+  if (argv[1][0] >= '0' && argv[1][0] <= '9') {
+      int idx = atoi(argv[1]);
+      if (idx >= 0 && idx < g_mb_module_count) {
+          name = g_mb_modules[idx].name;
+      }
+  } else {
+      name = argv[1];
+  }
+
+  if (name) {
+      data = ramfs_read_file(name, &size);
+  }
+
+  if (!data || size == 0) {
+    serial_write_string("Module not found in RAMFS or empty\r\n");
+    return;
+  }
+
+  serial_printf("[K64] Executing module: %s at %p size %u\r\n", name, data, (uint32_t)size);
+  
+  serial_printf("[K64] module dump (%p):\r\n", data);
+  const uint8_t *ptr = (const uint8_t *)data;
+  for (int i = 0; i < 4; i++) {
+      serial_printf("  %p: ", (void*)(ptr + i*16));
+      for (int j = 0; j < 16; j++) {
+          serial_printf("%x ", (uint32_t)ptr[i*16 + j]);
+      }
+      serial_write_string("\r\n");
+  }
+
+  exec64_from_module((void *)(uintptr_t)data, (uint64_t)size, name);
+  serial_write_string("[K64] exec64_from_module returned\r\n");
 }
 
 static void runuser_task(void *arg) {
@@ -538,33 +560,14 @@ extern "C" void kernel_main64(unsigned long long magic,
     parse_cmdline(boot_cmdline);
   }
 
+  /* Calculate reserved end before paging starts allocating frames */
+  uint64_t reserved_end = (uint64_t)(uintptr_t)&kernel64_end;
+  if (g_mb_module_max_end > reserved_end)
+    reserved_end = g_mb_module_max_end;
+
+  pmm64_init((uint64_t)(uintptr_t)info, reserved_end);
   paging64_init();
-  gdt64_init((uint64_t)(uintptr_t)(g_kernel_stack0 +
-                                   sizeof(g_kernel_stack0)));
-  idt64_init();
-  syscall64_init();
-  pci_init();
-  gpu_bochs_init();
 
-  /* Disable Legacy PIC to prevent IRQs aliasing CPU Exceptions (e.g. IRQ0 -> Vector 8/Double Fault) */
-  outb(0x21, 0xFF);
-  outb(0xA1, 0xFF);
-
-  serial_init();
-  serial_write_string("[K64] serial online\r\n");
-  {
-    uint32_t lo = 0, hi = 0;
-    rdmsr(0xC0000080u, &lo, &hi);
-    serial_write_string("[K64] EFER=");
-    serial_printf("hi=0x%x lo=0x%x\r\n", hi, lo);
-    rdmsr(0xC0000081u, &lo, &hi);
-    serial_write_string("[K64] STAR=");
-    serial_printf("hi=0x%x lo=0x%x\r\n", hi, lo);
-    rdmsr(0xC0000082u, &lo, &hi);
-    serial_write_string("[K64] LSTAR=");
-    serial_printf("hi=0x%x lo=0x%x\r\n", hi, lo);
-  }
-  mb2_dump(info);
   heap_init(g_heap64, sizeof(g_heap64));
   static uint8_t g_ist1_stack[8192];
   tss64_set_ist1((uint64_t)(uintptr_t)(g_ist1_stack + sizeof(g_ist1_stack)));
@@ -572,12 +575,10 @@ extern "C" void kernel_main64(unsigned long long magic,
   serial_printf("%p", (void *)(uintptr_t)tss64_get_ist1());
   serial_write_string("\r\n");
 
-  time_init();
-  gpu_init();
-  pci_init();
-  gpu_bochs_init();
-  kms_init();
-  input_init();
+  serial_printf("[K64] Kernel end: %p\r\n", (void*)&kernel64_end);
+  serial_printf("[K64] Heap: %p - %p\r\n", g_heap64, g_heap64 + sizeof(g_heap64));
+  serial_printf("[K64] MB2 info: %p\r\n", (void*)(uintptr_t)info);
+
   vfs_mount("/", ramfs_root());
   vfs_mount("/dev", devfs_root());
   vfs_mount("/proc", procfs_root());
@@ -612,21 +613,28 @@ extern "C" void kernel_main64(unsigned long long magic,
   vga_put_u32((uint32_t)g_total_ram_mb);
   vga_puts(" MB\n");
 
-  /* TODO: virtualbox_check_or_panic() */
-  {
-    uint64_t reserved_end = (uint64_t)(uintptr_t)&kernel64_end;
-    if (g_mb_module_max_end > reserved_end)
-      reserved_end = g_mb_module_max_end;
-    pmm64_init((uint64_t)(uintptr_t)info, reserved_end);
-  }
-  /* TODO: gdt_init + tss_init for x86_64 */
-  /* TODO: idt_init + isr_install + irq_install */
-  /* TODO: pic_remap / ioapic routing */
-  /* TODO: timer_init + scheduler */
-  /* TODO: fs_init + ramfs_root + vfs_mount */
-  /* TODO: user_init + toolchain_init + services_init */
-  /* TODO: input drivers (keyboard/mouse) */
-  /* TODO: window manager + GUI */
+  gdt64_init((uint64_t)(uintptr_t)(g_kernel_stack0 +
+                                   sizeof(g_kernel_stack0)));
+  idt64_init();
+  syscall64_init();
+  pci_init();
+  gpu_bochs_init();
+  kms_init();
+  time_init();
+  input_init();
+
+  /* Disable Legacy PIC */
+  outb(0x21, 0xFF);
+  outb(0xA1, 0xFF);
+
+  serial_init();
+  serial_write_string("[K64] serial online\r\n");
+  mb2_dump(info);
+
+  serial_printf("[K64] Kernel end: %p\r\n", (void*)&kernel64_end);
+  serial_printf("[K64] Modules end: %p\r\n", (void*)g_mb_module_max_end);
+  serial_printf("[K64] PMM reserved end: %p\r\n", (void*)reserved_end);
+  serial_printf("[K64] Heap: %p - %p\r\n", g_heap64, g_heap64 + sizeof(g_heap64));
   k64_todo("Port core subsystems from kernel.cpp to x86_64.");
 
   vga_puts("\n[K64] Ready. Use serial console for input.\n");

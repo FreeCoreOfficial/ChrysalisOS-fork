@@ -505,16 +505,24 @@ static int elf64_apply_relocs(elf64_image_t *img, elf64_image_t **images,
 static int load_elf64_image(const uint8_t *file_data, size_t file_size,
                             uint64_t load_base, elf64_image_t *out_img,
                             char *interp_buf, size_t interp_buf_sz) {
-  if (!file_data || file_size < sizeof(elf64_ehdr_t))
+  if (!file_data || file_size < sizeof(elf64_ehdr_t)) {
+    serial_write_string("[K64] load_elf64_image: too small\r\n");
     return -1;
+  }
 
   const elf64_ehdr_t *eh = (const elf64_ehdr_t *)file_data;
-  if (!elf64_is_valid(file_data, (uint32_t)file_size))
+  if (!elf64_is_valid(file_data, (uint32_t)file_size)) {
+    serial_write_string("[K64] load_elf64_image: invalid magic/class\r\n");
     return -1;
-  if (eh->e_machine != EM_X86_64)
+  }
+  if (eh->e_machine != EM_X86_64) {
+    serial_write_string("[K64] load_elf64_image: wrong machine\r\n");
     return -1;
-  if (eh->e_type != ET_EXEC && eh->e_type != ET_DYN)
+  }
+  if (eh->e_type != ET_EXEC && eh->e_type != ET_DYN) {
+    serial_write_string("[K64] load_elf64_image: wrong type\r\n");
     return -1;
+  }
 
   const elf64_phdr_t *phdr =
       (const elf64_phdr_t *)(file_data + eh->e_phoff);
@@ -547,12 +555,16 @@ static int load_elf64_image(const uint8_t *file_data, size_t file_size,
     }
     if (phdr[i].p_type != PT_LOAD)
       continue;
-    if (phdr[i].p_offset + phdr[i].p_filesz > file_size)
+    if (phdr[i].p_offset + phdr[i].p_filesz > file_size) {
+      serial_write_string("[K64] load_elf64_image: segment offset out of bounds\r\n");
       return -1;
+    }
 
     uint64_t seg_vaddr = load_base + phdr[i].p_vaddr;
-    if (map_user_segment(seg_vaddr, phdr[i].p_memsz, phdr[i].p_flags) < 0)
+    if (map_user_segment(seg_vaddr, phdr[i].p_memsz, phdr[i].p_flags) < 0) {
+      serial_write_string("[K64] load_elf64_image: map_user_segment fail\r\n");
       return -1;
+    }
 
     if (phdr[i].p_filesz > 0) {
       memcpy((void *)(uintptr_t)seg_vaddr, file_data + phdr[i].p_offset,
@@ -583,8 +595,10 @@ static int load_elf64_image(const uint8_t *file_data, size_t file_size,
     out_img->tls_filesz = tls_filesz;
     out_img->tls_memsz = tls_memsz;
     out_img->tls_align = tls_align;
-    if (elf64_parse_dynamic(out_img, eh, phdr, eh->e_phnum) < 0)
+    if (elf64_parse_dynamic(out_img, eh, phdr, eh->e_phnum) < 0) {
+      serial_write_string("[K64] load_elf64_image: elf64_parse_dynamic fail\r\n");
       return -1;
+    }
   }
   return 0;
 }
@@ -625,15 +639,11 @@ static uint64_t build_user_stack(char *const argv[], uint64_t stack_top,
   if (argc > 0) aux_pairs++; /* AT_EXECFN */
 
   const uint64_t random_slots = 2; /* 16 bytes */
-  uint64_t slots = 1 + (uint64_t)(argc + 1) + (uint64_t)(envc + 1) +
-                   (uint64_t)(aux_pairs * 2) + random_slots;
-  
-  /* If slots is odd, add 1 for 16-byte alignment */
-  if (slots % 2 != 0) slots++;
+  const uint64_t slots = 1 + (uint64_t)(argc + 1) + (uint64_t)(envc + 1) +
+                         (uint64_t)(aux_pairs * 2) + random_slots;
 
-  /* Align sp then "allocate" space for slots */
+  /* Align so final RSP (after all pushes) is 16-byte aligned. */
   sp = (sp - slots * 8) & ~0xFULL;
-  uint64_t final_sp = sp;
   sp += slots * 8; /* Reset sp to the point where we begin pushing */
 
   auto push64 = [&](uint64_t v) {

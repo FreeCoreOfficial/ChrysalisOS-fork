@@ -1176,7 +1176,8 @@ $(ISO)/system/lib/libc.so: $(LIBC_PIC_OBJS) | dirs
 LINUX_TEST_SRC = user/tests/linux_hello.c
 HELLO_LIBC_SRC = user/hello_libc.c
 LINUX_TEST_M2_SRC = user/tests/linux_test_m2.c
-LINUX_TESTS = $(ISO)/system/tests/linux-hello64 $(ISO)/system/tests/linux-hello32 $(ISO)/system/tests/hello-libc $(ISO)/system/tests/linux-test-m2
+LINUX_TEST_PIPE_SRC = user/tests/linux_test_pipe.c
+LINUX_TESTS = $(ISO)/system/tests/linux-hello64 $(ISO)/system/tests/linux-hello32 $(ISO)/system/tests/hello-libc $(ISO)/system/tests/linux-test-m2 $(ISO)/system/tests/linux-test-pipe
 
 linux_tests: $(LINUX_TESTS)
 
@@ -1213,6 +1214,15 @@ $(BUILD)/tests/linux-test-m2: $(LINUX_TEST_M2_SRC) | dirs
 		$< -o $@
 
 $(ISO)/system/tests/linux-test-m2: $(BUILD)/tests/linux-test-m2 | dirs
+	@mkdir -p $(dir $@)
+	cp $< $@
+
+$(BUILD)/tests/linux-test-pipe: $(LINUX_TEST_PIPE_SRC) | dirs
+	@mkdir -p $(dir $@)
+	$(HOSTCC) $(HOSTCFLAGS) -Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2 \
+		$< -o $@
+
+$(ISO)/system/tests/linux-test-pipe: $(BUILD)/tests/linux-test-pipe | dirs
 	@mkdir -p $(dir $@)
 	cp $< $@
 $(BUILD)/surface.o: kernel/video/surface.c | dirs

@@ -7,6 +7,7 @@
 #include "../../linux_compat/linux_syscall_x86_64.h"
 #include "../../mem/kmalloc.h"
 #include "../../sched/task64.h"
+#include "../../string.h"
 #include "../../time/clock.h"
 #include "../i386/io.h"
 #include "../../fs/vfs/vfs.h"
@@ -30,6 +31,8 @@ static constexpr uint64_t k_sys_enosys = (uint64_t)-38;
 static constexpr int k_syscall_table_size = 128;
 static syscall64_fn g_syscall_table[k_syscall_table_size];
 static file_t *g_files[MAX_FILES_PER_PROCESS];
+static file_t g_file_pool[MAX_FILES_PER_PROCESS];
+static uint8_t g_file_used[MAX_FILES_PER_PROCESS];
 static int g_linux_abi_mode = 0;
 static syscall64_state_t *g_syscall_state = nullptr;
 
@@ -101,18 +104,6 @@ static uint64_t sys_open64(uint64_t path_ptr, uint64_t flags, uint64_t,
   serial_write_string(path);
   serial_write_string("'\r\n");
 
-  /* DIAGNOSTIC: Trace first 16 bytes of the file */
-  if (node->ops && node->ops->read) {
-      uint8_t hdr[16];
-      int hr = node->ops->read(node, 0, hdr, 16);
-      if (hr > 0) {
-          serial_write_string("[K64] file header: ");
-          for (int i = 0; i < hr; i++) {
-              serial_printf("%x ", (uint32_t)hdr[i]);
-          }
-          serial_write_string("\r\n");
-      }
-  }
 
   if (node->ops && node->ops->open) {
     if (node->ops->open(node) < 0)
@@ -120,14 +111,13 @@ static uint64_t sys_open64(uint64_t path_ptr, uint64_t flags, uint64_t,
   }
 
   for (int i = 3; i < MAX_FILES_PER_PROCESS; ++i) {
-
-    if (!g_files[i]) {
-      file_t *f = (file_t *)kmalloc(sizeof(file_t));
-      if (!f)
-        return k_sys_enosys;
+    if (!g_files[i] && !g_file_used[i]) {
+      file_t *f = &g_file_pool[i];
+      memset(f, 0, sizeof(*f));
       f->node = node;
       f->offset = 0;
       f->flags = (int)flags;
+      g_file_used[i] = 1;
       g_files[i] = f;
       return (uint64_t)i;
     }
@@ -144,7 +134,16 @@ static uint64_t sys_close64(uint64_t fd, uint64_t, uint64_t, uint64_t,
     return k_sys_enosys;
   if (f->node && f->node->ops && f->node->ops->close)
     f->node->ops->close(f->node);
-  kfree(f);
+  uintptr_t base = (uintptr_t)&g_file_pool[0];
+  uintptr_t end = (uintptr_t)&g_file_pool[MAX_FILES_PER_PROCESS];
+  uintptr_t p = (uintptr_t)f;
+  if (p >= base && p < end) {
+    size_t idx = (size_t)((p - base) / sizeof(file_t));
+    if (idx < MAX_FILES_PER_PROCESS)
+      g_file_used[idx] = 0;
+  } else {
+    kfree(f);
+  }
   g_files[fd] = nullptr;
   return 0;
 }

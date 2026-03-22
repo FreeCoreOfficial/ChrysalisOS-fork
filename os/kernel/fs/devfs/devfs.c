@@ -30,7 +30,6 @@ static dev_node_t dev_console;
 #include "../../input/input.h"
 #include "../../linux_compat/linux_abi.h"
 #ifdef __x86_64__
-#include "../../linux_compat/linux_syscall_x86_64.h"
 #define copy_to_user(d, s, n) (memcpy(d, s, n), 0)
 #else
 extern int copy_to_user(void *dst, const void *src, uint32_t size);
@@ -147,6 +146,7 @@ static int devfs_write(struct vnode *n, uint32_t off, const uint8_t *buf,
     return 0;
   dev_node_t *dn = (dev_node_t *)n;
   switch (dn->type) {
+  case DEV_CONSOLE:
   case DEV_TTY:
     for (uint32_t i = 0; i < size; i++) {
 #ifdef __x86_64__
@@ -195,7 +195,7 @@ static uint32_t devfs_poll(struct vnode *n, uint32_t events) {
     return 0;
   dev_node_t *dn = (dev_node_t *)n;
   uint32_t revents = 0;
-  if (dn->type == DEV_TTY) {
+  if (dn->type == DEV_TTY || dn->type == DEV_CONSOLE) {
     if ((events & 0x001) &&
 #ifdef __x86_64__
         serial_received()

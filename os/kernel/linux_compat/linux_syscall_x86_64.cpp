@@ -17,6 +17,7 @@
 #include "../hardware/msr.h"
 #include "../video/kms.h"
 #include "../fs/devfs/devfs.h"
+#include "../fs/pipe/pipe.h"
 
 
 
@@ -871,17 +872,17 @@ static int linux_syscall_dispatch_x86_64_impl(uint64_t num, uint64_t a1, uint64_
       return -LINUX_EFAULT;
     if (num == LINUX_NR_pipe2 && a2 != 0)
       return -LINUX_EINVAL;
-    vnode_t *rnode = NULL;
-    vnode_t *wnode = NULL;
-    if (pipe_create(&rnode, &wnode) < 0)
-      return -LINUX_ENOMEM;
-    int rfd = -1;
-    int wfd = -1;
-    for (int i = 0; i < MAX_FILES_PER_PROCESS; i++) {
+
+    pipe_t* p = (pipe_t*)kmalloc(sizeof(pipe_t));
+    memset(p, 0, sizeof(*p));
+    vnode_t* rnode = pipe_create_vnode(p, 0);
+    vnode_t* wnode = pipe_create_vnode(p, 1);
+    
+    int rfd = -1, wfd = -1;
+    for (int i = 3; i < MAX_FILES_PER_PROCESS; i++) {
       if (!syscall64_get_file(i)) {
         file_t *f = (file_t *)kmalloc(sizeof(file_t));
-        if (!f)
-          return -LINUX_ENOMEM;
+        if (!f) return -LINUX_ENOMEM;
         f->node = rnode;
         f->offset = 0;
         f->flags = 0;
@@ -890,11 +891,10 @@ static int linux_syscall_dispatch_x86_64_impl(uint64_t num, uint64_t a1, uint64_
         break;
       }
     }
-    for (int i = 0; i < MAX_FILES_PER_PROCESS; i++) {
+    for (int i = 3; i < MAX_FILES_PER_PROCESS; i++) {
       if (!syscall64_get_file(i)) {
         file_t *f = (file_t *)kmalloc(sizeof(file_t));
-        if (!f)
-          return -LINUX_ENOMEM;
+        if (!f) return -LINUX_ENOMEM;
         f->node = wnode;
         f->offset = 0;
         f->flags = 0;
@@ -905,8 +905,10 @@ static int linux_syscall_dispatch_x86_64_impl(uint64_t num, uint64_t a1, uint64_
     }
     if (rfd < 0 || wfd < 0)
       return -LINUX_ENOMEM;
-    fdp[0] = rfd;
-    fdp[1] = wfd;
+    
+    int32_t fds[2] = {rfd, wfd};
+    if (linux_copy_to_user(fdp, fds, sizeof(fds)) < 0)
+      return -LINUX_EFAULT;
     return 0;
   }
 
@@ -1351,6 +1353,16 @@ static int linux_syscall_dispatch_x86_64_impl(uint64_t num, uint64_t a1, uint64_
     }
     return -LINUX_EINVAL;
   }
+
+
+  case 302: /* prlimit64 */
+    return 0;
+
+  case 318: /* getrandom */
+    if (a2 > 0) {
+        memset((void*)(uintptr_t)a1, 0, (size_t)a2);
+    }
+    return (int)a2;
 
   default:
     serial_write_string("[K64] unknown linux syscall rax=");

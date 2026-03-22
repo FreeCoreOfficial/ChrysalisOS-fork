@@ -1,21 +1,23 @@
 #include "procfs.h"
 #include "../vfs/fs_ops.h"
+#include "../vfs/vnode.h"
 #include "../../mem/kmalloc.h"
 #include "../../string.h"
-#ifndef __x86_64__
-#include "../../time/timer.h"
-#endif
-#include "../../time/clock.h"
-#include "../../memory/pmm.h"
-#ifdef __x86_64__
-#include "../../sched/task64.h"
-#endif
 #include "../../drivers/serial.h"
+#include <stddef.h>
+#include <stdarg.h>
 
 #ifndef __x86_64__
+#include "../../time/timer.h"
 #include "../../include/stdio.h"
-#else
-#include <stdarg.h>
+#endif
+
+#include "../../memory/pmm.h"
+
+#ifdef __x86_64__
+#include "../../arch/x86_64/syscall64.h"
+#include "../../sched/task64.h"
+#include "../../mem/user64_vm.h"
 #endif
 
 #ifdef __x86_64__
@@ -71,7 +73,9 @@ static int procfs_snprintf(char *out, size_t cap, const char *fmt, ...) {
   va_end(ap);
   return (int)pos;
 }
-#define snprintf procfs_snprintf
+#else
+#include "../../include/stdio.h"
+#define procfs_snprintf snprintf
 #endif
 
 #ifdef __x86_64__
@@ -86,7 +90,9 @@ typedef enum {
   PROC_CMDLINE,
   PROC_SELF,
   PROC_SELF_EXE,
-  PROC_SELF_MAPS
+  PROC_SELF_MAPS,
+  PROC_SELF_FD,
+  PROC_SELF_STAT
 } proc_type_t;
 
 typedef struct proc_node {
@@ -105,11 +111,9 @@ static proc_node_t proc_cmdline;
 static proc_node_t proc_self;
 static proc_node_t proc_self_exe;
 static proc_node_t proc_self_maps;
+static proc_node_t proc_self_fd;
+static proc_node_t proc_self_stat;
 
-#ifdef __x86_64__
-#include "../../sched/task64.h"
-#include "../../mem/user64_vm.h"
-#endif
 
 static int procfs_format_maps(char *out, size_t cap) {
 #ifdef __x86_64__
@@ -117,12 +121,12 @@ static int procfs_format_maps(char *out, size_t cap) {
   if (!t) return 0;
   
   /* Mock maps output for now since iteration over vm_regions is not exposed */
-  return snprintf(out, cap, "00400000-00401000 r-xp 00000000 00:00 0 [exe]\n"
+  return procfs_snprintf(out, cap, "00400000-00401000 r-xp 00000000 00:00 0 [exe]\n"
                             "70000000-70040000 r-xp 00000000 00:00 0 [ld]\n"
                             "7ffff000-80000000 rw-p 00000000 00:00 0 [stack]\n");
 #else
   (void)cap;
-  return snprintf(out, 64, "32-bit maps not implemented\n");
+  return procfs_snprintf(out, 64, "32-bit maps not implemented\n");
 #endif
 }
 
@@ -149,7 +153,7 @@ static int procfs_format(proc_node_t *pn, char *out, size_t cap) {
 #endif
     uint32_t sec = ms / 1000;
     uint32_t frac = (ms % 1000) / 10;
-    return snprintf(out, cap, "%u.%02u\n", sec, frac);
+    return procfs_snprintf(out, cap, "%u.%02u\n", sec, frac);
   }
   case PROC_MEMINFO: {
     uint32_t total_kb = 0;
@@ -165,23 +169,34 @@ static int procfs_format(proc_node_t *pn, char *out, size_t cap) {
     total_kb = (total_frames * 4096) / 1024;
     free_kb = (free_frames * 4096) / 1024;
 #endif
-    return snprintf(out, cap, "MemTotal: %u kB\nMemFree: %u kB\n", total_kb,
+    return procfs_snprintf(out, cap, "MemTotal: %u kB\nMemFree: %u kB\n", total_kb,
                     free_kb);
   }
   case PROC_VERSION:
 #ifdef CHRYVER
-    return snprintf(out, cap, "ChrysalisOS %s\n", CHRYVER);
+    return procfs_snprintf(out, cap, "ChrysalisOS %s\n", CHRYVER);
 #else
-    return snprintf(out, cap, "ChrysalisOS unknown\n");
+    return procfs_snprintf(out, cap, "ChrysalisOS unknown\n");
 #endif
   case PROC_CPUINFO:
-    return snprintf(out, cap,
+    return procfs_snprintf(out, cap,
                     "processor\t: 0\nvendor_id\t: chrysalis\nmodel name\t: "
                     "ChrysalisOS CPU\n");
   case PROC_CMDLINE:
-    return snprintf(out, cap, "\n");
+    return procfs_snprintf(out, cap, "\n");
   case PROC_SELF_MAPS:
     return procfs_format_maps(out, cap);
+  case PROC_SELF_STAT: {
+#ifdef __x86_64__
+    struct task64 *ct = task64_current();
+    if (!ct) return 0;
+    return procfs_snprintf(out, cap, "%u (%s) R 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n",
+                       (unsigned int)ct->id, ct->name);
+#else
+    return 0;
+#endif
+  }
+  break;
   default:
     return 0;
   }
@@ -283,10 +298,44 @@ static int procfs_readdir_self(struct vnode *dir, uint32_t index,
   case 1:
     *out = &proc_self_maps.vnode;
     return 1;
+  case 2:
+    *out = &proc_self_fd.vnode;
+    return 1;
+  case 3:
+    *out = &proc_self_stat.vnode;
+    return 1;
   default:
     *out = NULL;
     return 0;
   }
+}
+
+static int procfs_readdir_fd(struct vnode *dir, uint32_t index,
+                             struct vnode **out) {
+  if (!dir || !out) return 0;
+  if (dir != &proc_self_fd.vnode) return 0;
+  
+  uint32_t count = 0;
+#ifdef __x86_64__
+  for (int i = 0; i < 16; i++) { // MAX_FILES_PER_PROCESS
+    if (syscall64_get_file(i)) {
+      if (count == index) {
+        proc_node_t *fn = (proc_node_t *)kmalloc(sizeof(proc_node_t));
+        memset(fn, 0, sizeof(*fn));
+        char *name = (char *)kmalloc(8);
+        procfs_snprintf(name, 8, "%u", (unsigned int)i);
+        fn->name = name;
+        fn->vnode.name = name;
+        fn->vnode.type = VNODE_LNK;
+        fn->vnode.ops = &procfs_ops;
+        *out = (vnode_t *)fn;
+        return 1;
+      }
+      count++;
+    }
+  }
+#endif
+  return 0;
 }
 
 static void procfs_init_node(proc_node_t *node, const char *name,
@@ -339,6 +388,13 @@ vnode_t *procfs_root(void) {
                    &proc_self.vnode);
   procfs_init_node(&proc_self_maps, "maps", VNODE_FILE, PROC_SELF_MAPS,
                    &proc_self.vnode);
+  procfs_init_node(&proc_self_fd, "fd", VNODE_DIR, PROC_SELF_FD, &proc_self.vnode);
+  static fs_ops_t proc_fd_ops;
+  memcpy(&proc_fd_ops, &procfs_ops, sizeof(fs_ops_t));
+  proc_fd_ops.readdir = procfs_readdir_fd;
+  proc_self_fd.vnode.ops = &proc_fd_ops;
+
+  procfs_init_node(&proc_self_stat, "stat", VNODE_FILE, PROC_SELF_STAT, &proc_self.vnode);
 
 
   return &proc_root.vnode;
