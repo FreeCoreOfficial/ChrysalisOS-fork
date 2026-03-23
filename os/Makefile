@@ -1178,7 +1178,9 @@ HELLO_LIBC_SRC = user/hello_libc.c
 LINUX_TEST_M2_SRC = user/tests/linux_test_m2.c
 LINUX_TEST_PIPE_SRC = user/tests/linux_test_pipe.c
 LINUX_TEST_M3_SRC = user/tests/linux_test_m3.c
-LINUX_TESTS = $(ISO)/system/tests/linux-hello64 $(ISO)/system/tests/linux-hello32 $(ISO)/system/tests/hello-libc $(ISO)/system/tests/linux-test-m2 $(ISO)/system/tests/linux-test-pipe $(ISO)/system/tests/linux-test-m3
+LINUX_TEST_M4_SRC = user/tests/linux_test_m4.c
+LINUX_TEST_M5_SRC = user/tests/linux_test_m5.c
+LINUX_TESTS = $(ISO)/system/tests/linux-hello64 $(ISO)/system/tests/linux-hello32 $(ISO)/system/tests/hello-libc $(ISO)/system/tests/linux-test-m2 $(ISO)/system/tests/linux-test-pipe $(ISO)/system/tests/linux-test-m3 $(ISO)/system/tests/linux-test-m4 $(ISO)/system/tests/linux-test-m5
 
 linux_tests: $(LINUX_TESTS)
 
@@ -1233,6 +1235,24 @@ $(BUILD)/tests/linux-test-m3: $(LINUX_TEST_M3_SRC) | dirs
 		$< -o $@
 
 $(ISO)/system/tests/linux-test-m3: $(BUILD)/tests/linux-test-m3 | dirs
+	@mkdir -p $(dir $@)
+	cp $< $@
+
+$(BUILD)/tests/linux-test-m4: $(LINUX_TEST_M4_SRC) | dirs
+	@mkdir -p $(dir $@)
+	$(HOSTCC) $(HOSTCFLAGS) -Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2 \
+		$< -o $@
+
+$(ISO)/system/tests/linux-test-m4: $(BUILD)/tests/linux-test-m4 | dirs
+	@mkdir -p $(dir $@)
+	cp $< $@
+
+$(BUILD)/tests/linux-test-m5: $(LINUX_TEST_M5_SRC) | dirs
+	@mkdir -p $(dir $@)
+	$(HOSTCC) $(HOSTCFLAGS) -Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2 \
+		$< -o $@
+
+$(ISO)/system/tests/linux-test-m5: $(BUILD)/tests/linux-test-m5 | dirs
 	@mkdir -p $(dir $@)
 	cp $< $@
 

@@ -14,16 +14,27 @@ user64_enter:
     mov ecx, 0xC0000100
     wrmsr
 
-    ; --- Write GS.Base (MSR 0xC0000101) ---
-    mov rax, [rdi + 32]
+    ; --- Sync GS Bases ---
+    ; At this point, MSR_GS_BASE (0xC0000101) contains &task->gs (from scheduler).
+    ; We need to move it to MSR_KERNEL_GS_BASE (0xC0000102) and put user GS
+    ; into MSR_GS_BASE.
+
+    ; 1. Read current kernel GS pointer from active GS Base
+    mov ecx, 0xC0000101
+    rdmsr
+    ; 2. Write it into the hidden KERNEL_GS_BASE
+    mov ecx, 0xC0000102
+    wrmsr
+    ; 3. Overwrite active GS Base with user pointer
+    mov rax, [rdi + 32]   ; user gs_base from context
     mov rdx, rax
     shr rdx, 32
     mov ecx, 0xC0000101
     wrmsr
 
     ; --- Load user data segments ---
-    ; (SYSRET sets CS and SS, but DS/ES should be set to safety)
-    mov ax, 0x1B        ; user data selector (ring 3)
+    ; (SYSRET sets CS and SS, but DS/ES should be set for user mode)
+    mov ax, 0x1B        ; user data selector (ring 3, RPL 3)
     mov ds, ax
     mov es, ax
 
@@ -34,9 +45,6 @@ user64_enter:
     mov rcx, [rdi + 0]   ; RCX = User RIP
     mov r11, [rdi + 16]  ; R11 = User RFLAGS
     mov rsp, [rdi + 8]   ; RSP = User Stack Pointer
-
-    ; Swap GS to put the user's GS base into effect
-    swapgs
 
     ; Return to user mode via SYSRET 
     ; It reads CS from STAR[63:48]+16 (0x23)

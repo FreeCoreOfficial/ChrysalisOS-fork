@@ -1317,11 +1317,12 @@ extern "C" int execve_linux_i386(const char *filename, char *const argv[]) {
 }
 
 extern "C" int execve_linux_x86_64_full(const char *filename,
-                                        char *const argv[]);
+                                        char *const argv[],
+                                        char *const envp[]);
 
 extern "C" int execve_linux_x86_64(const char *filename, char *const argv[]) {
   if (cpu_is_long_mode()) {
-    return execve_linux_x86_64_full(filename, argv);
+    return execve_linux_x86_64_full(filename, argv, nullptr);
   }
   return execve64_impl(filename, argv, TASK_ABI_LINUX_X86_64);
 }

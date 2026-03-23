@@ -21,6 +21,7 @@ typedef struct task64 {
     uint64_t kernel_stack;
     uint64_t user_stack;
     uint64_t fs_base;
+    uint64_t user_gs_base;
   } gs;
   uint64_t user_brk_start;
   uint64_t user_brk_end;
@@ -56,6 +57,10 @@ typedef struct task64 {
   uint32_t uid, gid;
   uint32_t euid, egid;
   uint64_t sleep_until;
+
+  uint64_t parent_id;
+  int exit_code;
+  uint64_t cr3;
 } task64_t;
 
 
@@ -65,6 +70,8 @@ void task64_start(task64_t *first);
 void task64_yield(void);
 task64_t *task64_current(void);
 void task64_set_user_stack(uint64_t user_rsp);
+task64_t *task64_find_by_id(uint64_t id);
+task64_t *task64_get_list(void);
 
 #ifdef __cplusplus
 }

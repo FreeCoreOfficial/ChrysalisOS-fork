@@ -19,6 +19,18 @@
 #include "../fs/devfs/devfs.h"
 #include "../fs/pipe/pipe.h"
 
+#define MSR_FS_BASE 0xC0000100u
+#define MSR_GS_BASE 0xC0000101u
+#define MSR_KERNEL_GS_BASE 0xC0000102u
+extern "C" void syscall64_exit(void);
+#include "../arch/x86_64/paging64.h"
+#include "../proc/exec64.h"
+#include <stddef.h>
+
+#ifndef OFFSETOF
+#define OFFSETOF(type, member) ((size_t)__builtin_offsetof(type, member))
+#endif
+
 
 
 
@@ -31,7 +43,13 @@
 #define LINUX_ENOENT 2
 #define LINUX_EBADF 9
 #define LINUX_ESRCH 3
+#define LINUX_ECHILD 10
 #define LINUX_ETIMEDOUT 110
+#define LINUX_EADDRINUSE 98
+#define LINUX_ECONNREFUSED 111
+#define LINUX_EAFNOSUPPORT 97
+#define LINUX_EPROTONOSUPPORT 93
+#define LINUX_EPIPE 32
 #define LINUX_AT_FDCWD -100
 
 
@@ -43,6 +61,7 @@
 #define LINUX_NR_write 1
 #define LINUX_NR_open 2
 #define LINUX_NR_close 3
+#define LINUX_NR_execve 59
 #define LINUX_NR_stat 4
 #define LINUX_NR_fstat 5
 #define LINUX_NR_lstat 6
@@ -56,6 +75,21 @@
 #define LINUX_NR_pipe 22
 #define LINUX_NR_sched_yield 24
 #define LINUX_NR_nanosleep 35
+#define LINUX_NR_socket 41
+#define LINUX_NR_connect 42
+#define LINUX_NR_accept 43
+#define LINUX_NR_sendto 44
+#define LINUX_NR_recvfrom 45
+#define LINUX_NR_sendmsg 46
+#define LINUX_NR_recvmsg 47
+#define LINUX_NR_shutdown 48
+#define LINUX_NR_bind 49
+#define LINUX_NR_listen 50
+#define LINUX_NR_getsockname 51
+#define LINUX_NR_getpeername 52
+#define LINUX_NR_socketpair 53
+#define LINUX_NR_setsockopt 54
+#define LINUX_NR_getsockopt 55
 #define LINUX_NR_getpid 39
 #define LINUX_NR_uname 63
 #define LINUX_NR_gettimeofday 96
@@ -69,6 +103,7 @@
 #define LINUX_NR_getppid 110
 #define LINUX_NR_time 201
 #define LINUX_NR_clock_gettime 228
+#define LINUX_NR_clock_nanosleep 230
 #define LINUX_NR_exit 60
 #define LINUX_NR_exit_group 231
 #define LINUX_NR_openat 257
@@ -78,8 +113,10 @@
 #define LINUX_NR_pread64 17
 #define LINUX_NR_set_robust_list 273
 #define LINUX_NR_rseq 334
-
-
+#define LINUX_NR_fork 57
+#define LINUX_NR_vfork 58
+#define LINUX_NR_wait4 61
+#define LINUX_NR_waitid 247
 
 #define LINUX_NR_futex 202
 #define LINUX_NR_rt_sigaction 13
@@ -99,6 +136,8 @@
 #define LINUX_NR_gettid 186
 #define LINUX_NR_set_tid_address 218
 #define LINUX_NR_readlink 89
+#define LINUX_NR_dup 32
+#define LINUX_NR_dup2 33
 
 
 #define FUTEX_WAIT 0
@@ -147,6 +186,12 @@
 #define POLLIN 0x001
 #define POLLOUT 0x004
 
+#define LINUX_AF_UNIX 1
+#define LINUX_SOCK_STREAM 1
+#define LINUX_SOCK_TYPE_MASK 0xF
+#define LINUX_SOCK_NONBLOCK 0x800
+#define LINUX_SOCK_CLOEXEC 0x80000
+
 #define PROT_READ 0x1
 #define PROT_WRITE 0x2
 #define PROT_EXEC 0x4
@@ -192,6 +237,35 @@ typedef struct linux_pollfd {
   int16_t events;
   int16_t revents;
 } linux_pollfd_t;
+
+typedef struct linux_sockaddr_un {
+  uint16_t sun_family;
+  char sun_path[108];
+} linux_sockaddr_un_t;
+
+typedef struct linux_socket64 {
+  int in_use;
+  int domain;
+  int type;
+  int protocol;
+  int state; /* 0=init,1=bound,2=listen,3=connected,4=closed */
+  int peer;
+  int backlog;
+  int accept_q[8];
+  int aq_head;
+  int aq_tail;
+  int aq_len;
+  char path[108];
+  uint8_t buf[4096];
+  uint32_t rpos;
+  uint32_t wpos;
+  uint32_t used;
+  vnode_t vnode;
+} linux_socket64_t;
+
+static linux_socket64_t g_sock64[64];
+static fs_ops_t g_sock_ops;
+static int g_sock_ops_init = 0;
 
 typedef struct linux_stat64 {
   uint64_t st_dev;
@@ -239,6 +313,163 @@ static int linux_copy_to_user(void *dst, const void *src, uint32_t len) {
     return -LINUX_EFAULT;
   memcpy(dst, src, len);
   return 0;
+}
+
+static linux_socket64_t *sock64_from_vnode(vnode_t *n) {
+  if (!n)
+    return nullptr;
+  return (linux_socket64_t *)n->internal;
+}
+
+static uint32_t sock64_poll(struct vnode *n, uint32_t events) {
+  linux_socket64_t *s = sock64_from_vnode(n);
+  if (!s || s->state == 4)
+    return 0u;
+  uint32_t re = 0;
+  if ((events & POLLIN) && s->used > 0)
+    re |= POLLIN;
+  if ((events & POLLOUT) && s->peer >= 0)
+    re |= POLLOUT;
+  return re;
+}
+
+static int sock64_read(struct vnode *n, uint32_t off, uint8_t *buf,
+                       uint32_t size) {
+  (void)off;
+  if (!n || !buf || size == 0)
+    return 0;
+  linux_socket64_t *s = sock64_from_vnode(n);
+  if (!s || s->state == 4)
+    return 0;
+  while (s->used == 0 && s->state != 4) {
+    task64_yield();
+  }
+  if (s->used == 0)
+    return 0;
+  uint32_t to_read = size < s->used ? size : s->used;
+  for (uint32_t i = 0; i < to_read; i++) {
+    buf[i] = s->buf[s->rpos];
+    s->rpos = (s->rpos + 1) % (uint32_t)sizeof(s->buf);
+  }
+  s->used -= to_read;
+  return (int)to_read;
+}
+
+static int sock64_write(struct vnode *n, uint32_t off, const uint8_t *buf,
+                        uint32_t size) {
+  (void)off;
+  if (!n || !buf || size == 0)
+    return 0;
+  linux_socket64_t *s = sock64_from_vnode(n);
+  if (!s || s->state == 4 || s->peer < 0)
+    return -LINUX_EPIPE;
+  linux_socket64_t *peer = &g_sock64[s->peer];
+  if (!peer->in_use || peer->state == 4)
+    return -LINUX_EPIPE;
+  uint32_t space = (uint32_t)sizeof(peer->buf) - peer->used;
+  uint32_t to_write = size < space ? size : space;
+  for (uint32_t i = 0; i < to_write; i++) {
+    peer->buf[peer->wpos] = buf[i];
+    peer->wpos = (peer->wpos + 1) % (uint32_t)sizeof(peer->buf);
+  }
+  peer->used += to_write;
+  return (int)to_write;
+}
+
+static int sock64_close(struct vnode *n) {
+  linux_socket64_t *s = sock64_from_vnode(n);
+  if (!s)
+    return 0;
+  s->state = 4;
+  if (s->peer >= 0 &&
+      s->peer < (int)(sizeof(g_sock64) / sizeof(g_sock64[0]))) {
+    linux_socket64_t *peer = &g_sock64[s->peer];
+    peer->peer = -1;
+  }
+  return 0;
+}
+
+static void sock64_init_ops(void) {
+  if (g_sock_ops_init)
+    return;
+  memset(&g_sock_ops, 0, sizeof(g_sock_ops));
+  g_sock_ops.read = sock64_read;
+  g_sock_ops.write = sock64_write;
+  g_sock_ops.close = sock64_close;
+  g_sock_ops.poll = sock64_poll;
+  g_sock_ops_init = 1;
+}
+
+static int sock64_alloc(void) {
+  for (int i = 0; i < (int)(sizeof(g_sock64) / sizeof(g_sock64[0])); i++) {
+    if (!g_sock64[i].in_use) {
+      memset(&g_sock64[i], 0, sizeof(g_sock64[i]));
+      g_sock64[i].in_use = 1;
+      g_sock64[i].peer = -1;
+      g_sock64[i].state = 0;
+      g_sock64[i].vnode.ops = &g_sock_ops;
+      g_sock64[i].vnode.type = VNODE_DEV;
+      g_sock64[i].vnode.internal = &g_sock64[i];
+      return i;
+    }
+  }
+  return -1;
+}
+
+static linux_socket64_t *sock64_get_by_path(const char *path) {
+  if (!path || !*path)
+    return nullptr;
+  for (int i = 0; i < (int)(sizeof(g_sock64) / sizeof(g_sock64[0])); i++) {
+    if (!g_sock64[i].in_use)
+      continue;
+    if (g_sock64[i].state != 2)
+      continue;
+    if (strcmp(g_sock64[i].path, path) == 0)
+      return &g_sock64[i];
+  }
+  return nullptr;
+}
+
+static int sock64_enqueue(linux_socket64_t *listener, int idx) {
+  if (!listener || listener->state != 2)
+    return -1;
+  if (listener->aq_len >=
+      (int)(sizeof(listener->accept_q) / sizeof(listener->accept_q[0])))
+    return -1;
+  listener->accept_q[listener->aq_tail] = idx;
+  listener->aq_tail =
+      (listener->aq_tail + 1) %
+      (int)(sizeof(listener->accept_q) / sizeof(listener->accept_q[0]));
+  listener->aq_len++;
+  return 0;
+}
+
+static int sock64_dequeue(linux_socket64_t *listener) {
+  if (!listener || listener->aq_len == 0)
+    return -1;
+  int idx = listener->accept_q[listener->aq_head];
+  listener->aq_head =
+      (listener->aq_head + 1) %
+      (int)(sizeof(listener->accept_q) / sizeof(listener->accept_q[0]));
+  listener->aq_len--;
+  return idx;
+}
+
+static int linux_fd_alloc(vnode_t *node, int flags) {
+  for (int i = 3; i < MAX_FILES_PER_PROCESS; i++) {
+    if (!syscall64_get_file(i)) {
+      file_t *f = (file_t *)kmalloc(sizeof(file_t));
+      if (!f)
+        return -LINUX_ENOMEM;
+      memset(f, 0, sizeof(*f));
+      f->node = node;
+      f->offset = 0;
+      f->flags = flags;
+      syscall64_set_file(i, f);
+      return i;
+    }
+  }
+  return -LINUX_ENOMEM;
 }
 
 static int linux_mmap_load_file(uint64_t addr, uint64_t len, int fd,
@@ -314,7 +545,7 @@ static inline uint64_t futex64_make_key(task64_t *t, uint64_t uaddr) {
   return (tid << 32) ^ uaddr;
 }
 
-static int futex64_wait_impl(uint64_t uaddr, uint32_t expected,
+static int futex64_wait_impl(syscall64_state_t *state, uint64_t uaddr, uint32_t expected,
                              uint64_t timeout_ms) {
   uint32_t *ptr = (uint32_t *)(uintptr_t)uaddr;
   if (!ptr)
@@ -339,7 +570,7 @@ static int futex64_wait_impl(uint64_t uaddr, uint32_t expected,
       futex64_free_waiter(w);
       return -LINUX_ETIMEDOUT;
     }
-    syscall64_dispatch_native(SYS_SLEEP, 1, 0, 0, 0, 0, 0);
+    syscall64_dispatch_native(state, SYS_SLEEP, 1, 0, 0, 0, 0, 0);
   }
   futex64_free_waiter(w);
   return 0;
@@ -546,7 +777,8 @@ static void linux_fill_utsname(struct linux_utsname *u) {
   u->domainname[sizeof(u->domainname) - 1] = 0;
 }
 
-static int linux_sys_uname(uint64_t a1) {
+static int linux_sys_uname(syscall64_state_t *state, uint64_t a1) {
+  (void)state;
   struct linux_utsname u;
   linux_fill_utsname(&u);
   return linux_copy_to_user((void *)(uintptr_t)a1, &u, sizeof(u));
@@ -582,7 +814,8 @@ static uint64_t linux_epoch_from_datetime(const struct datetime *t) {
   return sec;
 }
 
-static int linux_sys_gettimeofday(uint64_t a1) {
+static int linux_sys_gettimeofday(syscall64_state_t *state, uint64_t a1) {
+  (void)state;
   if (a1 == 0)
     return 0;
   struct datetime t;
@@ -593,7 +826,8 @@ static int linux_sys_gettimeofday(uint64_t a1) {
   return linux_copy_to_user((void *)(uintptr_t)a1, &tv, sizeof(tv));
 }
 
-static int linux_sys_time(uint64_t a1) {
+static int linux_sys_time(syscall64_state_t *state, uint64_t a1) {
+  (void)state;
   struct datetime t;
   time_get_utc(&t);
   uint64_t now = linux_epoch_from_datetime(&t);
@@ -642,7 +876,8 @@ static int linux_fill_stat64(vnode_t *node, linux_stat64_t *st) {
   return 0;
 }
 
-static int linux_sys_stat64(const char *path, linux_stat64_t *out) {
+static int linux_sys_stat64(syscall64_state_t *state, const char *path, linux_stat64_t *out) {
+  (void)state;
   if (!path || !out)
     return -LINUX_EFAULT;
   vnode_t *node = vfs_resolve(path);
@@ -654,7 +889,8 @@ static int linux_sys_stat64(const char *path, linux_stat64_t *out) {
 }
 
 
-static int linux_sys_readlink(const char *path, char *buf, uint32_t bufsize) {
+static int linux_sys_readlink(syscall64_state_t *state, const char *path, char *buf, uint32_t bufsize) {
+  (void)state;
   if (!path || !buf || bufsize == 0)
     return -LINUX_EFAULT;
   vnode_t *node = vfs_resolve(path);
@@ -668,7 +904,8 @@ static int linux_sys_readlink(const char *path, char *buf, uint32_t bufsize) {
 }
 
 
-static int linux_sys_fstat64(int fd, linux_stat64_t *out) {
+static int linux_sys_fstat64(syscall64_state_t *state, int fd, linux_stat64_t *out) {
+  (void)state;
   if (!out)
     return -LINUX_EFAULT;
   file_t *f = syscall64_get_file(fd);
@@ -679,7 +916,8 @@ static int linux_sys_fstat64(int fd, linux_stat64_t *out) {
   return linux_copy_to_user(out, &st, sizeof(st));
 }
 
-static int linux_sys_clock_gettime(uint64_t clk_id, uint64_t out_ptr) {
+static int linux_sys_clock_gettime(syscall64_state_t *state, uint64_t clk_id, uint64_t out_ptr) {
+  (void)state;
   if (!out_ptr)
     return -LINUX_EFAULT;
   struct linux_timespec64 ts;
@@ -696,7 +934,8 @@ static int linux_sys_clock_gettime(uint64_t clk_id, uint64_t out_ptr) {
   return linux_copy_to_user((void *)(uintptr_t)out_ptr, &ts, sizeof(ts));
 }
 
-static int linux_sys_sysinfo(uint64_t a1) {
+static int linux_sys_sysinfo(syscall64_state_t *state, uint64_t a1) {
+  (void)state;
   if (!a1)
     return -LINUX_EFAULT;
   struct linux_sysinfo info;
@@ -706,7 +945,7 @@ static int linux_sys_sysinfo(uint64_t a1) {
   return linux_copy_to_user((void *)(uintptr_t)a1, &info, sizeof(info));
 }
 
-static int linux_sys_nanosleep(uint64_t a1) {
+static int linux_sys_nanosleep(syscall64_state_t *state, uint64_t a1) {
   if (!a1)
     return -LINUX_EFAULT;
   struct linux_timespec64 req;
@@ -715,11 +954,212 @@ static int linux_sys_nanosleep(uint64_t a1) {
     return -LINUX_EINVAL;
   uint64_t ms = (uint64_t)req.tv_sec * 1000ULL +
                 (uint64_t)req.tv_nsec / 1000000ULL;
-  syscall64_dispatch_native(SYS_SLEEP, ms, 0, 0, 0, 0, 0);
+  syscall64_dispatch_native(state, SYS_SLEEP, ms, 0, 0, 0, 0, 0);
   return 0;
 }
 
-static int linux_sys_arch_prctl(uint64_t code, uint64_t addr) {
+static int linux_sys_clock_nanosleep(syscall64_state_t *state, uint64_t clk_id,
+                                     uint64_t flags, uint64_t req_ptr,
+                                     uint64_t) {
+  (void)clk_id;
+  (void)flags;
+  return linux_sys_nanosleep(state, req_ptr);
+}
+
+static int linux_sys_socket(uint64_t domain, uint64_t type, uint64_t protocol) {
+  sock64_init_ops();
+  int dom = (int)domain;
+  int stype = (int)type & LINUX_SOCK_TYPE_MASK;
+  if (dom != LINUX_AF_UNIX)
+    return -LINUX_EAFNOSUPPORT;
+  if (stype != LINUX_SOCK_STREAM)
+    return -LINUX_EPROTONOSUPPORT;
+  int idx = sock64_alloc();
+  if (idx < 0)
+    return -LINUX_ENOMEM;
+  linux_socket64_t *s = &g_sock64[idx];
+  s->domain = dom;
+  s->type = stype;
+  s->protocol = (int)protocol;
+  return linux_fd_alloc(&s->vnode, (int)type);
+}
+
+static int linux_sockaddr_un_path(uint64_t addr_ptr, uint64_t addrlen,
+                                  char *out_path, size_t out_sz) {
+  if (!addr_ptr || !out_path || out_sz == 0)
+    return -LINUX_EFAULT;
+  if (addrlen <= OFFSETOF(linux_sockaddr_un_t, sun_path))
+    return -LINUX_EINVAL;
+
+  linux_sockaddr_un_t addr;
+  memset(&addr, 0, sizeof(addr));
+  size_t copy_len = addrlen < sizeof(addr) ? (size_t)addrlen : sizeof(addr);
+  memcpy(&addr, (const void *)(uintptr_t)addr_ptr, copy_len);
+  if (addr.sun_family != LINUX_AF_UNIX)
+    return -LINUX_EINVAL;
+
+  size_t path_len = addrlen - OFFSETOF(linux_sockaddr_un_t, sun_path);
+  if (path_len > sizeof(addr.sun_path))
+    path_len = sizeof(addr.sun_path);
+
+  memset(out_path, 0, out_sz);
+  if (path_len == 0)
+    return -LINUX_EINVAL;
+
+  /* Abstract namespace: leading NUL. Convert to "@name" so strcmp works. */
+  if (addr.sun_path[0] == '\0') {
+    if (path_len <= 1)
+      return -LINUX_EINVAL;
+    size_t to_copy = path_len - 1;
+    if (to_copy > out_sz - 2)
+      to_copy = out_sz - 2;
+    out_path[0] = '@';
+    memcpy(out_path + 1, addr.sun_path + 1, to_copy);
+    out_path[1 + to_copy] = 0;
+    return 0;
+  }
+
+  size_t to_copy = path_len;
+  if (to_copy > out_sz - 1)
+    to_copy = out_sz - 1;
+  memcpy(out_path, addr.sun_path, to_copy);
+  out_path[to_copy] = 0;
+  return 0;
+}
+
+static int linux_sys_bind(uint64_t fd, uint64_t addr_ptr, uint64_t addrlen) {
+  file_t *f = syscall64_get_file((int)fd);
+  if (!f || !f->node || !f->node->internal)
+    return -LINUX_EBADF;
+  linux_socket64_t *s = sock64_from_vnode(f->node);
+  if (!s)
+    return -LINUX_EBADF;
+  char path[128];
+  int pr = linux_sockaddr_un_path(addr_ptr, addrlen, path, sizeof(path));
+  if (pr < 0)
+    return pr;
+  if (sock64_get_by_path(path))
+    return -LINUX_EADDRINUSE;
+  strncpy(s->path, path, sizeof(s->path) - 1);
+  s->path[sizeof(s->path) - 1] = 0;
+  s->state = 1;
+  return 0;
+}
+
+static int linux_sys_listen(uint64_t fd, uint64_t backlog) {
+  file_t *f = syscall64_get_file((int)fd);
+  if (!f || !f->node || !f->node->internal)
+    return -LINUX_EBADF;
+  linux_socket64_t *s = sock64_from_vnode(f->node);
+  if (!s || s->state < 1)
+    return -LINUX_EINVAL;
+  s->state = 2;
+  s->backlog = (int)backlog;
+  return 0;
+}
+
+static int linux_sys_connect(uint64_t fd, uint64_t addr_ptr, uint64_t addrlen) {
+  file_t *f = syscall64_get_file((int)fd);
+  if (!f || !f->node || !f->node->internal)
+    return -LINUX_EBADF;
+  linux_socket64_t *s = sock64_from_vnode(f->node);
+  if (!s)
+    return -LINUX_EBADF;
+  char path[128];
+  int pr = linux_sockaddr_un_path(addr_ptr, addrlen, path, sizeof(path));
+  if (pr < 0)
+    return pr;
+
+  linux_socket64_t *listener = sock64_get_by_path(path);
+  if (!listener)
+    return -LINUX_ECONNREFUSED;
+  if (listener->state != 2)
+    return -LINUX_ECONNREFUSED;
+  int srv_idx = sock64_alloc();
+  if (srv_idx < 0)
+    return -LINUX_ENOMEM;
+  linux_socket64_t *srv = &g_sock64[srv_idx];
+  srv->domain = s->domain;
+  srv->type = s->type;
+  srv->protocol = s->protocol;
+  srv->state = 3;
+  srv->peer = (int)(s - g_sock64);
+  strncpy(srv->path, listener->path, sizeof(srv->path) - 1);
+  srv->path[sizeof(srv->path) - 1] = 0;
+  s->state = 3;
+  s->peer = srv_idx;
+  if (sock64_enqueue(listener, srv_idx) < 0)
+    return -LINUX_ECONNREFUSED;
+  return 0;
+}
+
+static int linux_sys_accept(uint64_t fd, uint64_t addr_ptr, uint64_t addrlen) {
+  (void)addr_ptr;
+  (void)addrlen;
+  file_t *f = syscall64_get_file((int)fd);
+  if (!f || !f->node || !f->node->internal)
+    return -LINUX_EBADF;
+  linux_socket64_t *listener = sock64_from_vnode(f->node);
+  if (!listener || listener->state != 2)
+    return -LINUX_EINVAL;
+  int idx = sock64_dequeue(listener);
+  while (idx < 0) {
+    task64_yield();
+    idx = sock64_dequeue(listener);
+  }
+  linux_socket64_t *s = &g_sock64[idx];
+  return linux_fd_alloc(&s->vnode, 0);
+}
+
+static int linux_sys_getsockname(uint64_t fd, uint64_t addr_ptr,
+                                 uint64_t addrlen_ptr) {
+  if (!addr_ptr || !addrlen_ptr)
+    return -LINUX_EFAULT;
+  file_t *f = syscall64_get_file((int)fd);
+  if (!f || !f->node || !f->node->internal)
+    return -LINUX_EBADF;
+  linux_socket64_t *s = sock64_from_vnode(f->node);
+  if (!s)
+    return -LINUX_EBADF;
+  linux_sockaddr_un_t addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sun_family = LINUX_AF_UNIX;
+  if (s->path[0] == '@') {
+    addr.sun_path[0] = '\0';
+    strncpy(addr.sun_path + 1, s->path + 1, sizeof(addr.sun_path) - 2);
+  } else {
+    strncpy(addr.sun_path, s->path, sizeof(addr.sun_path) - 1);
+  }
+  *(uint32_t *)(uintptr_t)addrlen_ptr = sizeof(addr);
+  return linux_copy_to_user((void *)(uintptr_t)addr_ptr, &addr, sizeof(addr));
+}
+
+static int linux_sys_getpeername(uint64_t fd, uint64_t addr_ptr,
+                                 uint64_t addrlen_ptr) {
+  if (!addr_ptr || !addrlen_ptr)
+    return -LINUX_EFAULT;
+  file_t *f = syscall64_get_file((int)fd);
+  if (!f || !f->node || !f->node->internal)
+    return -LINUX_EBADF;
+  linux_socket64_t *s = sock64_from_vnode(f->node);
+  if (!s || s->peer < 0)
+    return -LINUX_EBADF;
+  linux_socket64_t *peer = &g_sock64[s->peer];
+  linux_sockaddr_un_t addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sun_family = LINUX_AF_UNIX;
+  if (peer->path[0] == '@') {
+    addr.sun_path[0] = '\0';
+    strncpy(addr.sun_path + 1, peer->path + 1, sizeof(addr.sun_path) - 2);
+  } else {
+    strncpy(addr.sun_path, peer->path, sizeof(addr.sun_path) - 1);
+  }
+  *(uint32_t *)(uintptr_t)addrlen_ptr = sizeof(addr);
+  return linux_copy_to_user((void *)(uintptr_t)addr_ptr, &addr, sizeof(addr));
+}
+
+static int linux_sys_arch_prctl(syscall64_state_t *state, uint64_t code, uint64_t addr) {
+  (void)state;
   task64_t *t = task64_current();
   if (!t)
     return -LINUX_ESRCH;
@@ -729,7 +1169,8 @@ static int linux_sys_arch_prctl(uint64_t code, uint64_t addr) {
     wrmsr(MSR_FS_BASE, (uint32_t)addr, (uint32_t)(addr >> 32));
     return 0;
   case ARCH_SET_GS:
-    wrmsr(MSR_GS_BASE, (uint32_t)addr, (uint32_t)(addr >> 32));
+    t->gs.user_gs_base = addr;
+    wrmsr(MSR_KERNEL_GS_BASE, (uint32_t)addr, (uint32_t)(addr >> 32));
     return 0;
   case ARCH_GET_FS:
     if (!addr)
@@ -742,7 +1183,7 @@ static int linux_sys_arch_prctl(uint64_t code, uint64_t addr) {
 }
 
 
-static task64_t *task64_clone_current(uint64_t child_stack, uint64_t fs_base) {
+static task64_t *task64_clone_current(syscall64_state_t *state, uint64_t child_stack, uint64_t fs_base) {
   task64_t *parent = task64_current();
   if (!parent)
     return nullptr;
@@ -767,52 +1208,201 @@ static task64_t *task64_clone_current(uint64_t child_stack, uint64_t fs_base) {
     child->gs.user_stack = parent->gs.user_stack;
 
   child->gs.fs_base = fs_base;
+  child->gs.user_gs_base = parent->gs.user_gs_base;
+
+  if (!state)
+    return child;
 
   uint64_t parent_top = parent->gs.kernel_stack;
-  uint64_t parent_rsp = parent->rsp;
-  if (parent_rsp == 0 || parent_rsp > parent_top)
+  uint64_t parent_rsp = (uint64_t)(uintptr_t)state;
+  if (parent_rsp == 0 || parent_rsp >= parent_top)
     return child;
 
   uint64_t used = parent_top - parent_rsp;
   uint64_t child_top = child->gs.kernel_stack;
   uint64_t child_rsp = child_top - used;
+
   memcpy((void *)(uintptr_t)child_rsp, (const void *)(uintptr_t)parent_rsp,
          (size_t)used);
-  child->rsp = child_rsp;
 
-  syscall64_state_t *st =
-      (syscall64_state_t *)(uintptr_t)(child_rsp + 8);
+  /* Set child RAX to 0 (fork return value for child) */
+  syscall64_state_t *st = (syscall64_state_t *)(uintptr_t)child_rsp;
   st->rax = 0;
+
+  /* 
+   * Prepare stack for switch64:
+   * switch64 pops 6 registers (r15, r14, r13, r12, rbp, rbx) and then 'ret's.
+   * We want 'ret' to jump to 'syscall64_exit' in syscall64.S.
+   */
+  uint64_t *sp = (uint64_t *)(uintptr_t)child_rsp;
+  *(--sp) = (uint64_t)(uintptr_t)syscall64_exit;
+  *(--sp) = 0; /* r15 */
+  *(--sp) = 0; /* r14 */
+  *(--sp) = 0; /* r13 */
+  *(--sp) = 0; /* r12 */
+  *(--sp) = 0; /* rbp */
+  *(--sp) = 0; /* rrbx */
+  child->rsp = (uint64_t)(uintptr_t)sp;
+
   return child;
 }
 
-static int linux_syscall_dispatch_x86_64_impl(uint64_t num, uint64_t a1, uint64_t a2,
+static int linux_sys_fork(syscall64_state_t *state) {
+  task64_t *parent = task64_current();
+  if (!parent)
+    return -LINUX_ESRCH;
+
+  /* Clone current task — shares address space (vfork-like) */
+  uint64_t fs_base = parent->gs.fs_base;
+  task64_t *child = task64_clone_current(state, 0, fs_base);
+  if (!child)
+    return -LINUX_ENOMEM;
+
+  child->parent_id = parent->id;
+  child->exit_code = 0;
+  child->cr3 = paging64_clone_pml4();
+
+  serial_write_string("[LINUX] fork: parent=");
+  serial_printf("%u", parent->id);
+  serial_write_string(" child=");
+  serial_printf("%u", child->id);
+  serial_write_string("\r\n");
+
+  /* child's RAX is already set to 0 by task64_clone_current */
+  return (int)child->id;
+}
+
+#define WNOHANG 1
+
+static int linux_sys_wait4(syscall64_state_t *state, int64_t pid, uint64_t wstatus_ptr, int options) {
+  task64_t *parent = task64_current();
+  if (!parent)
+    return -LINUX_ESRCH;
+
+  serial_write_string("[LINUX] wait4: parent=");
+  serial_write_hex(parent->id);
+  serial_write_string(" pid=");
+  serial_printf("%d", (int)pid);
+  serial_write_string("\r\n");
+
+  for (;;) {
+    task64_t *head = task64_get_list();
+    if (!head)
+      return -LINUX_ECHILD;
+
+    task64_t *t = head;
+    int has_children = 0;
+    do {
+      if (t->parent_id == parent->id) {
+        has_children = 1;
+        
+        bool match = false;
+        if (pid == -1) match = true;
+        else if (pid == 0 && t->gid == parent->gid) match = true;
+        else if (pid > 0 && t->id == (uint64_t)pid) match = true;
+        
+        if (match && t->state == TASK64_ZOMBIE) {
+          int child_id = (int)t->id;
+          int code = t->exit_code;
+
+          serial_write_string("[LINUX] wait4: reaped child=");
+          serial_write_hex((uint64_t)child_id);
+          serial_write_string(" exit=");
+          serial_printf("%d", code);
+          serial_write_string("\r\n");
+
+          if (wstatus_ptr) {
+            int32_t wstatus = (int32_t)((code & 0xFF) << 8);
+            *(int32_t *)(uintptr_t)wstatus_ptr = wstatus;
+          }
+
+          t->state = TASK64_UNUSED;
+          return child_id;
+        }
+      }
+      t = t->next;
+    } while (t && t != head);
+
+    if (!has_children) {
+      serial_write_string("[LINUX] wait4: ECHILD (no kids found)\r\n");
+      return -LINUX_ECHILD;
+    }
+
+    if (options & WNOHANG)
+      return 0;
+
+    /* Block: yield and wait for next tick */
+    syscall64_dispatch_native(state, SYS_SLEEP, 1, 0, 0, 0, 0, 0);
+  }
+}
+
+static int linux_syscall_dispatch_x86_64_impl(syscall64_state_t *state, uint64_t num, uint64_t a1, uint64_t a2,
                                   uint64_t a3, uint64_t a4, uint64_t a5,
                                   uint64_t a6) {
   switch (num) {
 
   case LINUX_NR_exit:
-  case LINUX_NR_exit_group:
-    return (int)syscall64_dispatch_native(SYS_EXIT, a1, 0, 0, 0, 0, 0);
+  case LINUX_NR_exit_group: {
+    task64_t *t = task64_current();
+    if (t)
+      t->exit_code = (int)a1;
+    return (int)syscall64_dispatch_native(state, SYS_EXIT, a1, 0, 0, 0, 0, 0);
+  }
 
   case LINUX_NR_read:
-    return (int)syscall64_dispatch_native(SYS_READ, a1, a2, a3, 0, 0, 0);
+    return (int)syscall64_dispatch_native(state, SYS_READ, a1, a2, a3, 0, 0, 0);
 
   case LINUX_NR_write:
-    return (int)syscall64_dispatch_native(SYS_WRITE, a1, a2, a3, 0, 0, 0);
+    return (int)syscall64_dispatch_native(state, SYS_WRITE, a1, a2, a3, 0, 0, 0);
+
+  case LINUX_NR_socket:
+    return linux_sys_socket(a1, a2, a3);
+
+  case LINUX_NR_connect:
+    return linux_sys_connect(a1, a2, a3);
+
+  case LINUX_NR_accept:
+    return linux_sys_accept(a1, a2, a3);
+
+  case LINUX_NR_bind:
+    return linux_sys_bind(a1, a2, a3);
+
+  case LINUX_NR_listen:
+    return linux_sys_listen(a1, a2);
+
+  case LINUX_NR_getsockname:
+    return linux_sys_getsockname(a1, a2, a3);
+
+  case LINUX_NR_getpeername:
+    return linux_sys_getpeername(a1, a2, a3);
 
   case LINUX_NR_open:
-    return (int)syscall64_dispatch_native(SYS_OPEN, a1, a2, 0, 0, 0, 0);
+    return (int)syscall64_dispatch_native(state, SYS_OPEN, a1, a2, 0, 0, 0, 0);
+
+  case LINUX_NR_execve:
+  {
+    const char *fname = (const char *)(uintptr_t)a1;
+    char *const *argv = (char *const *)(uintptr_t)a2;
+    char *const *envp = (char *const *)(uintptr_t)a3;
+    if (fname && fname[0] && !strchr(fname, '/') &&
+        (strcmp(fname, "X") == 0 || strcmp(fname, "Xorg") == 0)) {
+      int r = execve_linux_x86_64_full("/usr/lib/xorg/Xorg", argv, envp);
+      if (r >= 0)
+        return r;
+      return execve_linux_x86_64_full("/usr/bin/Xorg", argv, envp);
+    }
+    return execve_linux_x86_64_full(fname, argv, envp);
+  }
 
   case LINUX_NR_stat:
-    return linux_sys_stat64((const char *)(uintptr_t)a1,
+    return linux_sys_stat64(state, (const char *)(uintptr_t)a1,
                             (linux_stat64_t *)(uintptr_t)a2);
 
   case LINUX_NR_fstat:
-    return linux_sys_fstat64((int)a1, (linux_stat64_t *)(uintptr_t)a2);
+    return linux_sys_fstat64(state, (int)a1, (linux_stat64_t *)(uintptr_t)a2);
 
   case LINUX_NR_lstat:
-    return linux_sys_stat64((const char *)(uintptr_t)a1,
+    return linux_sys_stat64(state, (const char *)(uintptr_t)a1,
                             (linux_stat64_t *)(uintptr_t)a2);
 
   case LINUX_NR_lseek: {
@@ -849,21 +1439,21 @@ static int linux_syscall_dispatch_x86_64_impl(uint64_t num, uint64_t a1, uint64_
     serial_write_string(path ? path : "(null)");
     serial_write_string("\r\n");
     if (path && path[0] == '/') {
-      return (int)syscall64_dispatch_native(SYS_OPEN, a2, a3, 0, 0, 0, 0);
+      return (int)syscall64_dispatch_native(state, SYS_OPEN, a2, a3, 0, 0, 0, 0);
     }
 
     if (dirfd == LINUX_AT_FDCWD) {
-      return (int)syscall64_dispatch_native(SYS_OPEN, a2, a3, 0, 0, 0, 0);
+      return (int)syscall64_dispatch_native(state, SYS_OPEN, a2, a3, 0, 0, 0, 0);
     }
     /* Fallback to normal open for now; full dirfd support requires VFS changes */
-    return (int)syscall64_dispatch_native(SYS_OPEN, a2, a3, 0, 0, 0, 0);
+    return (int)syscall64_dispatch_native(state, SYS_OPEN, a2, a3, 0, 0, 0, 0);
   }
 
 
   case LINUX_NR_close:
     if (a1 >= TASK_LINUX_EPOLL_FD_BASE)
       return epoll64_close(task64_current(), (int)a1);
-    return (int)syscall64_dispatch_native(SYS_CLOSE, a1, 0, 0, 0, 0, 0);
+    return (int)syscall64_dispatch_native(state, SYS_CLOSE, a1, 0, 0, 0, 0, 0);
 
   case LINUX_NR_pipe:
   case LINUX_NR_pipe2: {
@@ -946,7 +1536,7 @@ static int linux_syscall_dispatch_x86_64_impl(uint64_t num, uint64_t a1, uint64_
         return ready;
       if (timeout > 0 && (int)(linux_now_ms() - start) >= timeout)
         return 0;
-      syscall64_dispatch_native(SYS_SLEEP, 1, 0, 0, 0, 0, 0);
+      syscall64_dispatch_native(state, SYS_SLEEP, 1, 0, 0, 0, 0, 0);
     }
   }
 
@@ -966,11 +1556,11 @@ static int linux_syscall_dispatch_x86_64_impl(uint64_t num, uint64_t a1, uint64_
     }
     switch (cmd) {
     case FUTEX_WAIT:
-      return futex64_wait_impl(a1, (uint32_t)a3, timeout_ms);
+      return futex64_wait_impl(state, a1, (uint32_t)a3, timeout_ms);
     case FUTEX_WAKE:
       return futex64_wake_impl(a1, (int)a3);
     case FUTEX_WAIT_BITSET:
-      return futex64_wait_impl(a1, (uint32_t)a3, timeout_ms);
+      return futex64_wait_impl(state, a1, (uint32_t)a3, timeout_ms);
     case FUTEX_WAKE_BITSET:
       return futex64_wake_impl(a1, (int)a3);
     case FUTEX_WAKE_OP:
@@ -1074,7 +1664,7 @@ static int linux_syscall_dispatch_x86_64_impl(uint64_t num, uint64_t a1, uint64_
         return 0;
       if (timeout > 0 && (int)(linux_now_ms() - start_ms) >= timeout)
         return 0;
-      syscall64_dispatch_native(SYS_SLEEP, 1, 0, 0, 0, 0, 0);
+      syscall64_dispatch_native(state, SYS_SLEEP, 1, 0, 0, 0, 0, 0);
     }
   }
 
@@ -1158,14 +1748,17 @@ static int linux_syscall_dispatch_x86_64_impl(uint64_t num, uint64_t a1, uint64_
   }
 
   case LINUX_NR_clone: {
-    if (!(a1 & CLONE_VM))
-      return -LINUX_ENOSYS;
+    /* glibc fork() calls clone(SIGCHLD, 0) — no CLONE_VM means fork */
+    if (!(a1 & CLONE_VM)) {
+      return linux_sys_fork(state);
+    }
     uint64_t fs_base = task64_current() ? task64_current()->gs.fs_base : 0;
     if (a1 & CLONE_SETTLS)
       fs_base = a4;
-    task64_t *child = task64_clone_current(a2, fs_base);
+    task64_t *child = task64_clone_current(state, a2, fs_base);
     if (!child)
       return -LINUX_ENOMEM;
+    child->parent_id = task64_current() ? task64_current()->id : 0;
     if (a1 & CLONE_PARENT_SETTID && a3)
       *(uint64_t *)(uintptr_t)a3 = child->id;
     if (a1 & CLONE_CHILD_SETTID && a5)
@@ -1186,7 +1779,7 @@ static int linux_syscall_dispatch_x86_64_impl(uint64_t num, uint64_t a1, uint64_
     return -LINUX_ESRCH;
 
   case LINUX_NR_arch_prctl:
-    return linux_sys_arch_prctl(a1, a2);
+    return linux_sys_arch_prctl(state, a1, a2);
 
   case LINUX_NR_brk: {
     uint64_t res = user64_brk(a1);
@@ -1229,7 +1822,7 @@ static int linux_syscall_dispatch_x86_64_impl(uint64_t num, uint64_t a1, uint64_
     return 0;
 
   case LINUX_NR_sched_yield:
-    return (int)syscall64_dispatch_native(SYS_YIELD, 0, 0, 0, 0, 0, 0);
+    return (int)syscall64_dispatch_native(state, SYS_YIELD, 0, 0, 0, 0, 0, 0);
 
 
   case LINUX_NR_pread64: {
@@ -1246,7 +1839,10 @@ static int linux_syscall_dispatch_x86_64_impl(uint64_t num, uint64_t a1, uint64_
 
 
   case LINUX_NR_nanosleep:
-    return linux_sys_nanosleep(a1);
+    return linux_sys_nanosleep(state, a1);
+
+  case LINUX_NR_clock_nanosleep:
+    return linux_sys_clock_nanosleep(state, a1, a2, a3, a4);
 
   case LINUX_NR_getpid:
     if (task64_current())
@@ -1272,7 +1868,7 @@ static int linux_syscall_dispatch_x86_64_impl(uint64_t num, uint64_t a1, uint64_
     return 0;
 
   case LINUX_NR_uname:
-    return linux_sys_uname(a1);
+    return linux_sys_uname(state, a1);
 
   case LINUX_NR_set_robust_list:
     return 0;
@@ -1282,19 +1878,19 @@ static int linux_syscall_dispatch_x86_64_impl(uint64_t num, uint64_t a1, uint64_
 
 
   case LINUX_NR_sysinfo:
-    return linux_sys_sysinfo(a1);
+    return linux_sys_sysinfo(state, a1);
 
   case LINUX_NR_gettimeofday:
-    return linux_sys_gettimeofday(a1);
+    return linux_sys_gettimeofday(state, a1);
 
   case LINUX_NR_time:
-    return linux_sys_time(a1);
+    return linux_sys_time(state, a1);
 
   case LINUX_NR_clock_gettime:
-    return linux_sys_clock_gettime(a1, a2);
+    return linux_sys_clock_gettime(state, a1, a2);
 
   case LINUX_NR_readlink:
-    return linux_sys_readlink((const char *)(uintptr_t)a1,
+    return linux_sys_readlink(state, (const char *)(uintptr_t)a1,
                                (char *)(uintptr_t)a2, (uint32_t)a3);
 
 
@@ -1311,10 +1907,10 @@ static int linux_syscall_dispatch_x86_64_impl(uint64_t num, uint64_t a1, uint64_
     const char *path = (const char *)(uintptr_t)a2;
     linux_stat64_t *out = (linux_stat64_t *)(uintptr_t)a3;
     if (path && path[0] == '/') {
-      return linux_sys_stat64(path, out);
+      return linux_sys_stat64(state, path, out);
     }
     if (dirfd == LINUX_AT_FDCWD) {
-      return linux_sys_stat64(path, out);
+      return linux_sys_stat64(state, path, out);
     }
     return -LINUX_ENOSYS;
   }
@@ -1330,7 +1926,7 @@ static int linux_syscall_dispatch_x86_64_impl(uint64_t num, uint64_t a1, uint64_
       return -LINUX_EINVAL;
     int total = 0;
     for (int i = 0; i < count; i++) {
-      int r = (int)syscall64_dispatch_native(SYS_WRITE, (uint64_t)fd,
+      int r = (int)syscall64_dispatch_native(state, SYS_WRITE, (uint64_t)fd,
                                               iov[i].base, iov[i].len, 0, 0, 0);
       if (r < 0)
         return r;
@@ -1364,6 +1960,55 @@ static int linux_syscall_dispatch_x86_64_impl(uint64_t num, uint64_t a1, uint64_
     }
     return (int)a2;
 
+  case LINUX_NR_dup: {
+    int oldfd = (int)a1;
+    if (oldfd < 0 || oldfd >= MAX_FILES_PER_PROCESS)
+      return -LINUX_EBADF;
+    file_t *f = syscall64_get_file(oldfd);
+    if (!f) return -LINUX_EBADF;
+    for (int i = 3; i < MAX_FILES_PER_PROCESS; i++) {
+        if (!syscall64_get_file(i)) {
+            syscall64_set_file(i, f);
+            return i;
+        }
+    }
+    return -LINUX_ENOMEM;
+  }
+
+  case LINUX_NR_dup2: {
+    /* Minimal dup2: just return newfd for now (enough for glibc fork) */
+    int oldfd = (int)a1;
+    int newfd = (int)a2;
+    if (oldfd < 0 || oldfd >= MAX_FILES_PER_PROCESS)
+      return -LINUX_EBADF;
+    if (newfd < 0 || newfd >= MAX_FILES_PER_PROCESS)
+      return -LINUX_EBADF;
+    if (oldfd == newfd)
+      return newfd;
+    file_t *f = syscall64_get_file(oldfd);
+    if (!f)
+      return -LINUX_EBADF;
+    /* Close newfd if open */
+    file_t *existing = syscall64_get_file(newfd);
+    if (existing) {
+      syscall64_dispatch_native(state, SYS_CLOSE, (uint64_t)newfd, 0, 0, 0, 0, 0);
+    }
+    syscall64_set_file(newfd, f);
+    return newfd;
+  }
+
+  case LINUX_NR_fork:
+  case LINUX_NR_vfork:
+    return linux_sys_fork(state);
+
+  case LINUX_NR_wait4:
+    return linux_sys_wait4(state, (int64_t)a1, a2, (int)a3);
+
+  case LINUX_NR_waitid:
+    /* waitid(idtype, id, infop, options, rusage) */
+    /* Minimal stub: redirect to wait4(id, infop, options) if idtype matches */
+    return linux_sys_wait4(state, (int64_t)a2, a3, (int)a4);
+
   default:
     serial_write_string("[K64] unknown linux syscall rax=");
     serial_printf("%u", num);
@@ -1372,16 +2017,20 @@ static int linux_syscall_dispatch_x86_64_impl(uint64_t num, uint64_t a1, uint64_
   }
 }
 
-int linux_syscall_dispatch_x86_64(uint64_t num, uint64_t a1, uint64_t a2,
+extern "C" int linux_syscall_dispatch_x86_64(void* state_ptr, uint64_t num, uint64_t a1, uint64_t a2,
                                   uint64_t a3, uint64_t a4, uint64_t a5,
                                   uint64_t a6) {
-  signal64_dispatch(task64_current(), syscall64_get_state());
+  syscall64_state_t* state = (syscall64_state_t*)state_ptr;
+  signal64_dispatch(task64_current(), state);
 
-  serial_write_string("[LINUX] syscall rax=");
-  serial_printf("%u", num);
+  task64_t *t = task64_current();
+  serial_write_string("[LINUX] Task ");
+  serial_write_hex(t ? t->id : 0);
+  serial_write_string(" syscall rax=");
+  serial_printf("%d", (int)num);
   serial_write_string("\r\n");
 
-  int ret = linux_syscall_dispatch_x86_64_impl(num, a1, a2, a3, a4, a5, a6);
+  int ret = linux_syscall_dispatch_x86_64_impl(state, num, a1, a2, a3, a4, a5, a6);
 
   serial_write_string("[LINUX] syscall rax=");
   serial_printf("%u", num);
@@ -1397,9 +2046,10 @@ int linux_syscall_dispatch_x86_64(uint64_t num, uint64_t a1, uint64_t a2,
 
 #else
 
-int linux_syscall_dispatch_x86_64(uint64_t num, uint64_t a1, uint64_t a2,
+int linux_syscall_dispatch_x86_64(void* state, uint64_t num, uint64_t a1, uint64_t a2,
                                   uint64_t a3, uint64_t a4, uint64_t a5,
                                   uint64_t a6) {
+  (void)state;
   (void)num;
   (void)a1;
   (void)a2;

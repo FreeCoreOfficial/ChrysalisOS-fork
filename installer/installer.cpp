@@ -1862,6 +1862,58 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
                   "  module2 /lib/x86_64-linux-gnu/libc.so.6 /lib/x86_64-linux-gnu/libc.so.6\n");
     ui_append_str(grub_cfg, sizeof(grub_cfg),
                   "  module2 /system/tests/hello-libc /system/tests/hello-libc\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib/x86_64-linux-gnu/libX11.so.6 /lib/x86_64-linux-gnu/libX11.so.6\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib/x86_64-linux-gnu/libxcb.so.1 /lib/x86_64-linux-gnu/libxcb.so.1\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib/x86_64-linux-gnu/libXau.so.6 /lib/x86_64-linux-gnu/libXau.so.6\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib/x86_64-linux-gnu/libXdmcp.so.6 /lib/x86_64-linux-gnu/libXdmcp.so.6\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib/x86_64-linux-gnu/libXext.so.6 /lib/x86_64-linux-gnu/libXext.so.6\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib/x86_64-linux-gnu/libXrender.so.1 /lib/x86_64-linux-gnu/libXrender.so.1\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib/x86_64-linux-gnu/libXrandr.so.2 /lib/x86_64-linux-gnu/libXrandr.so.2\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib/x86_64-linux-gnu/libXft.so.2 /lib/x86_64-linux-gnu/libXft.so.2\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib/x86_64-linux-gnu/libfontconfig.so.1 /lib/x86_64-linux-gnu/libfontconfig.so.1\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib/x86_64-linux-gnu/libexpat.so.1 /lib/x86_64-linux-gnu/libexpat.so.1\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib/x86_64-linux-gnu/libfreetype.so.6 /lib/x86_64-linux-gnu/libfreetype.so.6\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib/x86_64-linux-gnu/libz.so.1 /lib/x86_64-linux-gnu/libz.so.1\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib/x86_64-linux-gnu/libbz2.so.1.0 /lib/x86_64-linux-gnu/libbz2.so.1.0\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib/x86_64-linux-gnu/libpng16.so.16 /lib/x86_64-linux-gnu/libpng16.so.16\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib/x86_64-linux-gnu/libbrotlidec.so.1 /lib/x86_64-linux-gnu/libbrotlidec.so.1\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib/x86_64-linux-gnu/libbrotlicommon.so.1 /lib/x86_64-linux-gnu/libbrotlicommon.so.1\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib/x86_64-linux-gnu/libXaw.so.7 /lib/x86_64-linux-gnu/libXaw.so.7\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib/x86_64-linux-gnu/libXmu.so.6 /lib/x86_64-linux-gnu/libXmu.so.6\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib/x86_64-linux-gnu/libXinerama.so.1 /lib/x86_64-linux-gnu/libXinerama.so.1\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib/x86_64-linux-gnu/libXpm.so.4 /lib/x86_64-linux-gnu/libXpm.so.4\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib/x86_64-linux-gnu/libXt.so.6 /lib/x86_64-linux-gnu/libXt.so.6\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib/x86_64-linux-gnu/libICE.so.6 /lib/x86_64-linux-gnu/libICE.so.6\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib/x86_64-linux-gnu/libutempter.so.0 /lib/x86_64-linux-gnu/libutempter.so.0\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib/x86_64-linux-gnu/libtinfo.so.6 /lib/x86_64-linux-gnu/libtinfo.so.6\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib/x86_64-linux-gnu/libSM.so.6 /lib/x86_64-linux-gnu/libSM.so.6\n");
+    ui_append_str(grub_cfg, sizeof(grub_cfg),
+                  "  module2 /lib/x86_64-linux-gnu/libuuid.so.1 /lib/x86_64-linux-gnu/libuuid.so.1\n");
 
     ui_append_str(grub_cfg, sizeof(grub_cfg), "  boot\n}\n\n");
   }

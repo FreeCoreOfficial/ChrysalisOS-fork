@@ -1,5 +1,12 @@
 #include "serial.h"
 #include "../arch/i386/io.h"
+#include <stddef.h>
+#include <stdint.h>
+#include <stdarg.h>
+
+#ifdef __x86_64__
+#include "../sched/task64.h"
+#endif
 
 #define COM1 0x3F8
 
@@ -21,7 +28,11 @@ int serial_received()
 
 char serial_read()
 {
-    while (!serial_received());
+    while (!serial_received()) {
+#ifdef __x86_64__
+        task64_yield();
+#endif
+    }
     return inb(COM1);
 }
 
@@ -32,7 +43,11 @@ int serial_is_transmit_empty()
 
 void serial_write(char c)
 {
-    while (!serial_is_transmit_empty());
+    while (!serial_is_transmit_empty()) {
+#ifdef __x86_64__
+        task64_yield();
+#endif
+    }
     outb(COM1, c);
 }
 

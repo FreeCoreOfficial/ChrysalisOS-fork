@@ -186,6 +186,37 @@ static int read_exec64_path(const char *path, const uint8_t **out_data,
   return (*out_data) ? 0 : -1;
 }
 
+static const char *env_lookup(char *const envp[], const char *key) {
+  if (!envp || !key)
+    return nullptr;
+  size_t klen = strlen(key);
+  for (int i = 0; envp[i]; i++) {
+    const char *e = envp[i];
+    if (!e)
+      continue;
+    if (strncmp(e, key, klen) == 0 && e[klen] == '=')
+      return e + klen + 1;
+  }
+  return nullptr;
+}
+
+static int exec64_try_path(const char *dir, const char *name,
+                           const uint8_t **out_data, size_t *out_size,
+                           int *out_owned, char *out_path, size_t out_path_sz) {
+  if (!dir || !*dir || !name || !*name || !out_data || !out_size)
+    return -1;
+  size_t dlen = strlen(dir);
+  size_t nlen = strlen(name);
+  size_t need = dlen + 1 + nlen + 1;
+  if (need > out_path_sz)
+    return -1;
+  memcpy(out_path, dir, dlen);
+  out_path[dlen] = '/';
+  memcpy(out_path + dlen + 1, name, nlen);
+  out_path[dlen + 1 + nlen] = 0;
+  return read_exec64_path(out_path, out_data, out_size, out_owned);
+}
+
 static int map_user_segment(uint64_t vaddr, uint64_t memsz, uint64_t flags) {
   uint64_t start = vaddr & ~0xFFFULL;
   uint64_t end = (vaddr + memsz + 0xFFFULL) & ~0xFFFULL;
@@ -220,405 +251,92 @@ static int map_user_stack(uint64_t top, uint64_t bytes) {
   return 0;
 }
 
-static uint32_t elf64_sym_count_from_hash(uint64_t hash_addr) {
-  if (!hash_addr)
-    return 0;
-  uint32_t *hash = (uint32_t *)(uintptr_t)hash_addr;
-  if (!hash)
-    return 0;
-  return hash[1];
-}
-
-static uint32_t elf64_sym_count_from_gnu_hash(uint64_t gnu_hash_addr) {
-  if (!gnu_hash_addr)
-    return 0;
-  uint32_t *hdr = (uint32_t *)(uintptr_t)gnu_hash_addr;
-  if (!hdr)
-    return 0;
-  uint32_t nbuckets = hdr[0];
-  uint32_t symoffset = hdr[1];
-  uint32_t bloom_size = hdr[2];
-  if (nbuckets == 0)
-    return 0;
-
-  uint64_t *bloom = (uint64_t *)(uintptr_t)(gnu_hash_addr + 16);
-  uint32_t *buckets = (uint32_t *)(uintptr_t)(bloom + bloom_size);
-  uint32_t *chains = buckets + nbuckets;
-
-  uint32_t max_sym = 0;
-  for (uint32_t i = 0; i < nbuckets; i++) {
-    uint32_t b = buckets[i];
-    if (b < symoffset)
-      continue;
-    if (b > max_sym)
-      max_sym = b;
-    uint32_t idx = b;
-    while (1) {
-      uint32_t h = chains[idx - symoffset];
-      if (idx > max_sym)
-        max_sym = idx;
-      if (h & 1)
-        break;
-      idx++;
-    }
-  }
-  return max_sym ? (max_sym + 1) : 0;
-}
-
-static uint32_t elf64_sym_count_fallback(const elf64_image_t *img) {
-  if (!img || !img->symtab || !img->strtab || !img->syment)
-    return 0;
-  if (img->strtab <= img->symtab)
-    return 0;
-  uint64_t count = (img->strtab - img->symtab) / img->syment;
-  if (count > 0xFFFFFFFFu)
-    count = 0xFFFFFFFFu;
-  return (uint32_t)count;
-}
-
-static int elf64_parse_dynamic(elf64_image_t *img, const elf64_ehdr_t *ehdr,
-                               const elf64_phdr_t *phdr, size_t phnum) {
-  if (!img || !ehdr || !phdr)
-    return -1;
-  const elf64_phdr_t *dyn_ph = nullptr;
-  for (uint16_t i = 0; i < phnum; i++) {
-    if (phdr[i].p_type == PT_DYNAMIC) {
-      dyn_ph = &phdr[i];
-      break;
-    }
-  }
-
-  if (!dyn_ph)
-    return 0;
-
-  img->dyn_addr = img->load_base + dyn_ph->p_vaddr;
-  img->dyn_size = dyn_ph->p_memsz;
-
-  const Elf64_Dyn *dyn = (const Elf64_Dyn *)(uintptr_t)img->dyn_addr;
-  uint64_t dyn_count = img->dyn_size / sizeof(Elf64_Dyn);
-
-  for (uint64_t i = 0; i < dyn_count; i++) {
-    uint64_t tag = (uint64_t)dyn[i].d_tag;
-    uint64_t val = dyn[i].d_un.d_val;
-    uint64_t ptr = dyn[i].d_un.d_ptr;
-    switch (tag) {
-    case DT_NULL:
-      i = dyn_count;
-      break;
-    case DT_RELA:
-      img->rela_addr = (ehdr->e_type == ET_DYN) ? (img->load_base + ptr) : ptr;
-      break;
-    case DT_RELASZ:
-      img->rela_sz = val;
-      break;
-    case DT_RELAENT:
-      img->rela_ent = val;
-      break;
-    case DT_JMPREL:
-      img->jmprel_addr =
-          (ehdr->e_type == ET_DYN) ? (img->load_base + ptr) : ptr;
-      break;
-    case DT_PLTRELSZ:
-      img->pltrel_sz = val;
-      break;
-    case DT_PLTREL:
-      img->pltrel_type = val;
-      break;
-    case DT_SYMTAB:
-      img->symtab = (ehdr->e_type == ET_DYN) ? (img->load_base + ptr) : ptr;
-      break;
-    case DT_SYMENT:
-      img->syment = val;
-      break;
-    case DT_STRTAB:
-      img->strtab = (ehdr->e_type == ET_DYN) ? (img->load_base + ptr) : ptr;
-      break;
-    case DT_STRSZ:
-      img->strsz = val;
-      break;
-    case DT_HASH:
-      img->hash_addr = (ehdr->e_type == ET_DYN) ? (img->load_base + ptr) : ptr;
-      break;
-    case DT_GNU_HASH:
-      img->gnu_hash_addr =
-          (ehdr->e_type == ET_DYN) ? (img->load_base + ptr) : ptr;
-      break;
-    default:
-      break;
-    }
-  }
-
-  if (!img->syment)
-    img->syment = sizeof(Elf64_Sym);
-  if (!img->rela_ent)
-    img->rela_ent = sizeof(Elf64_Rela);
-  if (!img->sym_count) {
-    img->sym_count = elf64_sym_count_from_hash(img->hash_addr);
-    if (!img->sym_count)
-      img->sym_count = elf64_sym_count_from_gnu_hash(img->gnu_hash_addr);
-    if (!img->sym_count)
-      img->sym_count = elf64_sym_count_fallback(img);
-  }
-  return 0;
-}
-
-static const Elf64_Sym *elf64_get_sym(const elf64_image_t *img,
-                                      uint32_t sym_index) {
-  if (!img || !img->symtab || !img->syment)
-    return nullptr;
-  if (img->sym_count && sym_index >= img->sym_count)
-    return nullptr;
-  uint64_t addr = img->symtab + (uint64_t)sym_index * img->syment;
-  return (const Elf64_Sym *)(uintptr_t)addr;
-}
-
-static const char *elf64_sym_name(const elf64_image_t *img,
-                                  const Elf64_Sym *sym) {
-  if (!img || !sym || !img->strtab || !img->strsz)
-    return nullptr;
-  if (sym->st_name >= img->strsz)
-    return nullptr;
-  return (const char *)(uintptr_t)(img->strtab + sym->st_name);
-}
-
-static int elf64_resolve_symbol(const elf64_image_t *img, uint32_t sym_index,
-                                elf64_image_t **images, int img_count,
-                                uint64_t *out_addr) {
-  if (!img || !out_addr)
-    return -1;
-  if (sym_index == 0) {
-    *out_addr = 0;
-    return 0;
-  }
-  const Elf64_Sym *sym = elf64_get_sym(img, sym_index);
-  if (!sym) {
-    return -1;
-  }
-
-
-  if (sym->st_shndx != 0) {
-    *out_addr = img->load_base + sym->st_value;
-    return 0;
-  }
-
-  const char *name = elf64_sym_name(img, sym);
-  if (!name)
-    return -1;
-
-  /* serial_write_string("[K64]   resolving: "); serial_write_string(name); serial_write_string("\r\n"); */
-
-
-  for (int i = 0; i < img_count; i++) {
-    elf64_image_t *other = images[i];
-    if (!other || !other->symtab)
-      continue;
-    uint32_t count = other->sym_count;
-    if (!count)
-      count = elf64_sym_count_fallback(other);
-    for (uint32_t si = 0; si < count; si++) {
-      const Elf64_Sym *osym = elf64_get_sym(other, si);
-      if (!osym || osym->st_shndx == 0)
-        continue;
-      const char *oname = elf64_sym_name(other, osym);
-      if (!oname)
-        continue;
-      if (strcmp(oname, name) == 0) {
-        *out_addr = other->load_base + osym->st_value;
-        return 0;
-      }
-    }
-  }
-
-  uint8_t bind = ELF64_ST_BIND(sym->st_info);
-  if (bind == STB_WEAK) {
-
-    *out_addr = 0;
-    return 0;
-  }
-  return -1;
-}
-
-
-static int elf64_apply_relocs(elf64_image_t *img, elf64_image_t **images,
-                              int img_count) {
-  if (!img)
-
-    return -1;
-  if (!img->rela_ent)
-    img->rela_ent = sizeof(Elf64_Rela);
-
-  auto apply_rela = [&](uint64_t base, uint64_t size, uint64_t ent) -> int {
-    if (!base || size == 0)
-      return 0;
-    uint64_t count = size / ent;
-    for (uint64_t i = 0; i < count; i++) {
-      uint64_t addr = base + i * ent;
-      Elf64_Rela *rela = (Elf64_Rela *)(uintptr_t)addr;
-      if (!rela)
-        return -1;
-      uint64_t reloc_va = img->load_base + rela->r_offset;
-      uint64_t *where = (uint64_t *)(uintptr_t)reloc_va;
-      if (!where)
-        return -1;
-      uint32_t type = ELF64_R_TYPE(rela->r_info);
-      uint32_t symi = ELF64_R_SYM(rela->r_info);
-      if (type == R_X86_64_RELATIVE) {
-        *where = img->load_base + (uint64_t)rela->r_addend;
-        continue;
-      }
-      uint64_t sym_addr = 0;
-      if (elf64_resolve_symbol(img, symi, images, img_count, &sym_addr) < 0)
-        return -1;
-      switch (type) {
-      case R_X86_64_64:
-      case R_X86_64_GLOB_DAT:
-      case R_X86_64_JUMP_SLOT:
-        *where = sym_addr + (uint64_t)rela->r_addend;
-        break;
-      case 37: /* R_X86_64_IRELATIVE */ {
-        uint64_t (*resolver)() = (uint64_t (*)())(img->load_base + rela->r_addend);
-        *where = resolver();
-        break;
-      }
-
-      default:
-        return -1;
-      }
-
-
-
-    }
-    return 0;
-  };
-
-  if (apply_rela(img->rela_addr, img->rela_sz, img->rela_ent) < 0)
-    return -1;
-  if (img->pltrel_sz > 0 && img->jmprel_addr) {
-    if (img->pltrel_type != DT_RELA)
-      return -1;
-    if (apply_rela(img->jmprel_addr, img->pltrel_sz, img->rela_ent) < 0)
-      return -1;
-  }
-  return 0;
-}
+/* Removed all dynamic symbol and relocation logic. The kernel MUST NOT do this. */
 
 static int load_elf64_image(const uint8_t *file_data, size_t file_size,
                             uint64_t load_base, elf64_image_t *out_img,
                             char *interp_buf, size_t interp_buf_sz) {
-  if (!file_data || file_size < sizeof(elf64_ehdr_t)) {
-    serial_write_string("[K64] load_elf64_image: too small\r\n");
-    return -1;
-  }
-
+  if (!file_data || file_size < sizeof(elf64_ehdr_t)) return -1;
   const elf64_ehdr_t *eh = (const elf64_ehdr_t *)file_data;
-  if (!elf64_is_valid(file_data, (uint32_t)file_size)) {
-    serial_write_string("[K64] load_elf64_image: invalid magic/class\r\n");
-    return -1;
-  }
-  if (eh->e_machine != EM_X86_64) {
-    serial_write_string("[K64] load_elf64_image: wrong machine\r\n");
-    return -1;
-  }
-  if (eh->e_type != ET_EXEC && eh->e_type != ET_DYN) {
-    serial_write_string("[K64] load_elf64_image: wrong type\r\n");
-    return -1;
-  }
+  if (!elf64_is_valid(file_data, (uint32_t)file_size)) return -1;
+  if (eh->e_machine != EM_X86_64 || (eh->e_type != ET_EXEC && eh->e_type != ET_DYN)) return -1;
 
-  const elf64_phdr_t *phdr =
-      (const elf64_phdr_t *)(file_data + eh->e_phoff);
+  const elf64_phdr_t *phdr = (const elf64_phdr_t *)(file_data + eh->e_phoff);
   uint64_t image_end = 0;
   uint64_t phdr_addr = 0;
-  uint64_t phent = eh->e_phentsize;
-  uint64_t phnum = eh->e_phnum;
-  uint64_t tls_offset = 0;
-  uint64_t tls_filesz = 0;
-  uint64_t tls_memsz = 0;
-  uint64_t tls_align = 0;
 
   for (uint16_t i = 0; i < eh->e_phnum; i++) {
-    if (phdr[i].p_type == PT_PHDR)
-      phdr_addr = load_base + phdr[i].p_vaddr;
+    if (phdr[i].p_type == PT_PHDR) phdr_addr = load_base + phdr[i].p_vaddr;
     if (phdr[i].p_type == PT_INTERP && interp_buf && interp_buf_sz > 0) {
-      if (phdr[i].p_offset + phdr[i].p_filesz <= file_size) {
-        size_t len = (size_t)phdr[i].p_filesz;
-        if (len >= interp_buf_sz)
-          len = interp_buf_sz - 1;
-        memcpy(interp_buf, file_data + phdr[i].p_offset, len);
-        interp_buf[len] = 0;
-      }
+      size_t len = (size_t)phdr[i].p_filesz;
+      if (len >= interp_buf_sz) len = interp_buf_sz - 1;
+      memcpy(interp_buf, file_data + phdr[i].p_offset, len);
+      interp_buf[len] = 0;
     }
-    if (phdr[i].p_type == PT_TLS) {
-      tls_offset = phdr[i].p_offset;
-      tls_filesz = phdr[i].p_filesz;
-      tls_memsz = phdr[i].p_memsz;
-      tls_align = phdr[i].p_align;
+    if (phdr[i].p_type == PT_TLS && out_img) {
+      out_img->tls_offset = phdr[i].p_offset;
+      out_img->tls_filesz = phdr[i].p_filesz;
+      out_img->tls_memsz = phdr[i].p_memsz;
+      out_img->tls_align = phdr[i].p_align;
     }
-    if (phdr[i].p_type != PT_LOAD)
-      continue;
-    if (phdr[i].p_offset + phdr[i].p_filesz > file_size) {
-      serial_write_string("[K64] load_elf64_image: segment offset out of bounds\r\n");
-      return -1;
-    }
+    if (phdr[i].p_type != PT_LOAD) continue;
 
     uint64_t seg_vaddr = load_base + phdr[i].p_vaddr;
-    if (map_user_segment(seg_vaddr, phdr[i].p_memsz, phdr[i].p_flags) < 0) {
-      serial_write_string("[K64] load_elf64_image: map_user_segment fail\r\n");
-      return -1;
-    }
+    /* Map completely RW first to load the data safely and zero BSS */
+    if (map_user_segment(seg_vaddr, phdr[i].p_memsz, PF_R | PF_W) < 0) return -1;
 
     if (phdr[i].p_filesz > 0) {
-      memcpy((void *)(uintptr_t)seg_vaddr, file_data + phdr[i].p_offset,
-             (size_t)phdr[i].p_filesz);
+      memcpy((void *)(uintptr_t)seg_vaddr, file_data + phdr[i].p_offset, (size_t)phdr[i].p_filesz);
+    }
+    /* Zeros the BSS. map_user_segment zeroes entire pages, but we must zero the exact remainder just in case. */
+    if (phdr[i].p_memsz > phdr[i].p_filesz) {
+      memset((void *)(uintptr_t)(seg_vaddr + phdr[i].p_filesz), 0, (size_t)(phdr[i].p_memsz - phdr[i].p_filesz));
     }
 
     uint64_t end = seg_vaddr + phdr[i].p_memsz;
-    if (end > image_end)
-      image_end = end;
+    if (end > image_end) image_end = end;
   }
 
-  if (!phdr_addr)
-    phdr_addr = load_base + eh->e_phoff;
+  /* RE-ITERATE to apply strict permissions! (RX, RW, R) */
+  for (uint16_t i = 0; i < eh->e_phnum; i++) {
+    if (phdr[i].p_type != PT_LOAD) continue;
+    uint64_t seg_vaddr = load_base + phdr[i].p_vaddr;
+    uint64_t start = seg_vaddr & ~0xFFFULL;
+    uint64_t end = (seg_vaddr + phdr[i].p_memsz + 0xFFFULL) & ~0xFFFULL;
+    
+    uint64_t map_flags = 0x5; /* P | USER */
+    if (phdr[i].p_flags & PF_W) map_flags |= 0x2; /* RW */
+    /* If the system supports NX, we would handle PF_X here via bit 63. Chrysalis paging64 doesn't yet, so we ignore PF_X. */
+    
+    for (uint64_t va = start; va < end; va += 0x1000) {
+      paging64_protect_page(va, map_flags);
+    }
+  }
 
   if (out_img) {
-    memset(out_img, 0, sizeof(*out_img));
-    out_img->file_data = file_data;
-    out_img->file_size = file_size;
     out_img->load_base = load_base;
     out_img->entry = load_base + eh->e_entry;
     out_img->image_end = image_end;
-    out_img->phdr = phdr_addr;
-    out_img->phent = phent;
-    out_img->phnum = phnum;
-    out_img->is_main = 0;
-    out_img->sym_count = 0;
-    out_img->tls_offset = tls_offset;
-    out_img->tls_filesz = tls_filesz;
-    out_img->tls_memsz = tls_memsz;
-    out_img->tls_align = tls_align;
-    if (elf64_parse_dynamic(out_img, eh, phdr, eh->e_phnum) < 0) {
-      serial_write_string("[K64] load_elf64_image: elf64_parse_dynamic fail\r\n");
-      return -1;
-    }
+    out_img->phdr = phdr_addr ? phdr_addr : (load_base + eh->e_phoff);
+    out_img->phent = eh->e_phentsize;
+    out_img->phnum = eh->e_phnum;
   }
   return 0;
 }
 
-static uint64_t build_user_stack(char *const argv[], uint64_t stack_top,
+static uint64_t build_user_stack(char **argv, char **envp, uint64_t stack_top,
                                  uint64_t at_entry, uint64_t at_phdr,
                                  uint64_t at_phent, uint64_t at_phnum,
                                  uint64_t at_base) {
   uint64_t sp = stack_top;
 
   int argc = 0;
-  while (argv && argv[argc])
-    argc++;
-
+  while (argv && argv[argc]) argc++;
   int envc = 0;
-  char *const envp[] = {nullptr};
+  while (envp && envp[envc]) envc++;
 
-  /* 1. Calculate and push strings */
   uint64_t arg_ptrs[64];
-  uint64_t env_ptrs[8];
+  uint64_t env_ptrs[64];
 
   for (int i = argc - 1; i >= 0; i--) {
     size_t len = strlen(argv[i]) + 1;
@@ -634,70 +352,54 @@ static uint64_t build_user_stack(char *const argv[], uint64_t stack_top,
     env_ptrs[i] = sp;
   }
 
-  /* Calculate stack slots for alignment (System V ABI expects RSP%16 == 0 at _start). */
-  int aux_pairs = 15; /* AT_NULL + others ... */
-  if (argc > 0) aux_pairs++; /* AT_EXECFN */
-
-  const uint64_t random_slots = 2; /* 16 bytes */
-  const uint64_t slots = 1 + (uint64_t)(argc + 1) + (uint64_t)(envc + 1) +
-                         (uint64_t)(aux_pairs * 2) + random_slots;
-
-  /* Align so final RSP (after all pushes) is 16-byte aligned. */
-  sp = (sp - slots * 8) & ~0xFULL;
-  sp += slots * 8; /* Reset sp to the point where we begin pushing */
+  sp = sp & ~0xFULL; /* Initial alignment */
 
   auto push64 = [&](uint64_t v) {
     sp -= 8;
     *(uint64_t *)(uintptr_t)sp = v;
   };
 
-  /* Push AUX vector */
-  push64(0);
-  push64(AT_NULL);
-
-  push64(at_entry); push64(AT_ENTRY);
-  push64(at_phnum); push64(AT_PHNUM);
-  push64(at_phent); push64(AT_PHENT);
-  push64(at_phdr);  push64(AT_PHDR);
-  push64(0x1000);   push64(AT_PAGESZ);
-  push64(at_base);  push64(AT_BASE);
-
   /* Pushing 16-byte random seed */
   for (int i = 0; i < 2; i++) {
     push64(0x1234567887654321ULL ^ (uint64_t)i);
   }
   uint64_t random_ptr = sp;
-  push64(random_ptr);
-  push64(AT_RANDOM);
 
-  push64(0); push64(AT_SECURE);
-  push64(100); push64(AT_CLKTCK);
-  push64(0); push64(AT_HWCAP);
-  push64(0); push64(AT_GID);
-  push64(0); push64(AT_EGID);
-  push64(0); push64(AT_UID);
-  push64(0); push64(AT_EUID);
-
+  /* Push AUX vector backwards */
+  push64(0); push64(AT_NULL);
+  
   if (argc > 0) {
-    push64(arg_ptrs[0]);
-    push64(AT_EXECFN);
+    push64(arg_ptrs[0]); push64(AT_EXECFN);
   }
 
-  /* Push pointers */
+  push64(random_ptr); push64(AT_RANDOM);
+  push64(0); push64(AT_SECURE);
+  push64(0); push64(AT_EUID);
+  push64(0); push64(AT_UID);
+  push64(0); push64(AT_EGID);
+  push64(0); push64(AT_GID);
+  push64(0); push64(AT_HWCAP);
+  push64(100); push64(AT_CLKTCK);
+
+  push64(at_base);  push64(AT_BASE); /* interpreter base */
+  push64(0x1000);   push64(AT_PAGESZ);
+  push64(at_phnum); push64(AT_PHNUM);
+  push64(at_phent); push64(AT_PHENT);
+  push64(at_phdr);  push64(AT_PHDR);
+  push64(at_entry); push64(AT_ENTRY); /* main executable entry */
+
+  /* envp */
   push64(0);
   for (int i = envc - 1; i >= 0; i--) push64(env_ptrs[i]);
+
+  /* argv */
   push64(0);
   for (int i = argc - 1; i >= 0; i--) push64(arg_ptrs[i]);
 
-  /* Push argc */
   push64((uint64_t)argc);
-  if ((sp & 0x0FULL) != 0) {
-    serial_printf("[K64] Stack alignment mismatch (expected 16-byte-aligned RSP for _start): sp=%p\r\n",
-                  (void *)(uintptr_t)sp);
-  }
+
   return sp;
 }
-
 
 static const char *basename_dir(const char *path, char *buf, size_t buf_sz) {
   if (!buf || buf_sz == 0)
@@ -804,218 +506,155 @@ static int elf64_find_library(const char *name, const char *base_dir,
 
 }
 
-static int exec64_from_buffer(const uint8_t *file_data, size_t file_size,
-                              char *const argv[], const char *image_path) {
-  elf64_image_t images[16];
-  elf64_image_t *image_ptrs[16];
-  int img_count = 0;
+static char **copy_string_array(char *const user_arr[]) {
+  if (!user_arr) return nullptr;
+  int count = 0;
+  while (user_arr[count]) count++;
+  char **karr = (char **)kmalloc((size_t)(count + 1) * sizeof(char *));
+  if (!karr) return nullptr;
+  for (int i = 0; i < count; i++) {
+    size_t len = strlen(user_arr[i]) + 1;
+    karr[i] = (char *)kmalloc(len);
+    if (karr[i]) memcpy(karr[i], user_arr[i], len);
+  }
+  karr[count] = nullptr;
+  return karr;
+}
 
+static void free_string_array(char **karr) {
+  if (!karr) return;
+  for (int i = 0; karr[i]; i++) kfree(karr[i]);
+  kfree(karr);
+}
+
+static int exec64_from_buffer(const uint8_t *file_data, size_t file_size,
+                              char *const argv[], char *const envp[], const char *image_path) {
+  task64_t *t = task64_current();
+  if (!t) return -1;
+
+  serial_write_string("[EXEC64] exec64_from_buffer enter\r\n");
+
+  char **kargv = copy_string_array(argv);
+  char **kenvp = copy_string_array(envp);
+
+  /* Copy file data to kernel heap so it remains accessible after PML4 switch */
+  uint8_t *kfile = (uint8_t *)kmalloc(file_size);
+  if (!kfile) {
+    free_string_array(kargv);
+    free_string_array(kenvp);
+    return -1;
+  }
+  memcpy(kfile, file_data, file_size);
+
+  serial_write_string("[EXEC64] data copied to kernel heap\r\n");
+
+  /* Allocate new PML4 while still running under boot/kernel PML4 */
+  uint64_t new_cr3 = paging64_new_user_pml4();
+  if (!new_cr3) {
+    kfree(kfile);
+    free_string_array(kargv);
+    free_string_array(kenvp);
+    return -1;
+  }
+
+  serial_write_string("[EXEC64] new PML4 allocated\r\n");
+
+  /* Switch g_pml4 AND CR3 to the new PML4 so that paging64_map_page
+   * will create user mappings in the new address space */
+  paging64_set_active_pml4(new_cr3);
+  t->cr3 = new_cr3;
+
+  serial_write_string("[EXEC64] switched to new PML4\r\n");
+
+  elf64_image_t images[2];
+  int img_count = 0;
   char interp_path[256];
   interp_path[0] = 0;
 
-  const elf64_ehdr_t *eh = (const elf64_ehdr_t *)file_data;
+  const elf64_ehdr_t *eh = (const elf64_ehdr_t *)kfile;
   uint64_t main_base = (eh && eh->e_type == ET_DYN) ? ELF64_DYN_BASE : 0;
 
-  if (load_elf64_image(file_data, file_size, main_base, &images[0],
-                       interp_path, sizeof(interp_path)) < 0) {
-    serial_write_string("[K64] ERROR: load_elf64_image fail\r\n");
+  serial_write_string("[EXEC64] loading main ELF\r\n");
+
+  if (load_elf64_image(kfile, file_size, main_base, &images[0], interp_path, sizeof(interp_path)) < 0) {
+    serial_write_string("[EXEC64] load_elf64_image FAILED\r\n");
+    kfree(kfile);
+    paging64_restore_boot_pml4();
     return -1;
   }
-
-  images[0].name = image_path ? image_path : "app";
-  images[0].is_main = 1;
-  image_ptrs[0] = &images[0];
   img_count = 1;
-
-  char base_dir_buf[256];
-  const char *base_dir = basename_dir(image_path, base_dir_buf,
-                                      sizeof(base_dir_buf));
+  serial_write_string("[EXEC64] main image loaded\r\n");
 
   int interp_index = -1;
   if (interp_path[0]) {
+    serial_write_string("[EXEC64] loading interpreter: ");
+    serial_write_string(interp_path);
+    serial_write_string("\r\n");
+
+    /* read_exec64_path returns ramfs pointers — still accessible since
+     * we preserved kernel identity mappings in the new PML4 */
     const uint8_t *interp_data = nullptr;
     size_t interp_size = 0;
     int interp_owned = 0;
-    if (read_exec64_path(interp_path, &interp_data, &interp_size,
-                         &interp_owned) < 0) {
-      serial_write_string("[K64] ERROR: could not read interpreter: ");
-      serial_write_string(interp_path);
-      serial_write_string("\r\n");
+    if (read_exec64_path(interp_path, &interp_data, &interp_size, &interp_owned) < 0) {
+      serial_write_string("[EXEC64] interpreter read FAILED\r\n");
+      kfree(kfile);
+      paging64_restore_boot_pml4();
       return -1;
     }
 
-
-    if (img_count >= (int)(sizeof(images) / sizeof(images[0])))
-      return -1;
-
-    uint64_t interp_base = ELF64_INTERP_BASE;
-    if (load_elf64_image(interp_data, interp_size, interp_base,
-                         &images[img_count], nullptr, 0) < 0) {
-      serial_write_string("[K64] ERROR: load_elf64_image interp fail\r\n");
+    if (load_elf64_image(interp_data, interp_size, ELF64_INTERP_BASE, &images[img_count], nullptr, 0) < 0) {
+      serial_write_string("[EXEC64] interpreter load FAILED\r\n");
+      kfree(kfile);
+      paging64_restore_boot_pml4();
       return -1;
     }
-
-    images[img_count].name = interp_path;
     images[img_count].owned = interp_owned;
-    image_ptrs[img_count] = &images[img_count];
     interp_index = img_count;
     img_count++;
+    serial_write_string("[EXEC64] interpreter loaded\r\n");
   }
 
-  /* If we have an interpreter, we skip eager loading of other libraries. */
-  /* The dynamic linker will handle it. */
-  if (interp_index < 0) {
-    for (int idx = 0; idx < img_count; idx++) {
-      const char *needed[32];
-      int needed_count = elf64_collect_needed(&images[idx], needed, 32);
-      for (int i = 0; i < needed_count; i++) {
-        const char *libname = needed[i];
-        if (!libname || elf64_is_loaded(images, img_count, libname))
-          continue;
-
-        const uint8_t *lib_data = nullptr;
-        size_t lib_size = 0;
-        int owned = 0;
-        if (elf64_find_library(libname, base_dir, &lib_data, &lib_size, &owned) <
-            0) {
-          serial_write_string("[K64] ERROR: could not find library: ");
-          serial_write_string(libname);
-          serial_write_string("\r\n");
-          return -1;
-        }
-
-        if (img_count >= (int)(sizeof(images) / sizeof(images[0])))
-          return -1;
-
-        const elf64_ehdr_t *lib_eh = (const elf64_ehdr_t *)lib_data;
-        uint64_t lib_base =
-            (lib_eh && lib_eh->e_type == ET_DYN)
-                ? (ELF64_DYN_BASE + 0x1000000ULL * (uint64_t)img_count)
-                : 0;
-
-        if (load_elf64_image(lib_data, lib_size, lib_base, &images[img_count],
-                             nullptr, 0) < 0) {
-          serial_write_string("[K64] ERROR: load_elf64_image lib fail\r\n");
-          return -1;
-        }
-        images[img_count].name = libname;
-        images[img_count].owned = owned;
-        image_ptrs[img_count] = &images[img_count];
-        img_count++;
-      }
-    }
-  }
-
-  /* 
-   * RELOCATE Images.
-   * If there is an interpreter, the kernel ONLY relocates the interpreter.
-   * The host binary images[0] is usually relocated by the interpreter.
-   * HOWEVER, we relocate both images[0] and images[interp_index] if they 
-   * are simple. But many interpreters are self-relocating. 
-   */
-  for (int i = 0; i < img_count; i++) {
-    /* If an interpreter exists, it will relocate the app in usermode. */
-    /* The kernel only needs to ensure the interpreter itself is relocated. */
-    if (interp_index >= 0 && i == 0) continue; 
-    
-    if (elf64_apply_relocs(&images[i], image_ptrs, img_count) < 0) {
-
-      serial_write_string("[K64] ERROR: elf64_apply_relocs fail for image: ");
-      serial_write_string(images[i].name ? images[i].name : "???");
-      serial_write_string("\r\n");
-      return -1;
-    }
-  }
-
+  kfree(kfile);
 
   uint64_t image_end = 0;
   for (int i = 0; i < img_count; i++) {
-    if (images[i].image_end > image_end)
-      image_end = images[i].image_end;
+    if (images[i].image_end > image_end) image_end = images[i].image_end;
   }
 
   uint64_t stack_top = ELF64_STACK_TOP;
-  if (map_user_stack(stack_top, ELF64_STACK_SIZE) < 0)
+  if (map_user_stack(stack_top, ELF64_STACK_SIZE) < 0) {
+    paging64_restore_boot_pml4();
     return -1;
-
-  uint64_t at_base = 0;
-  uint64_t entry = images[0].entry;
-  if (interp_index >= 0) {
-    at_base = images[interp_index].load_base;
-    entry = images[interp_index].entry;
   }
+  serial_write_string("[EXEC64] stack mapped\r\n");
 
-  uint64_t at_tls = 0;
-  if (images[0].tls_memsz > 0) {
-    uint64_t tls_base = ELF64_TLS_BASE;
-    if (images[0].tls_align &&
-        (images[0].tls_align & (images[0].tls_align - 1)) == 0) {
-      tls_base &= ~(images[0].tls_align - 1);
-    }
-    uint64_t tls_size = images[0].tls_memsz;
-    if (map_user_segment(tls_base, tls_size, PF_R | PF_W) < 0)
-      return -1;
-    if (images[0].tls_filesz > 0 &&
-        images[0].tls_offset + images[0].tls_filesz <= file_size) {
-      memcpy((void *)(uintptr_t)tls_base,
-             file_data + images[0].tls_offset,
-             (size_t)images[0].tls_filesz);
-    }
-    at_tls = tls_base;
-  }
-
-  uint64_t rsp = build_user_stack(argv ? argv : (char *const *)"", stack_top,
+  uint64_t at_base = (interp_index >= 0) ? images[interp_index].load_base : 0;
+  uint64_t entry = (interp_index >= 0) ? images[interp_index].entry : images[0].entry;
+  
+  uint64_t rsp = build_user_stack(kargv, kenvp, stack_top,
                                   images[0].entry, images[0].phdr,
                                   images[0].phent, images[0].phnum, at_base);
 
-
-  serial_write_string("[K64] user entry bytes: ");
-  const uint8_t *entry_ptr = (const uint8_t *)(uintptr_t)entry;
-  for (int i = 0; i < 16; ++i) {
-    serial_printf("%x ", (uint32_t)entry_ptr[i]);
-  }
-  serial_write_string("\r\n");
-  /*serial_write_string("[K64] DEBUG: NEW KERNEL IS EXECUTING EXEC64_FROM_BUFFER!\r\n");*/
-
-  task64_t *t = task64_current();
-  uint64_t *pml4 = paging64_get_pml4();
-
-  if (pml4) {
-    uint64_t pml4_i = (entry >> 39) & 0x1FF;
-    uint64_t pdpt_i = (entry >> 30) & 0x1FF;
-    uint64_t pd_i = (entry >> 21) & 0x1FF;
-    uint64_t pt_i = (entry >> 12) & 0x1FF;
-    uint64_t pml4e = pml4[pml4_i];
-    uint64_t *pdpt = (uint64_t *)(uintptr_t)(pml4e & ~0xFFFULL);
-    uint64_t pdpte = pdpt ? pdpt[pdpt_i] : 0;
-    uint64_t *pd = (uint64_t *)(uintptr_t)(pdpte & ~0xFFFULL);
-    uint64_t pde = pd ? pd[pd_i] : 0;
-    uint64_t *pt = (uint64_t *)(uintptr_t)(pde & ~0xFFFULL);
-    uint64_t pte = pt ? pt[pt_i] : 0;
-    serial_write_string("[K64] entry PTE: ");
-    serial_printf("%p", (void *)(uintptr_t)pte);
-    serial_write_string(" PML4E:");
-    serial_printf("%p", (void *)(uintptr_t)pml4e);
-    serial_write_string(" PDPTE:");
-    serial_printf("%p", (void *)(uintptr_t)pdpte);
-    serial_write_string(" PDE:");
-    serial_printf("%p", (void *)(uintptr_t)pde);
-    serial_write_string("\r\n");
-  }
+  free_string_array(kargv);
+  free_string_array(kenvp);
 
   user64_init_process(image_end);
-  if (image_path && t) {
+  if (image_path) {
     strncpy(t->exe_path, image_path, sizeof(t->exe_path) - 1);
     t->exe_path[sizeof(t->exe_path) - 1] = 0;
   }
   task64_set_user_stack(rsp);
 
+  serial_write_string("[EXEC64] entering user mode\r\n");
 
+  /* CR3 is already set to new_cr3 from paging64_set_active_pml4.
+   * user64_enter will jump to user space. */
   struct user64_context ctx;
   ctx.rip = entry;
   ctx.rsp = rsp;
   ctx.rflags = 0x202;
-  ctx.fs_base = at_tls;
+  ctx.fs_base = 0;
   ctx.gs_base = 0;
   user64_enter(&ctx);
   return 0;
@@ -1023,19 +662,82 @@ static int exec64_from_buffer(const uint8_t *file_data, size_t file_size,
 
 int exec64_from_module(void *start, uint64_t size, const char *image_path) {
   char *argv[] = {(char *)"module", nullptr};
-  return exec64_from_buffer((const uint8_t *)start, (size_t)size, argv,
-                            image_path);
+  char *envp[] = {nullptr};
+  return exec64_from_buffer((const uint8_t *)start, (size_t)size, argv, envp, image_path);
 }
 
+int execve_linux_x86_64_full(const char *filename, char *const argv[], char *const envp[]) {
+  if (!filename || !*filename)
+    return -2;
 
-int execve_linux_x86_64_full(const char *filename, char *const argv[]) {
   size_t file_size = 0;
   int owned = 0;
-  const uint8_t *file_data = read_exec64(filename, &file_size, &owned);
-  if (!file_data)
-    return -1;
-  int r = exec64_from_buffer(file_data, file_size, argv, filename);
-  if (owned)
-    kfree((void *)file_data);
-  return r;
+  const uint8_t *file_data = nullptr;
+  char chosen_path[256];
+  chosen_path[0] = 0;
+
+  const char *path_env = env_lookup(envp, "PATH");
+  char *fallback_envp[3];
+  if (!path_env || !*path_env) {
+    fallback_envp[0] = (char *)"PATH=/usr/bin:/usr/lib/xorg:/bin:/usr/lib";
+    fallback_envp[1] = (char *)"HOME=/root";
+    fallback_envp[2] = nullptr;
+    envp = fallback_envp;
+    path_env = fallback_envp[0] + 5;
+  }
+
+  if (strchr(filename, '/')) {
+    file_data = read_exec64(filename, &file_size, &owned);
+    if (!file_data)
+      return -2;
+    int r = exec64_from_buffer(file_data, file_size, argv, envp, filename);
+    if (owned) kfree((void *)file_data);
+    return r;
+  }
+
+  if (path_env && *path_env) {
+    const char *p = path_env;
+    while (*p) {
+      const char *start = p;
+      while (*p && *p != ':')
+        p++;
+      size_t len = (size_t)(p - start);
+      if (len > 0 && len < sizeof(chosen_path)) {
+        char dir[256];
+        memcpy(dir, start, len);
+        dir[len] = 0;
+        if (exec64_try_path(dir, filename, &file_data, &file_size, &owned,
+                            chosen_path, sizeof(chosen_path)) == 0) {
+          int r = exec64_from_buffer(file_data, file_size, argv, envp, chosen_path);
+          if (owned) kfree((void *)file_data);
+          return r;
+        }
+      }
+      if (*p == ':')
+        p++;
+    }
+  }
+
+  const char *fallbacks[] = {"/usr/bin", "/usr/lib/xorg", "/bin", "/usr/lib", nullptr};
+  for (int i = 0; fallbacks[i]; i++) {
+    if (exec64_try_path(fallbacks[i], filename, &file_data, &file_size, &owned,
+                        chosen_path, sizeof(chosen_path)) == 0) {
+      int r = exec64_from_buffer(file_data, file_size, argv, envp, chosen_path);
+      if (owned) kfree((void *)file_data);
+      return r;
+    }
+  }
+
+  if (strcmp(filename, "X") == 0) {
+    const char *xalts[] = {"/usr/lib/xorg/Xorg", "/usr/bin/Xorg", nullptr};
+    for (int i = 0; xalts[i]; i++) {
+      if (read_exec64_path(xalts[i], &file_data, &file_size, &owned) == 0) {
+        int r = exec64_from_buffer(file_data, file_size, argv, envp, xalts[i]);
+        if (owned) kfree((void *)file_data);
+        return r;
+      }
+    }
+  }
+
+  return -2;
 }

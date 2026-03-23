@@ -183,9 +183,10 @@ static uint64_t sys_yield64(uint64_t, uint64_t, uint64_t, uint64_t,
 
 static uint64_t sys_sleep64(uint64_t ms, uint64_t, uint64_t, uint64_t,
                             uint64_t, uint64_t) {
-  volatile uint64_t spins = ms * 10000ULL;
-  while (spins--)
-    asm volatile("");
+  if (ms > 0) {
+    /* For now, just yield. Real sleep with timer would be better. */
+    task64_yield();
+  }
   return 0;
 }
 
@@ -266,19 +267,10 @@ void syscall64_set_file(int fd, file_t *f) {
   g_files[fd] = f;
 }
 
-uint64_t syscall64_dispatch(uint64_t num, uint64_t a1, uint64_t a2,
-                            uint64_t a3, uint64_t a4, uint64_t a5,
-                            uint64_t a6) {
-  if (g_linux_abi_mode) {
-    return (uint64_t)linux_syscall_dispatch_x86_64(num, a1, a2, a3, a4, a5, a6);
-  }
-
-  return syscall64_dispatch_native(num, a1, a2, a3, a4, a5, a6);
-}
-
-uint64_t syscall64_dispatch_native(uint64_t num, uint64_t a1, uint64_t a2,
-                                   uint64_t a3, uint64_t a4, uint64_t a5,
-                                   uint64_t a6) {
+extern "C" uint64_t syscall64_dispatch_native(syscall64_state_t *state, uint64_t num, uint64_t a1,
+                                   uint64_t a2, uint64_t a3, uint64_t a4,
+                                   uint64_t a5, uint64_t a6) {
+  (void)state;
   if (num >= (uint64_t)k_syscall_table_size || !g_syscall_table[num]) {
     serial_write_string("[K64] unknown syscall\r\n");
     vga_puts_k64("[K64] unknown syscall\n");
@@ -287,14 +279,34 @@ uint64_t syscall64_dispatch_native(uint64_t num, uint64_t a1, uint64_t a2,
   return g_syscall_table[num](a1, a2, a3, a4, a5, a6);
 }
 
+extern "C" uint64_t syscall64_dispatch(syscall64_state_t *state, uint64_t num, uint64_t a1, uint64_t a2,
+                            uint64_t a3, uint64_t a4, uint64_t a5,
+                            uint64_t a6) {
+  if (g_linux_abi_mode) {
+    return (uint64_t)linux_syscall_dispatch_x86_64((void *)state, num, a1, a2, a3,
+                                                   a4, a5, a6);
+  }
+
+  return syscall64_dispatch_native(state, num, a1, a2, a3, a4, a5, a6);
+}
+
 extern "C" void __syscall_handler(syscall64_state_t *state) {
   if (!state)
     return;
   if (auto *t = task64_current()) {
     t->rsp = (uint64_t)(uintptr_t)state - 8;
+#if 0
+    if (t->id > 2) {
+      serial_write_string("[K64-raw] Task ");
+      serial_write_hex(t->id);
+      serial_write_string(" syscall rax=");
+      serial_write_hex(state->rax);
+      serial_write_string("\r\n");
+    }
+#endif
   }
   g_syscall_state = state;
-  state->rax = syscall64_dispatch(state->rax, state->rdi, state->rsi,
+  state->rax = syscall64_dispatch(state, state->rax, state->rdi, state->rsi,
                                   state->rdx, state->r10, state->r8, state->r9);
   g_syscall_state = nullptr;
 }

@@ -441,7 +441,7 @@ int syscall_dispatch(uint32_t num, uint32_t a1, uint32_t a2, uint32_t a3,
     return linux_syscall_dispatch_i386(num, a1, a2, a3, a4, a5, a6);
   }
   if (cur && cur->abi == TASK_ABI_LINUX_X86_64) {
-    return linux_syscall_dispatch_x86_64(num, a1, a2, a3, a4, a5, a6);
+    return linux_syscall_dispatch_x86_64(nullptr, num, a1, a2, a3, a4, a5, a6);
   }
   return syscall_dispatch_chrys(num, a1, a2, a3, a4, a5, a6);
 }

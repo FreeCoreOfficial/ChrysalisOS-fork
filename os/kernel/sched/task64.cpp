@@ -1,11 +1,13 @@
 #include "task64.h"
+#include "../drivers/serial.h"
 #include "../mem/kmalloc.h"
-#include "../hardware/msr.h"
 #include "../arch/x86_64/gdt64.h"
+#include "../hardware/msr.h"
 #include "../string.h"
 #include <stddef.h>
 
 extern "C" void switch64(uint64_t *old_rsp, uint64_t *new_rsp);
+#include "../arch/x86_64/paging64.h"
 
 static task64_t *g_task64_list = nullptr;
 static task64_t *g_task64_current = nullptr;
@@ -24,19 +26,22 @@ static inline void wrmsr64(uint32_t msr, uint64_t value) {
 static inline void task64_set_kernel_gs(task64_t *t) {
   if (!t)
     return;
-  wrmsr64(MSR_KERNEL_GS_BASE, (uint64_t)(uintptr_t)&t->gs);
+  /* 
+   * Active GS.Base (MSR 0xC0000101) must point to kernel task data while in kernel.
+   * Hidden KERNEL_GS_BASE (MSR 0xC0000102) must point to user GS base.
+   * swapgs swaps them.
+   */
+  wrmsr64(MSR_GS_BASE, (uint64_t)(uintptr_t)&t->gs);
+  wrmsr64(MSR_KERNEL_GS_BASE, t->gs.user_gs_base); // User GS base (usually 0 unless TLS used it)
   wrmsr64(MSR_FS_BASE, t->gs.fs_base);
   tss64_set_rsp0(t->gs.kernel_stack);
-  /* NOTE: do NOT overwrite IST1 here. IST1 is a dedicated double-fault
-   * stack set once in kernel_main64 via tss64_set_ist1(). Clobbering it
-   * per-task causes #DF to land on the same stack as the primary fault
-   * handler, producing a corrupted/shifted exception frame. */
 }
 
 static void task64_idle(void *arg) {
   (void)arg;
   for (;;) {
-    asm volatile("hlt");
+    task64_yield();
+    asm volatile("pause");
   }
 }
 
@@ -100,9 +105,13 @@ task64_t *task64_create(const char *name, void (*entry)(void *), void *arg) {
   t->gs.kernel_stack = (uint64_t)(uintptr_t)(stack + k_task64_stack_size);
   t->gs.user_stack = 0;
   t->gs.fs_base = 0;
+  t->gs.user_gs_base = 0;
   t->exe_path[0] = 0;
   t->uid = t->gid = 0;
   t->euid = t->egid = 0;
+  t->parent_id = 0;
+  t->exit_code = 0;
+  t->cr3 = (uint64_t)(uintptr_t)paging64_get_pml4();
 
   t->user_brk_start = 0;
   t->user_brk_end = 0;
@@ -147,15 +156,35 @@ void task64_yield(void) {
   if (next == prev)
     return;
 
+  /* if (next->id > 2) { ... } */
+
   g_task64_current = next;
   next->state = TASK64_RUNNING;
   if (prev->state == TASK64_RUNNING)
     prev->state = TASK64_READY;
+
+  /* 
+   * Crucial: Set the NEW task's GS base before switching!
+   * New tasks start at their entry points and won't execute the code after switch64.
+   */
+  task64_set_kernel_gs(next);
+  paging64_set_pml4(next->cr3);
+
   switch64(&prev->rsp, &next->rsp);
+  
+  /* 
+   * For existing tasks that already yielded once, we also need to ensure 
+   * their GS is set when they resume here.
+   */
   task64_set_kernel_gs(g_task64_current);
 }
 
 task64_t *task64_current(void) { return g_task64_current; }
+
+extern "C" uint64_t task64_get_cr3(void) {
+  if (g_task64_current) return g_task64_current->cr3;
+  return 0;
+}
 
 void task64_set_user_stack(uint64_t user_rsp) {
   if (!g_task64_current)
@@ -163,3 +192,17 @@ void task64_set_user_stack(uint64_t user_rsp) {
   g_task64_current->gs.user_stack = user_rsp;
   task64_set_kernel_gs(g_task64_current);
 }
+
+task64_t *task64_find_by_id(uint64_t id) {
+  if (!g_task64_list)
+    return nullptr;
+  task64_t *t = g_task64_list;
+  do {
+    if (t->id == id)
+      return t;
+    t = t->next;
+  } while (t && t != g_task64_list);
+  return nullptr;
+}
+
+task64_t *task64_get_list(void) { return g_task64_list; }

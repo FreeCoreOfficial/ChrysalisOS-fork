@@ -698,6 +698,16 @@ extern "C" void isr64_handler(uint64_t *stack) {
     ss  = stack[6];
   }
 
+  if ((cs & 3) == 3) {
+    serial_write_string("\r\n[K64] User fault: killing task\r\n");
+    if (task64_t *t = task64_current()) {
+      t->state = TASK64_ZOMBIE;
+      t->exit_code = 128 + (int)vec;
+    }
+    task64_yield();
+    return;
+  }
+
   uint64_t cr2 = 0;
   asm volatile("mov %%cr2, %0" : "=r"(cr2));
 

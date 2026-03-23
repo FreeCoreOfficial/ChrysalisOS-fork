@@ -1,8 +1,6 @@
 BITS 64
 global syscall64_entry
 extern __syscall_handler
-extern g_syscall_user_rsp
-extern g_tss64_rsp0
 
 section .text
 
@@ -26,19 +24,18 @@ section .text
 ; Double Fault (#DF, VEC=8).
 ; -----------------------------------------------------------------------------
 syscall64_entry:
-    ; Swap GS to access kernel per-CPU data (KernelGSBase <-> GS.Base)
+    ; Swap GS to access kernel task data (GS.Base contains &task->gs)
     swapgs
 
-    ; Save user stack pointer to global var (could be per-CPU in future)
-    mov [rel g_syscall_user_rsp], rsp
+    ; Save user stack pointer to task state
+    mov [gs:8], rsp
 
-    ; Switch to kernel stack. We use the same stack top as the TSS RSP0.
-    mov rsp, [rel g_tss64_rsp0]
+    ; Switch to kernel stack for this task
+    mov rsp, [gs:0]
 
-    ; Safety: if g_tss64_rsp0 is somehow 0, jumping to a hard loop/hlt is
-    ; better than taking a recursive double fault at RSP=0.
+    ; Safety: if kernel stack is null, panic.
     test rsp, rsp
-    jz .panic_no_stack
+    jz syscall64_panic_no_stack
 
     ; Align stack for ABI before calling C (ensure 16-byte alignment).
     ; We are entering with an aligned stack top, but after pushing registers
@@ -91,7 +88,9 @@ syscall64_entry:
     ; Offset of R11 is 48, offset of RCX is 112
     mov [rsp + 48], r13
     mov [rsp + 112], r12
-
+    
+global syscall64_exit
+syscall64_exit:
     ; Restore segments and registers in strictly reverse order.
     pop rax
     mov ds, eax
@@ -117,7 +116,7 @@ syscall64_entry:
     add rsp, 8
 
     ; Restore user stack pointer
-    mov rsp, [rel g_syscall_user_rsp]
+    mov rsp, [gs:8]
 
     ; Swap GS back to user level
     swapgs
@@ -130,7 +129,7 @@ syscall64_entry:
     ;  4. Restore RFLAGS from R11
     o64 sysret
 
-.panic_no_stack:
+syscall64_panic_no_stack:
     ; We arrived at syscall entry with a null kernel stack pointer.
     ; Halt to avoid a double/triple fault looping.
     cli

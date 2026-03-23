@@ -22,3 +22,6 @@ os/build64
 xorg.md
 #trying to debug the fking sys64 linuxabi
 symbols.txt
+/home/mihai/Desktop/ChrysalisOS/info/dwm
+info/dwm/*
+symbols_new.txt
