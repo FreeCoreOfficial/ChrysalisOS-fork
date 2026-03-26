@@ -144,6 +144,31 @@ _start64:
     or eax, (3 << 9)            ; Set OSFXSR (bit 9) and OSXMMEXCPT (bit 10)
     mov cr4, eax
 
+    ; Enable FSGSBASE if supported (CPUID.7:EBX[0])
+    mov eax, 7
+    xor ecx, ecx
+    cpuid
+    test ebx, 1
+    jz .skip_fsgsbase
+    mov eax, cr4
+    or eax, 1 << 16             ; CR4.FSGSBASE
+    mov cr4, eax
+.skip_fsgsbase:
+
+    ; Enable XSAVE/XGETBV for userland if CPU supports OSXSAVE
+    mov eax, 1
+    cpuid
+    test ecx, 1 << 27           ; CPUID.1:ECX.OSXSAVE
+    jz .skip_xsave
+    mov eax, cr4
+    or eax, 1 << 18             ; CR4.OSXSAVE
+    mov cr4, eax
+    xor ecx, ecx                ; XCR0
+    mov eax, 0x3                ; x87 + SSE
+    xor edx, edx
+    xsetbv
+.skip_xsave:
+
     ; Debug marker D
     mov edi, 0xB8000
     mov ax, 0x1F44            ; 'D'

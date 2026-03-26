@@ -299,6 +299,8 @@ OBJS64 = \
 	$(BUILD64)/fs/devfs.o \
 	$(BUILD64)/fs/procfs.o \
 	$(BUILD64)/fs/pipe.o \
+	$(BUILD64)/video/fb_console.o \
+	$(BUILD64)/vt/vt.o \
 	$(BUILD64)/video/kms.o \
 	$(BUILD64)/linux_compat/linux_syscall_x86_64.o \
 	$(BUILD64)/sched/task64.o \
@@ -307,6 +309,7 @@ OBJS64 = \
 	$(BUILD64)/video/gpu.o \
 	$(BUILD64)/video/gpu_bochs.o \
 	$(BUILD64)/hardware/pci.o \
+	$(BUILD64)/colors/cl.o \
 	$(BUILD64)/input/input.o \
 	$(BUILD64)/time/timer.o \
 
@@ -599,7 +602,15 @@ $(BUILD64)/fs/pipe.o: kernel/fs/pipe/pipe.c | dirs64
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS64) -c $< -o $@
 
+$(BUILD64)/shell/shell.o: kernel/shell/shell.cpp | dirs64
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS64) -c $< -o $@
+
 $(BUILD64)/video/kms.o: kernel/video/kms.c | dirs64
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS64) -c $< -o $@
+
+$(BUILD64)/video/fb_console.o: kernel/video/fb_console.c | dirs64
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS64) -c $< -o $@
 
@@ -612,6 +623,14 @@ $(BUILD64)/video/gpu.o: kernel/video/gpu.c | dirs64
 	$(CC) $(CFLAGS64) -c $< -o $@
 
 $(BUILD64)/video/gpu_bochs.o: kernel/video/gpu_bochs.c | dirs64
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS64) -c $< -o $@
+
+$(BUILD64)/vt/vt.o: kernel/vt/vt.c | dirs64
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS64) -c $< -o $@
+
+$(BUILD64)/colors/cl.o: kernel/colors/cl.c | dirs64
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS64) -c $< -o $@
 
@@ -837,7 +856,7 @@ $(BUILD)/arch/x86_64/longmode.o: kernel/arch/x86_64/longmode.cpp | dirs
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(BUILD64)/arch/multiboot2_header64.o: arch/i386/multiboot2_header.c | dirs64
-	$(CC) $(CFLAGS64) -DNO_FRAMEBUFFER -c $< -o $@
+	$(CC) $(CFLAGS64) -c $< -o $@
 
 $(BUILD64)/arch/gdt64.o: kernel/arch/x86_64/gdt64.cpp | dirs64
 	@mkdir -p $(dir $@)

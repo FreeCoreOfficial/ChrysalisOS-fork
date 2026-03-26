@@ -77,10 +77,10 @@ void task64_init(void) {
   g_task64_current = nullptr;
   g_task64_next_id = 1;
   wrmsr64(MSR_GS_BASE, 0);
-  task64_create("idle", task64_idle, nullptr);
+  task64_create("idle", task64_idle, nullptr, TASK64_READY);
 }
 
-task64_t *task64_create(const char *name, void (*entry)(void *), void *arg) {
+task64_t *task64_create(const char *name, void (*entry)(void *), void *arg, task64_state_t initial_state) {
   task64_t *t = (task64_t *)kmalloc(sizeof(task64_t));
   if (!t)
     return nullptr;
@@ -96,13 +96,15 @@ task64_t *task64_create(const char *name, void (*entry)(void *), void *arg) {
     strcpy(t->name, "task");
   }
 
-  uint8_t *stack = (uint8_t *)kmalloc(k_task64_stack_size);
+  void *stack = kmalloc(k_task64_stack_size);
   if (!stack) {
     kfree(t);
     return nullptr;
   }
-  t->rsp = (uint64_t)(uintptr_t)task64_init_stack(stack);
-  t->gs.kernel_stack = (uint64_t)(uintptr_t)(stack + k_task64_stack_size);
+  memset(stack, 0, k_task64_stack_size);
+  t->kernel_stack_base = stack;
+  t->rsp = (uint64_t)(uintptr_t)task64_init_stack((uint8_t *)stack);
+  t->gs.kernel_stack = (uint64_t)(uintptr_t)stack + k_task64_stack_size;
   t->gs.user_stack = 0;
   t->gs.fs_base = 0;
   t->gs.user_gs_base = 0;
@@ -111,6 +113,7 @@ task64_t *task64_create(const char *name, void (*entry)(void *), void *arg) {
   t->euid = t->egid = 0;
   t->parent_id = 0;
   t->exit_code = 0;
+  t->state = initial_state;
   t->cr3 = (uint64_t)(uintptr_t)paging64_get_pml4();
 
   t->user_brk_start = 0;

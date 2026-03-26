@@ -72,22 +72,21 @@ syscall64_entry:
     mov ds, eax
     mov es, eax
 
-    ; Protect RCX (user RIP) and R11 (user RFLAGS) across the C call.
-    ; C calling convention guarantees R12 and R13 are callee-saved.
-    mov r12, rcx
-    mov r13, r11
-
     ; Call the C handler.
     ; RDI receives a pointer to the syscall64_state_t struct on the stack.
     xor rbp, rbp
     mov rdi, rsp
     call __syscall_handler
 
-    ; Write the preserved user RIP/RFLAGS back to their exact slots on the stack
-    ; so the standard symmetric pop sequence restores them properly.
-    ; Offset of R11 is 48, offset of RCX is 112
-    mov [rsp + 48], r13
-    mov [rsp + 112], r12
+    ; Sanity check: RCX must be canonical before SYSRET
+    mov rax, [rsp + 112]
+    sar rax, 47
+    cmp rax, 0
+    je .rcx_ok
+    cmp rax, -1
+    je .rcx_ok
+    jmp syscall64_panic_no_stack
+.rcx_ok:
     
 global syscall64_exit
 syscall64_exit:

@@ -6,7 +6,13 @@
 #include "vt.h"
 #include "../video/fb_console.h"
 #include "../drivers/serial.h"
+#ifndef __x86_64__
 #include "../shell/shell.h"
+#else
+static void shell_init_context(int id) { (void)id; }
+static void shell_set_active_context(int id) { (void)id; }
+static void shell_handle_char(char c) { (void)c; }
+#endif
 #include "../string.h"
 #include "../colors/cl.h"
 

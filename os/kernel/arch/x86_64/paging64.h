@@ -17,6 +17,7 @@ void paging64_set_pml4(uint64_t cr3);
 uint64_t paging64_new_user_pml4(void);
 void paging64_set_active_pml4(uint64_t cr3);
 void paging64_restore_boot_pml4(void);
+void paging64_dump_pte(uint64_t virt);
 
 #ifdef __cplusplus
 }

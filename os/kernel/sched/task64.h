@@ -10,6 +10,7 @@ typedef enum {
   TASK64_READY,
   TASK64_RUNNING,
   TASK64_SLEEPING,
+  TASK64_WAITING,
   TASK64_ZOMBIE
 } task64_state_t;
 
@@ -23,6 +24,7 @@ typedef struct task64 {
     uint64_t fs_base;
     uint64_t user_gs_base;
   } gs;
+  void *kernel_stack_base;
   uint64_t user_brk_start;
   uint64_t user_brk_end;
   uint64_t user_mmap_base;
@@ -32,7 +34,7 @@ typedef struct task64 {
     int prot;
     int flags;
     int used;
-  } vmas[64];
+  } vmas[128];
   void (*entry)(void *arg);
   void *arg;
   task64_state_t state;
@@ -65,7 +67,7 @@ typedef struct task64 {
 
 
 void task64_init(void);
-task64_t *task64_create(const char *name, void (*entry)(void *), void *arg);
+task64_t *task64_create(const char *name, void (*entry)(void *), void *arg, task64_state_t initial_state);
 void task64_start(task64_t *first);
 void task64_yield(void);
 task64_t *task64_current(void);

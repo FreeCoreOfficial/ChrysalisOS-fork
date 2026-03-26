@@ -48,6 +48,7 @@ int main(void) {
     setenv("DISPLAY", ":0", 1);
     setenv("HOME",    "/root", 1);
     setenv("TERM",    "xterm", 1);
+    setenv("XDG_RUNTIME_DIR", "/tmp", 1);
 
     /* ---- fork + exec ---- */
     pid_t pid = fork();
@@ -59,14 +60,26 @@ int main(void) {
 
     if (pid == 0) {
         /* Child process: launch xinit */
-        printf("[M5-child] Executing /usr/bin/xinit...\n");
+        printf("[M5-child] Executing /usr/bin/xinit with Xorg args...\n");
 
-        char *argv[] = { "xinit", NULL };
+        char *argv[] = {
+            "xinit",
+            "/usr/bin/dwm",
+            "--",
+            "/usr/lib/xorg/Xorg",
+            ":0",
+            "-retro",
+            "-noreset",
+            "-config", "/etc/X11/xorg.conf",
+            "-logfile", "/var/log/Xorg.0.log",
+            NULL
+        };
         char *envp[] = {
             "PATH=/usr/bin:/bin:/usr/sbin:/sbin",
             "DISPLAY=:0",
             "HOME=/root",
             "TERM=xterm",
+            "XDG_RUNTIME_DIR=/tmp",
             NULL
         };
 

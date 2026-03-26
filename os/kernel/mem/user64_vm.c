@@ -2,6 +2,7 @@
 #include "../arch/x86_64/paging64.h"
 #include "../sched/task64.h"
 #include "../string.h"
+#include "../drivers/serial.h"
 
 #define USER64_PAGE_SIZE 0x1000ULL
 #define USER64_HEAP_BASE 0x40000000ULL
@@ -10,7 +11,7 @@
 #define USER64_PROT_WRITE 0x2
 #define USER64_MAP_FIXED 0x10
 
-#define USER64_VMA_MAX 64
+#define USER64_VMA_MAX 128
 #define USER64_SIGTRAMP_ADDR 0x000000007fff0000ULL
 
 static uint64_t align_up(uint64_t v) {
@@ -44,6 +45,7 @@ static int vma_add(task64_t *t, uint64_t start, uint64_t end, int prot,
       return 0;
     }
   }
+  serial_write_string("[VMA] Error: VMA table full!\r\n");
   return -1;
 }
 
@@ -157,7 +159,7 @@ uint64_t user64_brk(uint64_t new_brk) {
       return old;
     if (paging64_map_page(va, phys, 0x7) < 0)
       return old;
-    memset((void *)(uintptr_t)phys, 0, USER64_PAGE_SIZE);
+    memset((void *)(uintptr_t)va, 0, USER64_PAGE_SIZE);
   }
   t->user_brk_end = new_brk;
   return t->user_brk_end;
@@ -202,7 +204,54 @@ uint64_t user64_mmap(uint64_t addr, uint64_t len, int prot, int flags) {
       return (uint64_t)-1;
     if (paging64_map_page(va, phys, map_flags) < 0)
       return (uint64_t)-1;
-    memset((void *)(uintptr_t)phys, 0, USER64_PAGE_SIZE);
+    memset((void *)(uintptr_t)va, 0, USER64_PAGE_SIZE);
+  }
+
+  if (addr + size > t->user_mmap_base)
+    t->user_mmap_base = addr + size;
+  if (vma_add(t, addr, addr + size, prot, flags) < 0)
+    return (uint64_t)-1;
+  return addr;
+}
+
+uint64_t user64_mmap_phys(uint64_t addr, uint64_t len, int prot, int flags,
+                          uint64_t phys_base) {
+  task64_t *t = task64_current();
+  if (!t || len == 0)
+    return (uint64_t)-1;
+
+  uint64_t size = align_up(len);
+  if (addr == 0) {
+    addr = align_up(t->user_mmap_base);
+    int guard = 0;
+    while (vma_overlap(t, addr, addr + size) && guard++ < 64) {
+      addr += size;
+    }
+  } else {
+    if (addr & (USER64_PAGE_SIZE - 1))
+      return (uint64_t)-1;
+    if (!(flags & USER64_MAP_FIXED))
+      addr = align_up(addr);
+  }
+
+  if (flags & USER64_MAP_FIXED) {
+    for (uint64_t va = addr; va < addr + size; va += USER64_PAGE_SIZE)
+      paging64_unmap_page(va);
+    vma_remove_range(t, addr, addr + size);
+  } else {
+    if (vma_overlap(t, addr, addr + size))
+      return (uint64_t)-1;
+  }
+
+  uint64_t map_flags = 0x5; /* P | USER */
+  if (prot & USER64_PROT_WRITE)
+    map_flags |= 0x2; /* RW */
+
+  uint64_t phys = align_down(phys_base);
+  for (uint64_t va = addr; va < addr + size; va += USER64_PAGE_SIZE) {
+    if (paging64_map_page(va, phys, map_flags) < 0)
+      return (uint64_t)-1;
+    phys += USER64_PAGE_SIZE;
   }
 
   if (addr + size > t->user_mmap_base)
@@ -259,7 +308,7 @@ uint64_t user64_get_sigtramp(void) {
       0x0F, 0x0B                                /* ud2 */
   };
 
-  memcpy((void *)(uintptr_t)phys, tramp_code, sizeof(tramp_code));
+  memcpy((void *)(uintptr_t)USER64_SIGTRAMP_ADDR, tramp_code, sizeof(tramp_code));
   paging64_protect_page(USER64_SIGTRAMP_ADDR, 0x5);
   g_sigtramp_ready = 1;
   return USER64_SIGTRAMP_ADDR;

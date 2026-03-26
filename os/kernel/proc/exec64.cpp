@@ -354,6 +354,18 @@ static uint64_t build_user_stack(char **argv, char **envp, uint64_t stack_top,
 
   sp = sp & ~0xFULL; /* Initial alignment */
 
+  int auxv_entries = 15; /* includes AT_NULL; add AT_EXECFN if argc>0 */
+  if (argc > 0)
+    auxv_entries++;
+
+  uint64_t total_entries = 1 + (uint64_t)argc + 1 + (uint64_t)envc + 1 +
+                           (uint64_t)auxv_entries * 2;
+  uint64_t total_bytes = total_entries * 8;
+
+  if (((sp - total_bytes) & 0xFULL) != 0) {
+    sp -= 8; /* padding so final RSP is 16-byte aligned at entry */
+  }
+
   auto push64 = [&](uint64_t v) {
     sp -= 8;
     *(uint64_t *)(uintptr_t)sp = v;
@@ -399,6 +411,80 @@ static uint64_t build_user_stack(char **argv, char **envp, uint64_t stack_top,
   push64((uint64_t)argc);
 
   return sp;
+}
+
+static bool is_canonical_addr(uint64_t addr) {
+  uint64_t top = addr >> 48;
+  return (top == 0) || (top == 0xFFFF);
+}
+
+static void dump_user_stack_layout(uint64_t rsp) {
+  uint64_t *sp = (uint64_t *)(uintptr_t)rsp;
+  uint64_t argc = sp[0];
+  serial_write_string("[EXEC64] stack argc=");
+  serial_printf("%u", (unsigned)argc);
+  serial_write_string("\r\n");
+
+  uint64_t *argv = sp + 1;
+  for (uint64_t i = 0; i < argc; i++) {
+    uint64_t ptr = argv[i];
+    serial_write_string("[EXEC64] argv[");
+    serial_printf("%u", (unsigned)i);
+    serial_write_string("]=");
+    serial_printf("%p", (void *)(uintptr_t)ptr);
+    if (!is_canonical_addr(ptr)) {
+      serial_write_string(" (NON-CANON)\r\n");
+      return;
+    }
+    serial_write_string(" \"");
+    const char *s = (const char *)(uintptr_t)ptr;
+    for (int j = 0; j < 64 && s[j]; j++) {
+      char c = s[j];
+      if (c < 32 || c > 126) c = '.';
+      serial_write(c);
+    }
+    serial_write_string("\"\r\n");
+  }
+
+  uint64_t *envp = argv + argc + 1;
+  uint64_t envc = 0;
+  while (envp[envc]) {
+    uint64_t ptr = envp[envc];
+    serial_write_string("[EXEC64] envp[");
+    serial_printf("%u", (unsigned)envc);
+    serial_write_string("]=");
+    serial_printf("%p", (void *)(uintptr_t)ptr);
+    if (!is_canonical_addr(ptr)) {
+      serial_write_string(" (NON-CANON)\r\n");
+      return;
+    }
+    serial_write_string(" \"");
+    const char *s = (const char *)(uintptr_t)ptr;
+    for (int j = 0; j < 64 && s[j]; j++) {
+      char c = s[j];
+      if (c < 32 || c > 126) c = '.';
+      serial_write(c);
+    }
+    serial_write_string("\"\r\n");
+    envc++;
+    if (envc > 64) break;
+  }
+
+  uint64_t *auxv = envp + envc + 1;
+  for (int i = 0; i < 32; i++) {
+    uint64_t type = auxv[i * 2];
+    uint64_t val = auxv[i * 2 + 1];
+    serial_write_string("[EXEC64] auxv type=");
+    serial_printf("%u", (unsigned)type);
+    serial_write_string(" val=");
+    serial_printf("%p", (void *)(uintptr_t)val);
+    if ((type == AT_PHDR || type == AT_ENTRY || type == AT_BASE || type == AT_RANDOM || type == AT_EXECFN) &&
+        !is_canonical_addr(val)) {
+      serial_write_string(" (NON-CANON)");
+    }
+    serial_write_string("\r\n");
+    if (type == AT_NULL) break;
+  }
 }
 
 static const char *basename_dir(const char *path, char *buf, size_t buf_sz) {
@@ -636,6 +722,16 @@ static int exec64_from_buffer(const uint8_t *file_data, size_t file_size,
                                   images[0].entry, images[0].phdr,
                                   images[0].phent, images[0].phnum, at_base);
 
+  serial_write_string("[EXEC64] stack built: rsp=");
+  serial_printf("0x%x", rsp);
+  serial_write_string(" align=");
+  serial_printf("%u", (unsigned)(rsp & 0xF));
+  serial_write_string(" entry=");
+  serial_printf("0x%x", entry);
+  serial_write_string("\r\n");
+
+  dump_user_stack_layout(rsp);
+
   free_string_array(kargv);
   free_string_array(kenvp);
 
@@ -646,17 +742,13 @@ static int exec64_from_buffer(const uint8_t *file_data, size_t file_size,
   }
   task64_set_user_stack(rsp);
 
-  serial_write_string("[EXEC64] entering user mode\r\n");
+  serial_write_string("[EXEC64] entering user mode: rip=");
+  serial_printf("%p", (void *)entry);
+  serial_write_string(" rsp=");
+  serial_printf("%p", (void *)rsp);
+  serial_write_string("\r\n");
 
-  /* CR3 is already set to new_cr3 from paging64_set_active_pml4.
-   * user64_enter will jump to user space. */
-  struct user64_context ctx;
-  ctx.rip = entry;
-  ctx.rsp = rsp;
-  ctx.rflags = 0x202;
-  ctx.fs_base = 0;
-  ctx.gs_base = 0;
-  user64_enter(&ctx);
+  user64_enter(entry, rsp, 0x202, 0, 0);
   return 0;
 }
 

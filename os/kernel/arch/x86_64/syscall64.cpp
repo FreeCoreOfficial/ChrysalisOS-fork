@@ -161,17 +161,20 @@ static uint64_t sys_ioctl64(uint64_t fd, uint64_t cmd, uint64_t arg,
 
 static uint64_t sys_exit64(uint64_t code, uint64_t, uint64_t, uint64_t,
                            uint64_t, uint64_t) {
-  (void)code;
-  serial_write_string("[K64] hello64 module exited\r\n");
-  vga_puts_k64("[K64] hello64 module exited\n");
+  serial_write_string("[K64] task exited with code ");
+  serial_printf("%d", (int)code);
+  serial_write_string("\r\n");
+  vga_puts_k64("[K64] task exited\n");
   
   if (auto *t = task64_current()) {
+    t->exit_code = (int)code;
     t->state = TASK64_ZOMBIE;
   }
   task64_yield();
   
+  /* Should never return, but if it does, halt safely with IRQs enabled */
   for (;;) {
-    asm volatile("hlt");
+    asm volatile("sti; hlt");
   }
 }
 

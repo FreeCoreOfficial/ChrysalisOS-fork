@@ -1,5 +1,6 @@
 #include "paging64.h"
 #include <stddef.h>
+#include "../../drivers/serial.h"
 
 extern "C" uint64_t pml4;
 extern "C" uint64_t pdpt;
@@ -35,6 +36,22 @@ static uint64_t align_up(uint64_t v, uint64_t a) {
 void paging64_init(void) {
   g_pml4 = &pml4;
   if (!g_boot_pml4) g_boot_pml4 = g_pml4;
+
+  /* Upgrade boot-time identity map hierarchy to USER.
+   * This is necessary because x86 paging is hierarchical: if a PML4 entry 
+   * is supervisor-only, then NO page under it can be accessed by user mode.
+   * Since entry 0 covers 0-512GB, it must be USER-accessible to allow 
+   * user-mode segments like libc to exist. The actual kernel identity 
+   * mappings remain protected at the PD/PT level. */
+  g_pml4[0] |= 0x04;
+  uint64_t *pdpt_tab = (uint64_t *)(uintptr_t)(g_pml4[0] & ~0xFFFULL);
+  for (int i = 0; i < 4; i++) {
+    pdpt_tab[i] |= 0x04;
+    uint64_t *pd_tab = (uint64_t *)(uintptr_t)(pdpt_tab[i] & ~0xFFFULL);
+    for (int j = 0; j < 512; j++) {
+      pd_tab[j] |= 0x04;
+    }
+  }
 
   uint64_t start = (uint64_t)(unsigned long long)&kernel64_end;
   g_next_phys = align_up(start, 0x1000);
@@ -206,7 +223,8 @@ static uint64_t paging64_deep_copy_pml4(uint64_t *old_pml4, int clone_user_data)
       
       uint64_t *new_pdpt = (uint64_t *)paging64_alloc_page();
       if (!new_pdpt) continue;
-      new_pml4[i] = ((uint64_t)(uintptr_t)new_pdpt) | (old_pml4[i] & 0xFFF);
+      uint64_t flags = old_pml4[i] & ~0x000FFFFFFFFFF000ULL;
+      new_pml4[i] = ((uint64_t)(uintptr_t)new_pdpt) | flags;
       
       uint64_t *old_pdpt = (uint64_t *)(uint64_t)(old_pml4[i] & ~0xFFFULL);
       for (int j = 0; j < 512; j++) {
@@ -214,7 +232,8 @@ static uint64_t paging64_deep_copy_pml4(uint64_t *old_pml4, int clone_user_data)
         
         uint64_t *new_pd = (uint64_t *)paging64_alloc_page();
         if (!new_pd) continue;
-        new_pdpt[j] = ((uint64_t)(uintptr_t)new_pd) | (old_pdpt[j] & 0xFFF);
+        uint64_t flags = old_pdpt[j] & ~0x000FFFFFFFFFF000ULL;
+        new_pdpt[j] = ((uint64_t)(uintptr_t)new_pd) | flags;
         
         uint64_t *old_pd = (uint64_t *)(uint64_t)(old_pdpt[j] & ~0xFFFULL);
         for (int k = 0; k < 512; k++) {
@@ -227,7 +246,8 @@ static uint64_t paging64_deep_copy_pml4(uint64_t *old_pml4, int clone_user_data)
           
           uint64_t *new_pt = (uint64_t *)paging64_alloc_page();
           if (!new_pt) continue;
-          new_pd[k] = ((uint64_t)(uintptr_t)new_pt) | (old_pd[k] & 0xFFF);
+          uint64_t flags = old_pd[k] & ~0x000FFFFFFFFFF000ULL;
+          new_pd[k] = ((uint64_t)(uintptr_t)new_pt) | flags;
           
           uint64_t *old_pt = (uint64_t *)(uint64_t)(old_pd[k] & ~0xFFFULL);
           for (int m = 0; m < 512; m++) {
@@ -240,9 +260,10 @@ static uint64_t paging64_deep_copy_pml4(uint64_t *old_pml4, int clone_user_data)
                 new_pt[m] = old_pt[m]; // Fallback
                 continue;
               }
-              void *old_page = (void *)(uint64_t)(old_pt[m] & ~0xFFFULL);
+              void *old_page = (void *)(uint64_t)(old_pt[m] & 0x000FFFFFFFFFF000ULL);
               k_memcpy(new_page, old_page, 0x1000);
-              new_pt[m] = ((uint64_t)(uintptr_t)new_page) | (old_pt[m] & 0xFFF);
+              uint64_t flags = old_pt[m] & ~0x000FFFFFFFFFF000ULL;
+              new_pt[m] = ((uint64_t)(uintptr_t)new_page) | flags;
             } else {
               // KERNEL page or skipping user data (execve): shallow copy the entry
               // (but the table itself is private to this process)
@@ -281,9 +302,10 @@ uint64_t paging64_new_user_pml4(void) {
 
 void paging64_set_pml4(uint64_t cr3) {
   if (cr3 == 0) return;
-  /* Only switch hardware CR3 — do NOT update g_pml4.
-   * g_pml4 must remain the boot PML4 so kernel page allocation
-   * and other operations work on identity-mapped memory. */
+  /* Switch both hardware CR3 and the software pointer g_pml4.
+   * This ensures that paging operations (mapping, cloning) target
+   * the current task's address space. */
+  g_pml4 = (uint64_t *)(uintptr_t)cr3;
   asm volatile("mov %0, %%cr3" ::"r"(cr3) : "memory");
 }
 
@@ -303,4 +325,40 @@ void paging64_restore_boot_pml4(void) {
     g_pml4 = g_boot_pml4;
     asm volatile("mov %0, %%cr3" ::"r"((uint64_t)(uintptr_t)g_boot_pml4) : "memory");
   }
+}
+void paging64_dump_pte(uint64_t virt) {
+  uint32_t v_hi = (uint32_t)(virt >> 32);
+  uint32_t v_lo = (uint32_t)virt;
+  uint64_t pml4_i = (virt >> 39) & 0x1FF;
+  uint64_t pdpt_i = (virt >> 30) & 0x1FF;
+  uint64_t pd_i = (virt >> 21) & 0x1FF;
+  uint64_t pt_i = (virt >> 12) & 0x1FF;
+
+  uint64_t *pml4_tab = (uint64_t *)paging64_get_pml4();
+  uint32_t cr3_hi = (uint32_t)((uintptr_t)pml4_tab >> 32);
+  uint32_t cr3_lo = (uint32_t)(uintptr_t)pml4_tab;
+  
+  serial_printf("[PAGE] Dump for VA 0x%x%x (CR3=0x%x%x)\r\n", (unsigned)v_hi, (unsigned)v_lo, (unsigned)cr3_hi, (unsigned)cr3_lo);
+  
+  uint64_t pml4e = pml4_tab[pml4_i];
+  serial_printf("  PML4[%d]: high=0x%x low=0x%x (P=%d, US=%d, NX=%d)\r\n", 
+    (int)pml4_i, (unsigned)(pml4e >> 32), (unsigned)pml4e, (int)(pml4e & 0x1), (int)((pml4e >> 2) & 0x1), (int)((pml4e >> 63) & 0x1));
+  if (!(pml4e & 0x1)) return;
+
+  uint64_t *pdpt_tab = (uint64_t *)(uint64_t)(pml4e & 0x000FFFFFFFFFF000ULL);
+  uint64_t pdpte = pdpt_tab[pdpt_i];
+  serial_printf("  PDPT[%d]: high=0x%x low=0x%x (P=%d, US=%d, NX=%d)\r\n", 
+    (int)pdpt_i, (unsigned)(pdpte >> 32), (unsigned)pdpte, (int)(pdpte & 0x1), (int)((pdpte >> 2) & 0x1), (int)((pdpte >> 63) & 0x1));
+  if (!(pdpte & 0x1)) return;
+
+  uint64_t *pd_tab = (uint64_t *)(uint64_t)(pdpte & 0x000FFFFFFFFFF000ULL);
+  uint64_t pde = pd_tab[pd_i];
+  serial_printf("    PD[%d]: high=0x%x low=0x%x (P=%d, US=%d, NX=%d, PS=%d)\r\n", 
+    (int)pd_i, (unsigned)(pde >> 32), (unsigned)pde, (int)(pde & 0x1), (int)((pde >> 2) & 0x1), (int)((pde >> 63) & 0x1), (int)((pde >> 7) & 0x1));
+  if (!(pde & 0x1) || (pde & 0x80)) return;
+
+  uint64_t *pt_tab = (uint64_t *)(uint64_t)(pde & 0x000FFFFFFFFFF000ULL);
+  uint64_t pte = pt_tab[pt_i];
+  serial_printf("    PT[%d]: high=0x%x low=0x%x (P=%d, US=%d, NX=%d)\r\n", 
+    (int)pt_i, (unsigned)(pte >> 32), (unsigned)pte, (int)(pte & 0x1), (int)((pte >> 2) & 0x1), (int)((pte >> 63) & 0x1));
 }

@@ -24,6 +24,7 @@
 #include "video/gpu.h"
 #include "video/gpu_bochs.h"
 #include "video/kms.h"
+#include "video/fb_console.h"
 #include "input/input.h"
 #include "hardware/pci.h"
 
@@ -31,6 +32,7 @@ extern "C" void paging64_init(void);
 extern "C" void idt64_init(void);
 extern "C" void syscall64_init(void);
 extern "C" void syscall64_set_linux_abi(int enabled);
+extern "C" void paging64_dump_pte(uint64_t virt);
 extern "C" char kernel64_end;
 
 struct mb64_module {
@@ -39,8 +41,8 @@ struct mb64_module {
   uint32_t end;
 };
 
-static mb64_module g_mb_modules[32];
-static char g_mb_module_names[32][128];
+static mb64_module g_mb_modules[128];
+static char g_mb_module_names[128][128];
 static int g_mb_module_count = 0;
 
 uint32_t g_total_ram_mb = 0;
@@ -133,7 +135,7 @@ static void mb2_scan(uint64_t info, const char **out_cmdline) {
     } else if (tag->type == MULTIBOOT2_TAG_TYPE_MODULE) {
       struct multiboot2_tag_module *mod =
           (struct multiboot2_tag_module *)tag;
-      if (g_mb_module_count < 32) {
+      if (g_mb_module_count < 128) {
         char *namebuf = g_mb_module_names[g_mb_module_count];
         mb_copy_name(mod->string, namebuf, 128);
         g_mb_modules[g_mb_module_count].start = mod->mod_start;
@@ -167,7 +169,7 @@ static void mb2_dump(uint64_t info) {
   struct multiboot2_tag *tag =
       (struct multiboot2_tag *)((uintptr_t)info + 8);
   int idx = 0;
-  while (tag->type != MULTIBOOT2_TAG_TYPE_END && idx < 32) {
+  while (tag->type != MULTIBOOT2_TAG_TYPE_END && idx < 128) {
     serial_write_string("[K64] MB2 tag ");
     serial_printf("%d", idx);
     serial_write_string(": type=");
@@ -472,7 +474,7 @@ static void shell64_cmd_runuser(int argc, char **argv) {
     return;
   }
   int idx = atoi(argv[1]);
-  task64_t *t = task64_create("user", runuser_task, (void *)(intptr_t)idx);
+  task64_t *t = task64_create("user", runuser_task, (void *)(intptr_t)idx, TASK64_READY);
   if (!t) {
     serial_write_string("[K64] Failed to create user task\r\n");
   }
@@ -619,6 +621,19 @@ extern "C" void kernel_main64(unsigned long long magic,
   syscall64_init();
   pci_init();
   gpu_bochs_init();
+  gpu_device_t *gpu = gpu_get_primary();
+  if (gpu && gpu->ops && gpu->ops->set_mode) {
+    if (gpu->ops->set_mode(gpu, 1024, 768, 32) == 0) {
+      serial_write_string("[K64] GPU mode set to 1024x768x32\r\n");
+      fb_cons_init();
+      fb_cons_clear();
+      fb_cons_puts("[K64] Framebuffer console online.\n");
+    } else {
+      serial_write_string("[K64] GPU mode set failed\r\n");
+    }
+  } else {
+    serial_write_string("[K64] GPU not available for mode set\r\n");
+  }
   kms_init();
   time_init();
   input_init();
@@ -641,7 +656,7 @@ extern "C" void kernel_main64(unsigned long long magic,
   serial_write_string("[K64] Ready. Use serial console for input.\r\n");
 
   task64_init();
-  task64_t *shell_task = task64_create("shell", shell64_task, nullptr);
+  task64_t *shell_task = task64_create("shell", shell64_task, nullptr, TASK64_READY);
   if (!shell_task) {
     serial_write_string("[K64] Failed to create shell task\r\n");
     for (;;)
@@ -677,15 +692,15 @@ extern "C" void isr64_handler(uint64_t *stack) {
    *   [rsp+40] = RSP  (only if CPL change)
    *   [rsp+48] = SS   (only if CPL change)
    *
-   * In both cases indices [0..4] (vec, err/0, rip, cs, rflags) are valid.
-   * Indices [5] and [6] (rsp, ss) are only valid when the saved CS has
+   * In both cases indices [15..19] (vec, err/0, rip, cs, rflags) are valid.
+   * Indices [20] and [21] (rsp, ss) are only valid when the saved CS has
    * RPL=3 (i.e. the exception came from user mode, CS & 3 == 3).
    */
-  uint64_t vec    = stack[0];
-  uint64_t err    = stack[1];
-  uint64_t rip    = stack[2];
-  uint64_t cs     = stack[3];
-  uint64_t rflags = stack[4];
+  uint64_t vec    = stack[15];
+  uint64_t err    = stack[16];
+  uint64_t rip    = stack[17];
+  uint64_t cs     = stack[18];
+  uint64_t rflags = stack[19];
   uint64_t rsp    = 0;
   uint64_t ss     = 0;
 
@@ -694,15 +709,54 @@ extern "C" void isr64_handler(uint64_t *stack) {
    * ALWAYS saves the full 5-word frame including SS/RSP.*/
   bool has_rsp_ss = ((cs & 3) == 3) || (vec == 8) || (vec == 2);
   if (has_rsp_ss) {
-    rsp = stack[5];
-    ss  = stack[6];
+    rsp = stack[20];
+    ss  = stack[21];
   }
 
   if ((cs & 3) == 3) {
-    serial_write_string("\r\n[K64] User fault: killing task\r\n");
-    if (task64_t *t = task64_current()) {
-      t->state = TASK64_ZOMBIE;
-      t->exit_code = 128 + (int)vec;
+    task64_t *curr = task64_current();
+    uint64_t cr2 = 0;
+    asm volatile("mov %%cr2, %0" : "=r"(cr2));
+
+    serial_write_string("\r\n[K64] User exception in task ");
+    if (curr) serial_printf("%u", (unsigned)curr->id); else serial_write_string("?");
+    serial_write_string(": VEC=");
+    serial_printf("%u", (unsigned)vec);
+    serial_write_string(" RIP=");
+    serial_printf("0x%x", rip);
+    serial_write_string(" ERR=");
+    serial_printf("0x%x", (unsigned)err);
+    if (vec == 14) {
+      serial_write_string(" CR2=");
+      serial_printf("0x%x", cr2);
+    }
+    serial_write_string("\r\n");
+
+    if (vec == 14) {
+      paging64_dump_pte(cr2);
+    }
+
+    serial_write_string(" RAX="); serial_printf("0x%x", stack[14]);
+    serial_write_string(" RBX="); serial_printf("0x%x", stack[1]);
+    serial_write_string(" RCX="); serial_printf("0x%x", stack[13]);
+    serial_write_string(" RDX="); serial_printf("0x%x", stack[12]);
+    serial_write_string("\r\n");
+    serial_write_string(" RSI="); serial_printf("0x%x", stack[11]);
+    serial_write_string(" RDI="); serial_printf("0x%x", stack[10]);
+    serial_write_string(" RSP="); serial_printf("0x%x", rsp);
+    serial_write_string("\r\n");
+
+    serial_write_string(" RIP bytes:");
+    uint8_t *ip = (uint8_t *)(uintptr_t)rip;
+    for (int i = 0; i < 8; i++) {
+      serial_write_string(" ");
+      serial_printf("%x", (uint32_t)ip[i]);
+    }
+    serial_write_string("\r\n");
+
+    if (curr) {
+      curr->state = TASK64_ZOMBIE;
+      curr->exit_code = 128 + (int)vec;
     }
     task64_yield();
     return;

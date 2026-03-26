@@ -1188,7 +1188,7 @@ static task64_t *task64_clone_current(syscall64_state_t *state, uint64_t child_s
   if (!parent)
     return nullptr;
 
-  task64_t *child = task64_create(parent->name, parent->entry, parent->arg);
+  task64_t *child = task64_create(parent->name, parent->entry, parent->arg, TASK64_READY);
   if (!child)
     return nullptr;
 
@@ -1336,7 +1336,7 @@ static int linux_sys_wait4(syscall64_state_t *state, int64_t pid, uint64_t wstat
   }
 }
 
-static int linux_syscall_dispatch_x86_64_impl(syscall64_state_t *state, uint64_t num, uint64_t a1, uint64_t a2,
+static int64_t linux_syscall_dispatch_x86_64_impl(syscall64_state_t *state, uint64_t num, uint64_t a1, uint64_t a2,
                                   uint64_t a3, uint64_t a4, uint64_t a5,
                                   uint64_t a6) {
   switch (num) {
@@ -1346,14 +1346,14 @@ static int linux_syscall_dispatch_x86_64_impl(syscall64_state_t *state, uint64_t
     task64_t *t = task64_current();
     if (t)
       t->exit_code = (int)a1;
-    return (int)syscall64_dispatch_native(state, SYS_EXIT, a1, 0, 0, 0, 0, 0);
+    return (int64_t)syscall64_dispatch_native(state, SYS_EXIT, a1, 0, 0, 0, 0, 0);
   }
 
   case LINUX_NR_read:
-    return (int)syscall64_dispatch_native(state, SYS_READ, a1, a2, a3, 0, 0, 0);
+    return (int64_t)syscall64_dispatch_native(state, SYS_READ, a1, a2, a3, 0, 0, 0);
 
   case LINUX_NR_write:
-    return (int)syscall64_dispatch_native(state, SYS_WRITE, a1, a2, a3, 0, 0, 0);
+    return (int64_t)syscall64_dispatch_native(state, SYS_WRITE, a1, a2, a3, 0, 0, 0);
 
   case LINUX_NR_socket:
     return linux_sys_socket(a1, a2, a3);
@@ -1377,7 +1377,7 @@ static int linux_syscall_dispatch_x86_64_impl(syscall64_state_t *state, uint64_t
     return linux_sys_getpeername(a1, a2, a3);
 
   case LINUX_NR_open:
-    return (int)syscall64_dispatch_native(state, SYS_OPEN, a1, a2, 0, 0, 0, 0);
+    return (int64_t)syscall64_dispatch_native(state, SYS_OPEN, a1, a2, 0, 0, 0, 0);
 
   case LINUX_NR_execve:
   {
@@ -1439,21 +1439,21 @@ static int linux_syscall_dispatch_x86_64_impl(syscall64_state_t *state, uint64_t
     serial_write_string(path ? path : "(null)");
     serial_write_string("\r\n");
     if (path && path[0] == '/') {
-      return (int)syscall64_dispatch_native(state, SYS_OPEN, a2, a3, 0, 0, 0, 0);
+      return (int64_t)syscall64_dispatch_native(state, SYS_OPEN, a2, a3, 0, 0, 0, 0);
     }
 
     if (dirfd == LINUX_AT_FDCWD) {
-      return (int)syscall64_dispatch_native(state, SYS_OPEN, a2, a3, 0, 0, 0, 0);
+      return (int64_t)syscall64_dispatch_native(state, SYS_OPEN, a2, a3, 0, 0, 0, 0);
     }
     /* Fallback to normal open for now; full dirfd support requires VFS changes */
-    return (int)syscall64_dispatch_native(state, SYS_OPEN, a2, a3, 0, 0, 0, 0);
+    return (int64_t)syscall64_dispatch_native(state, SYS_OPEN, a2, a3, 0, 0, 0, 0);
   }
 
 
   case LINUX_NR_close:
     if (a1 >= TASK_LINUX_EPOLL_FD_BASE)
       return epoll64_close(task64_current(), (int)a1);
-    return (int)syscall64_dispatch_native(state, SYS_CLOSE, a1, 0, 0, 0, 0, 0);
+    return (int64_t)syscall64_dispatch_native(state, SYS_CLOSE, a1, 0, 0, 0, 0, 0);
 
   case LINUX_NR_pipe:
   case LINUX_NR_pipe2: {
@@ -1783,7 +1783,7 @@ static int linux_syscall_dispatch_x86_64_impl(syscall64_state_t *state, uint64_t
 
   case LINUX_NR_brk: {
     uint64_t res = user64_brk(a1);
-    return (int)res;
+    return (int64_t)res;
   }
 
   case LINUX_NR_mmap: {
@@ -1807,7 +1807,7 @@ static int linux_syscall_dispatch_x86_64_impl(syscall64_state_t *state, uint64_t
         return r;
       }
     }
-    return (int)addr;
+    return (int64_t)addr;
   }
 
 
@@ -1822,7 +1822,7 @@ static int linux_syscall_dispatch_x86_64_impl(syscall64_state_t *state, uint64_t
     return 0;
 
   case LINUX_NR_sched_yield:
-    return (int)syscall64_dispatch_native(state, SYS_YIELD, 0, 0, 0, 0, 0, 0);
+    return (int64_t)syscall64_dispatch_native(state, SYS_YIELD, 0, 0, 0, 0, 0, 0);
 
 
   case LINUX_NR_pread64: {
@@ -2017,7 +2017,7 @@ static int linux_syscall_dispatch_x86_64_impl(syscall64_state_t *state, uint64_t
   }
 }
 
-extern "C" int linux_syscall_dispatch_x86_64(void* state_ptr, uint64_t num, uint64_t a1, uint64_t a2,
+extern "C" int64_t linux_syscall_dispatch_x86_64(void* state_ptr, uint64_t num, uint64_t a1, uint64_t a2,
                                   uint64_t a3, uint64_t a4, uint64_t a5,
                                   uint64_t a6) {
   syscall64_state_t* state = (syscall64_state_t*)state_ptr;
@@ -2030,12 +2030,12 @@ extern "C" int linux_syscall_dispatch_x86_64(void* state_ptr, uint64_t num, uint
   serial_printf("%d", (int)num);
   serial_write_string("\r\n");
 
-  int ret = linux_syscall_dispatch_x86_64_impl(state, num, a1, a2, a3, a4, a5, a6);
+  int64_t ret = linux_syscall_dispatch_x86_64_impl(state, num, a1, a2, a3, a4, a5, a6);
 
   serial_write_string("[LINUX] syscall rax=");
   serial_printf("%u", num);
   serial_write_string(" ret=");
-  serial_printf("%d", ret);
+  serial_printf("%d", (int)ret);
   serial_write_string("\r\n");
 
   return ret;
@@ -2046,9 +2046,9 @@ extern "C" int linux_syscall_dispatch_x86_64(void* state_ptr, uint64_t num, uint
 
 #else
 
-int linux_syscall_dispatch_x86_64(void* state, uint64_t num, uint64_t a1, uint64_t a2,
-                                  uint64_t a3, uint64_t a4, uint64_t a5,
-                                  uint64_t a6) {
+int64_t linux_syscall_dispatch_x86_64(void* state, uint64_t num, uint64_t a1, uint64_t a2,
+                                      uint64_t a3, uint64_t a4, uint64_t a5,
+                                      uint64_t a6) {
   (void)state;
   (void)num;
   (void)a1;
