@@ -599,6 +599,18 @@ extern "C" void kernel_main64(unsigned long long magic,
                          (void*)(uintptr_t)g_mb_modules[i].start,
                          (size_t)(g_mb_modules[i].end - g_mb_modules[i].start));
 
+        /* xinit expects to find "X" or "Xorg" in PATH. Provide aliases
+         * even if the multiboot module is only shipped as /usr/lib/xorg/Xorg. */
+        if (strcmp(g_mb_modules[i].name, "/usr/lib/xorg/Xorg") == 0) {
+          ramfs_create_file("/usr/bin/X",
+                           (void*)(uintptr_t)g_mb_modules[i].start,
+                           (size_t)(g_mb_modules[i].end - g_mb_modules[i].start));
+          ramfs_create_file("/usr/bin/Xorg",
+                           (void*)(uintptr_t)g_mb_modules[i].start,
+                           (size_t)(g_mb_modules[i].end - g_mb_modules[i].start));
+          serial_write_string("    -> aliases: /usr/bin/X, /usr/bin/Xorg\r\n");
+        }
+
     }
   }
 
@@ -713,8 +725,17 @@ extern "C" void isr64_handler(uint64_t *stack) {
     ss  = stack[21];
   }
 
-  if ((cs & 3) == 3) {
-    task64_t *curr = task64_current();
+  task64_t *curr = task64_current();
+  const uint64_t kUserRipMin = 0x0000000040000000ULL;
+  const uint64_t kUserRipMax = 0x0000000080000000ULL;
+  bool user_mode = ((cs & 3) == 3);
+  bool user_task = (curr && curr->gs.user_stack != 0);
+  bool rip_in_user_range = (rip >= kUserRipMin && rip < kUserRipMax);
+  if (!user_mode && user_task && rip_in_user_range) {
+    user_mode = true;
+  }
+
+  if (user_mode) {
     uint64_t cr2 = 0;
     asm volatile("mov %%cr2, %0" : "=r"(cr2));
 
@@ -743,6 +764,9 @@ extern "C" void isr64_handler(uint64_t *stack) {
     serial_write_string("\r\n");
     serial_write_string(" RSI="); serial_printf("0x%x", stack[11]);
     serial_write_string(" RDI="); serial_printf("0x%x", stack[10]);
+    if (!has_rsp_ss && user_task) {
+      rsp = curr->gs.user_stack;
+    }
     serial_write_string(" RSP="); serial_printf("0x%x", rsp);
     serial_write_string("\r\n");
 

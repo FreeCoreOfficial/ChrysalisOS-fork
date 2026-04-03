@@ -187,10 +187,13 @@ extern "C" void syscall64_exit(void);
 #define POLLOUT 0x004
 
 #define LINUX_AF_UNIX 1
+#define LINUX_SOL_SOCKET 1
 #define LINUX_SOCK_STREAM 1
 #define LINUX_SOCK_TYPE_MASK 0xF
 #define LINUX_SOCK_NONBLOCK 0x800
 #define LINUX_SOCK_CLOEXEC 0x80000
+#define LINUX_SO_TYPE 3
+#define LINUX_SO_ERROR 4
 
 #define PROT_READ 0x1
 #define PROT_WRITE 0x2
@@ -1158,6 +1161,47 @@ static int linux_sys_getpeername(uint64_t fd, uint64_t addr_ptr,
   return linux_copy_to_user((void *)(uintptr_t)addr_ptr, &addr, sizeof(addr));
 }
 
+static int linux_sys_getsockopt(uint64_t fd, uint64_t level, uint64_t optname,
+                                uint64_t optval_ptr, uint64_t optlen_ptr) {
+  if (!optval_ptr || !optlen_ptr)
+    return -LINUX_EFAULT;
+
+  file_t *f = syscall64_get_file((int)fd);
+  if (!f || !f->node || !f->node->internal)
+    return -LINUX_EBADF;
+
+  linux_socket64_t *s = sock64_from_vnode(f->node);
+  if (!s)
+    return -LINUX_EBADF;
+
+  uint32_t optlen = *(uint32_t *)(uintptr_t)optlen_ptr;
+  if (optlen < sizeof(int32_t))
+    return -LINUX_EINVAL;
+  if ((int)level != LINUX_SOL_SOCKET)
+    return -LINUX_EPROTONOSUPPORT;
+
+  int32_t value = 0;
+  switch ((int)optname) {
+  case LINUX_SO_TYPE:
+    value = s->type;
+    break;
+  case LINUX_SO_ERROR:
+    value = 0;
+    break;
+  default:
+    return -LINUX_EPROTONOSUPPORT;
+  }
+
+  if (linux_copy_to_user((void *)(uintptr_t)optval_ptr, &value,
+                         sizeof(value)) < 0)
+    return -LINUX_EFAULT;
+  optlen = sizeof(value);
+  if (linux_copy_to_user((void *)(uintptr_t)optlen_ptr, &optlen,
+                         sizeof(optlen)) < 0)
+    return -LINUX_EFAULT;
+  return 0;
+}
+
 static int linux_sys_arch_prctl(syscall64_state_t *state, uint64_t code, uint64_t addr) {
   (void)state;
   task64_t *t = task64_current();
@@ -1375,6 +1419,9 @@ static int64_t linux_syscall_dispatch_x86_64_impl(syscall64_state_t *state, uint
 
   case LINUX_NR_getpeername:
     return linux_sys_getpeername(a1, a2, a3);
+
+  case LINUX_NR_getsockopt:
+    return linux_sys_getsockopt(a1, a2, a3, a4, a5);
 
   case LINUX_NR_open:
     return (int64_t)syscall64_dispatch_native(state, SYS_OPEN, a1, a2, 0, 0, 0, 0);

@@ -1,120 +1,253 @@
-## ChrysalisOS – Age Verification Policy
+# ChrysalisOS – Age Verification Policy
 
 **Author:** mihai209
 
 ---
 
+## 🌍 Language / Limbă
+
+<details>
+<summary>🇬🇧 English</summary>
+
 ## 1. Core Principle
 
-ChrysalisOS is designed as a **minimal, deterministic, identity-agnostic operating system**.
+ChrysalisOS is a **minimal, deterministic, identity-agnostic operating system**.
 
 It does not:
-
-* identify users
-* classify users
-* enforce behavioral policies
+- identify users
+- classify users
+- enforce behavioral policies
 
 The OS exists strictly as a **neutral execution layer**.
 
 ---
 
-## 2. Age Verification Policy
+## 2. Strict Age Verification Policy
 
-ChrysalisOS **does not implement and will never implement**:
+ChrysalisOS **does not and will never implement**:
 
-* age verification
-* age estimation (AI, biometric, or heuristic)
-* age-based classification
-* identity binding (ID, KYC, digital identity systems)
-* OS-level exposure of user attributes
+- age verification
+- age estimation (AI, biometric, heuristic)
+- age-based classification
+- identity binding (ID, KYC, digital identity systems)
+- OS-level exposure of user attributes
 
 This applies to:
+- kernel
+- system services
+- official builds
 
-* kernel
-* system services
-* official builds
-
-No exceptions.
+**No exceptions. No optional modules.**
 
 ---
 
-## 3. No OS-Level Restrictions
+## 3. Jurisdiction Restrictions
+
+Any country or jurisdiction that enforces **mandatory age verification at system level** is:
+
+> ❌ **NOT authorized to use ChrysalisOS official builds**
+
+Such regions will be listed in:
+
+
+/system/BLACKLISTED.md
+
+
+ChrysalisOS does not guarantee functionality, support, or legality in those regions.
+
+---
+
+## 4. Data Collection Policy
+
+ChrysalisOS collects **only minimal local data**, stored in:
+
+
+/system/users/*.json
+
+
+Fields:
+- username (required)
+- password (optional)
+- device name (required)
+
+ChrysalisOS:
+- has **no telemetry**
+- has **no analytics**
+- has **no remote API**
+- does **not transmit user data**
+
+All data remains **local and user-controlled**.
+
+---
+
+## 5. No OS-Level Control Layer
 
 ChrysalisOS does not enforce:
+- content restrictions
+- application restrictions
+- parental controls
+- network filtering based on identity
 
-* content restrictions
-* application restrictions
-* network filtering based on user attributes
-* parental control systems at OS level
-
-Any control mechanisms are expected to exist **outside the operating system**.
-
----
-
-## 4. Project Position
-
-ChrysalisOS follows a strict design philosophy:
-
-> The operating system should not act as a control layer over the user.
-
-Age verification is often presented as a protection mechanism, but it also introduces:
-
-* centralized control points
-* identity coupling
-* expanded system complexity
-
-ChrysalisOS does not adopt this model.
+Any such mechanisms must exist **outside the OS**.
 
 ---
 
-## 5. Responsibility Model
+## 6. Fork Policy
 
-User supervision is considered an external responsibility.
+The MIT License allows modification, however:
 
-The operating system does not replace:
+- forks that implement **age verification or identity systems**
+  are **NOT affiliated** with ChrysalisOS
 
-* parental responsibility
-* user accountability
-* environmental controls
-
----
-
-## 6. MIT License Clarification
-
-ChrysalisOS is released under the MIT License.
-
-This allows:
-
-* free use
-* modification
-* redistribution
-
-However:
-
-* any fork that introduces age verification or identity enforcement
-  is **not affiliated** with ChrysalisOS
-
-* rebranded versions remain **independent projects**
+- the ChrysalisOS name **must not imply endorsement**
 
 ---
 
 ## 7. No Compliance Mode
 
-ChrysalisOS will not provide:
-
-* compliance builds
-* regional variants
-* optional modules for age verification
-* integration with identity systems
+ChrysalisOS will never provide:
+- compliance builds
+- regional variants
+- identity integration
+- legal adaptation layers
 
 ---
 
-## 8. Final Statement
+## 8. Transparency Feature
 
-ChrysalisOS is built on a simple principle:
+The system includes a UI element:
 
-> The OS executes code. It does not evaluate or control the user.
+> 📄 **"View BLACKLISTED.md"**
 
-For this reason:
+This allows users to inspect restricted jurisdictions.
 
-**ChrysalisOS will never implement age verification or identity-based restrictions.**
+---
+
+## 9. Final Statement
+
+> The OS executes code. It does not evaluate the user.
+
+ChrysalisOS will never become an identity-aware or control-enforcing system.
+
+</details>
+
+---
+
+<details>
+<summary>🇷🇴 Română</summary>
+
+## 1. Principiu de bază
+
+ChrysalisOS este un sistem de operare **minimal, determinist și fără identitate**.
+
+Nu:
+- identifică utilizatorii
+- clasifică utilizatorii
+- aplică politici comportamentale
+
+Este strict un **layer neutru de execuție**.
+
+---
+
+## 2. Politica strictă privind verificarea vârstei
+
+ChrysalisOS **nu implementează și nu va implementa niciodată**:
+
+- verificare de vârstă
+- estimare de vârstă (AI, biometric, euristic)
+- clasificare pe bază de vârstă
+- legare de identitate (ID, KYC, identitate digitală)
+- expunerea atributelor utilizatorului la nivel de OS
+
+Se aplică pentru:
+- kernel
+- servicii de sistem
+- build-uri oficiale
+
+**Fără excepții. Fără module opționale.**
+
+---
+
+## 3. Restricții jurisdicționale
+
+Țările care impun **verificare de vârstă la nivel de sistem** sunt:
+
+> ❌ **NEAUTORIZATE să utilizeze ChrysalisOS oficial**
+
+Acestea sunt listate în:
+
+
+/system/BLACKLISTED.md
+
+
+Nu garantăm funcționare sau suport în acele regiuni.
+
+---
+
+## 4. Politica de colectare a datelor
+
+ChrysalisOS colectează doar date minime locale:
+
+
+/system/users/*.json
+
+
+Câmpuri:
+- username (obligatoriu)
+- parolă (opțional)
+- nume dispozitiv (obligatoriu)
+
+ChrysalisOS:
+- nu are telemetry
+- nu are analytics
+- nu are API remote
+- nu transmite date
+
+Datele sunt **locale și controlate de utilizator**.
+
+---
+
+## 5. Fără control la nivel de OS
+
+Nu implementează:
+- restricții de conținut
+- restricții de aplicații
+- control parental
+- filtrare pe bază de identitate
+
+---
+
+## 6. Politica pentru fork-uri
+
+Fork-urile care adaugă:
+- verificare de vârstă
+- sisteme de identitate
+
+→ **NU sunt afiliate** cu ChrysalisOS
+
+---
+
+## 7. Fără mod de conformitate
+
+Nu vor exista:
+- build-uri conforme legal
+- variante regionale
+- integrare identitate
+
+---
+
+## 8. Funcție de transparență
+
+OS-ul include:
+
+> 📄 **"Vezi BLACKLISTED.md"**
+
+---
+
+## 9. Declarație finală
+
+> OS-ul execută cod. Nu evaluează utilizatorul.
+
+ChrysalisOS nu va deveni niciodată un sistem de control.
+
+</details>

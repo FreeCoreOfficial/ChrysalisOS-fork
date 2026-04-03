@@ -1257,7 +1257,7 @@ $(ISO)/system/tests/linux-test-m3: $(BUILD)/tests/linux-test-m3 | dirs
 	@mkdir -p $(dir $@)
 	cp $< $@
 
-$(BUILD)/tests/linux-test-m4: $(LINUX_TEST_M4_SRC) | dirs
+$(BUILD)/tests/linux-test-m4: $(LINUX_TEST_M4_SRC) Makefile | dirs
 	@mkdir -p $(dir $@)
 	$(HOSTCC) $(HOSTCFLAGS) -Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2 \
 		$< -o $@
@@ -1266,8 +1266,9 @@ $(ISO)/system/tests/linux-test-m4: $(BUILD)/tests/linux-test-m4 | dirs
 	@mkdir -p $(dir $@)
 	cp $< $@
 
-$(BUILD)/tests/linux-test-m5: $(LINUX_TEST_M5_SRC) | dirs
+$(BUILD)/tests/linux-test-m5: $(LINUX_TEST_M5_SRC) Makefile | dirs
 	@mkdir -p $(dir $@)
+	rm -f $@
 	$(HOSTCC) $(HOSTCFLAGS) -Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2 \
 		$< -o $@
 
