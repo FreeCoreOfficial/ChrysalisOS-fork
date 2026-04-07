@@ -41,8 +41,11 @@ struct mb64_module {
   uint32_t end;
 };
 
-static mb64_module g_mb_modules[128];
-static char g_mb_module_names[128][128];
+static constexpr int K64_MAX_MB_MODULES = 1024;
+static constexpr size_t K64_MAX_MB_MODULE_NAME = 256;
+
+static mb64_module g_mb_modules[K64_MAX_MB_MODULES];
+static char g_mb_module_names[K64_MAX_MB_MODULES][K64_MAX_MB_MODULE_NAME];
 static int g_mb_module_count = 0;
 
 uint32_t g_total_ram_mb = 0;
@@ -135,13 +138,15 @@ static void mb2_scan(uint64_t info, const char **out_cmdline) {
     } else if (tag->type == MULTIBOOT2_TAG_TYPE_MODULE) {
       struct multiboot2_tag_module *mod =
           (struct multiboot2_tag_module *)tag;
-      if (g_mb_module_count < 128) {
+      if (g_mb_module_count < K64_MAX_MB_MODULES) {
         char *namebuf = g_mb_module_names[g_mb_module_count];
-        mb_copy_name(mod->string, namebuf, 128);
+        mb_copy_name(mod->string, namebuf, K64_MAX_MB_MODULE_NAME);
         g_mb_modules[g_mb_module_count].start = mod->mod_start;
         g_mb_modules[g_mb_module_count].end = mod->mod_end;
         g_mb_modules[g_mb_module_count].name = namebuf;
         g_mb_module_count++;
+      } else {
+        serial_write_string("[K64] WARN: multiboot module skipped (too many)\r\n");
       }
 
       if (mod->mod_end > g_mb_module_max_end)
@@ -410,36 +415,73 @@ static void shell64_cmd_linuxabi(int argc, char **argv) {
   serial_write_string(g_linux_abi ? "linuxabi=1\r\n" : "linuxabi=0\r\n");
 }
 
+struct runmod64_req {
+  char path[256];
+};
+
+static int shell64_resolve_module_name(int argc, char **argv, const char **out_name) {
+  if (!out_name)
+    return -1;
+  *out_name = nullptr;
+  if (argc < 2)
+    return -1;
+
+  if (argv[1][0] >= '0' && argv[1][0] <= '9') {
+    int idx = atoi(argv[1]);
+    if (idx >= 0 && idx < g_mb_module_count) {
+      *out_name = g_mb_modules[idx].name;
+      return 0;
+    }
+    return -1;
+  }
+
+  *out_name = argv[1];
+  return 0;
+}
+
+static void runmod64_task(void *arg) {
+  runmod64_req *req = (runmod64_req *)arg;
+  if (!req) {
+    serial_write_string("[K64] runmod task missing request\r\n");
+    return;
+  }
+
+  size_t size = 0;
+  const void *data = ramfs_read_file(req->path, &size);
+  if (!data || size == 0) {
+    serial_printf("[K64] runmod task module not found: %s\r\n", req->path);
+    kfree(req);
+    return;
+  }
+
+  serial_printf("[K64] runmod task starting: %s at %p size %u\r\n",
+                req->path, data, (uint32_t)size);
+  exec64_from_module((void *)(uintptr_t)data, (uint64_t)size, req->path);
+  serial_printf("[K64] runmod task returned: %s\r\n", req->path);
+  kfree(req);
+}
+
 static void shell64_cmd_runmod(int argc, char **argv) {
   if (argc < 2) {
     serial_write_string("Usage: runmod <index|path>\r\n");
     return;
   }
-  
-  const void *data = nullptr;
-  size_t size = 0;
+
   const char *name = nullptr;
-
-  if (argv[1][0] >= '0' && argv[1][0] <= '9') {
-      int idx = atoi(argv[1]);
-      if (idx >= 0 && idx < g_mb_module_count) {
-          name = g_mb_modules[idx].name;
-      }
-  } else {
-      name = argv[1];
+  if (shell64_resolve_module_name(argc, argv, &name) < 0 || !name) {
+    serial_write_string("Module index/path invalid\r\n");
+    return;
   }
 
-  if (name) {
-      data = ramfs_read_file(name, &size);
-  }
-
+  size_t size = 0;
+  const void *data = ramfs_read_file(name, &size);
   if (!data || size == 0) {
     serial_write_string("Module not found in RAMFS or empty\r\n");
     return;
   }
 
-  serial_printf("[K64] Executing module: %s at %p size %u\r\n", name, data, (uint32_t)size);
-  
+  serial_printf("[K64] Queueing module: %s at %p size %u\r\n",
+                name, data, (uint32_t)size);
   serial_printf("[K64] module dump (%p):\r\n", data);
   const uint8_t *ptr = (const uint8_t *)data;
   for (int i = 0; i < 4; i++) {
@@ -450,8 +492,24 @@ static void shell64_cmd_runmod(int argc, char **argv) {
       serial_write_string("\r\n");
   }
 
-  exec64_from_module((void *)(uintptr_t)data, (uint64_t)size, name);
-  serial_write_string("[K64] exec64_from_module returned\r\n");
+  runmod64_req *req = (runmod64_req *)kmalloc(sizeof(runmod64_req));
+  if (!req) {
+    serial_write_string("[K64] Failed to allocate runmod request\r\n");
+    return;
+  }
+  memset(req, 0, sizeof(*req));
+  strncpy(req->path, name, sizeof(req->path) - 1);
+  req->path[sizeof(req->path) - 1] = 0;
+
+  task64_t *t =
+      task64_create("runmod", runmod64_task, req, TASK64_READY);
+  if (!t) {
+    kfree(req);
+    serial_write_string("[K64] Failed to create runmod task\r\n");
+    return;
+  }
+
+  serial_printf("[K64] runmod launched as task %u\r\n", (uint32_t)t->id);
 }
 
 static void runuser_task(void *arg) {
@@ -584,6 +642,60 @@ extern "C" void kernel_main64(unsigned long long magic,
   vfs_mount("/", ramfs_root());
   vfs_mount("/dev", devfs_root());
   vfs_mount("/proc", procfs_root());
+
+  if (auto *root = ramfs_fs_root()) {
+    auto *tmp = ramfs_find_child(root, "tmp");
+    if (!tmp)
+      tmp = ramfs_mkdir_at(root, "tmp");
+    if (tmp && !ramfs_find_child(tmp, ".X11-unix"))
+      ramfs_mkdir_at(tmp, ".X11-unix");
+    auto *var = ramfs_find_child(root, "var");
+    if (!var)
+      var = ramfs_mkdir_at(root, "var");
+    if (var) {
+      auto *log = ramfs_find_child(var, "log");
+      if (!log)
+        log = ramfs_mkdir_at(var, "log");
+      auto *lib = ramfs_find_child(var, "lib");
+      if (!lib)
+        lib = ramfs_mkdir_at(var, "lib");
+      if (lib && !ramfs_find_child(lib, "xkb"))
+        ramfs_mkdir_at(lib, "xkb");
+    }
+    auto *sys = ramfs_find_child(root, "sys");
+    if (!sys)
+      sys = ramfs_mkdir_at(root, "sys");
+    if (sys) {
+      auto *bus = ramfs_find_child(sys, "bus");
+      if (!bus)
+        bus = ramfs_mkdir_at(sys, "bus");
+      if (bus && !ramfs_find_child(bus, "platform"))
+        ramfs_mkdir_at(bus, "platform");
+      auto *class_dir = ramfs_find_child(sys, "class");
+      if (!class_dir)
+        class_dir = ramfs_mkdir_at(sys, "class");
+      if (class_dir) {
+        auto *graphics = ramfs_find_child(class_dir, "graphics");
+        if (!graphics)
+          graphics = ramfs_mkdir_at(class_dir, "graphics");
+        if (graphics) {
+          auto *fb0 = ramfs_find_child(graphics, "fb0");
+          if (!fb0)
+            fb0 = ramfs_mkdir_at(graphics, "fb0");
+          if (fb0) {
+            auto *device = ramfs_find_child(fb0, "device");
+            if (!device)
+              device = ramfs_mkdir_at(fb0, "device");
+            if (device && !ramfs_find_child(device, "subsystem")) {
+              static const char k_sysfs_subsystem[] = "/sys/bus/platform";
+              ramfs_create_file_at(device, "subsystem", k_sysfs_subsystem,
+                                   sizeof(k_sysfs_subsystem) - 1, 0);
+            }
+          }
+        }
+      }
+    }
+  }
 
 
   /* Populate ramfs from multiboot modules */
@@ -781,6 +893,11 @@ extern "C" void isr64_handler(uint64_t *stack) {
     if (curr) {
       curr->state = TASK64_ZOMBIE;
       curr->exit_code = 128 + (int)vec;
+      if (curr->parent_id) {
+        task64_t *parent = task64_find_by_id(curr->parent_id);
+        if (parent)
+          parent->sig_pending |= (1ULL << (17 - 1));
+      }
     }
     task64_yield();
     return;

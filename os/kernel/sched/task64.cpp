@@ -4,6 +4,7 @@
 #include "../arch/x86_64/gdt64.h"
 #include "../hardware/msr.h"
 #include "../string.h"
+#include "../time/timer.h"
 #include <stddef.h>
 
 extern "C" void switch64(uint64_t *old_rsp, uint64_t *new_rsp);
@@ -17,6 +18,19 @@ static const uint64_t k_task64_stack_size = 16 * 1024;
 static const uint32_t MSR_FS_BASE = 0xC0000100u;
 static const uint32_t MSR_GS_BASE = 0xC0000101u;
 static const uint32_t MSR_KERNEL_GS_BASE = 0xC0000102u;
+
+static inline int task64_is_runnable(task64_t *t, uint64_t now_ticks) {
+  if (!t)
+    return 0;
+  if (t->state == TASK64_SLEEPING && now_ticks >= t->sleep_until) {
+    t->sleep_until = 0;
+    t->state = TASK64_READY;
+  }
+  if (t->state == TASK64_WAITING && t->sig_pending) {
+    t->state = TASK64_READY;
+  }
+  return t->state == TASK64_READY || t->state == TASK64_RUNNING;
+}
 
 static inline void wrmsr64(uint32_t msr, uint64_t value) {
   wrmsr(msr, (uint32_t)(value & 0xFFFFFFFFu),
@@ -109,6 +123,7 @@ task64_t *task64_create(const char *name, void (*entry)(void *), void *arg, task
   t->gs.fs_base = 0;
   t->gs.user_gs_base = 0;
   t->exe_path[0] = 0;
+  strcpy(t->cwd, "/");
   t->uid = t->gid = 0;
   t->euid = t->egid = 0;
   t->parent_id = 0;
@@ -149,15 +164,19 @@ void task64_yield(void) {
 
   task64_t *prev = g_task64_current;
   task64_t *next = prev->next;
+  uint64_t now_ticks = timer_ticks_no_cli();
 
-  int guard = 0;
-  while (next != prev && guard++ < 64) {
-    if (next->state == TASK64_READY || next->state == TASK64_RUNNING)
+  while (next != prev) {
+    if (task64_is_runnable(next, now_ticks))
       break;
     next = next->next;
   }
-  if (next == prev)
+
+  if (next == prev) {
+    if (!task64_is_runnable(prev, now_ticks))
+      return;
     return;
+  }
 
   /* if (next->id > 2) { ... } */
 

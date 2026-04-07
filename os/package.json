@@ -27,7 +27,7 @@
     "// --- Main Production Workflow --- //": "",
     
     "build": "make clean && make dirs && make && make iso",
-    "logslivedebug:x64": "clear ; make clean && sh -c 'npm run ldebugx64 2>&1 | tee serial.log'",
+    "logslivedebug:x64": "make all && make iso && sh -c 'npm run ldebugx64 2>&1 | tee serial.log'",
     "ldebugx64": "clear ; make all && make iso && npm run run:iso64",
     "full": "npm run build && npm run installer:build",
     "boot": "npm run run:hdd",

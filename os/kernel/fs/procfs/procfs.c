@@ -1,5 +1,6 @@
 #include "procfs.h"
 #include "../vfs/fs_ops.h"
+#include "../vfs/vfs.h"
 #include "../vfs/vnode.h"
 #include "../../mem/kmalloc.h"
 #include "../../string.h"
@@ -317,7 +318,7 @@ static int procfs_readdir_fd(struct vnode *dir, uint32_t index,
   
   uint32_t count = 0;
 #ifdef __x86_64__
-  for (int i = 0; i < 16; i++) { // MAX_FILES_PER_PROCESS
+  for (int i = 0; i < MAX_FILES_PER_PROCESS; i++) {
     if (syscall64_get_file(i)) {
       if (count == index) {
         proc_node_t *fn = (proc_node_t *)kmalloc(sizeof(proc_node_t));

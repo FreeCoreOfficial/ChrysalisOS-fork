@@ -1,6 +1,7 @@
 #include "exec64.h"
 #include "../elf/elf64.h"
 #include "../arch/x86_64/paging64.h"
+#include "../arch/x86_64/syscall64.h"
 #include "../arch/x86_64/user64.h"
 #include "../string.h"
 #include "../mem/kmalloc.h"
@@ -85,8 +86,12 @@ typedef struct {
 #define DT_PLTREL 20
 #define DT_JMPREL 23
 #define DT_PLTRELSZ 2
+#define DT_RELRSZ 35
+#define DT_RELR 36
+#define DT_RELRENT 37
 #define DT_GNU_HASH 0x6ffffef5
 
+#define R_X86_64_NONE 0
 #define R_X86_64_64 1
 #define R_X86_64_COPY 5
 #define R_X86_64_GLOB_DAT 6
@@ -95,14 +100,17 @@ typedef struct {
 #define R_X86_64_DTPMOD64 16
 #define R_X86_64_DTPOFF64 17
 #define R_X86_64_TPOFF64 18
+#define R_X86_64_IRELATIVE 37
 
 #define ELF64_R_SYM(i) ((uint32_t)((i) >> 32))
 #define ELF64_R_TYPE(i) ((uint32_t)(i))
 #define ELF64_ST_BIND(i) ((uint8_t)((i) >> 4))
+#define ELF64_ST_TYPE(i) ((uint8_t)((i) & 0xF))
 
 #define STB_LOCAL 0
 #define STB_GLOBAL 1
 #define STB_WEAK 2
+#define STT_GNU_IFUNC 10
 
 #ifndef SHN_UNDEF
 #define SHN_UNDEF 0
@@ -116,12 +124,16 @@ typedef struct {
 #define ELF64_STACK_SIZE (64 * 1024ULL)
 #define ELF64_TLS_BASE 0x000000007ffe0000ULL
 
+#define USER64_PROT_READ 0x1
+#define USER64_PROT_WRITE 0x2
+
 #define AT_NULL 0
 #define AT_PHDR 3
 #define AT_PHENT 4
 #define AT_PHNUM 5
 #define AT_PAGESZ 6
 #define AT_BASE 7
+#define AT_FLAGS 8
 #define AT_ENTRY 9
 #define AT_UID 11
 #define AT_EUID 12
@@ -131,7 +143,10 @@ typedef struct {
 #define AT_CLKTCK 17
 #define AT_SECURE 23
 #define AT_RANDOM 25
+#define AT_HWCAP2 26
 #define AT_EXECFN 31
+
+static constexpr bool k_exec64_kernel_link_dynamic = true;
 
 
 typedef struct {
@@ -159,6 +174,9 @@ typedef struct {
   uint64_t jmprel_addr;
   uint64_t pltrel_sz;
   uint64_t pltrel_type;
+  uint64_t relr_addr;
+  uint64_t relr_sz;
+  uint64_t relr_ent;
   uint64_t hash_addr;
   uint64_t gnu_hash_addr;
   uint32_t sym_count;
@@ -300,6 +318,13 @@ static int map_user_stack(uint64_t top, uint64_t bytes) {
   return 0;
 }
 
+static int phdr_flags_to_user_prot(uint32_t flags) {
+  int prot = USER64_PROT_READ;
+  if (flags & PF_W)
+    prot |= USER64_PROT_WRITE;
+  return prot;
+}
+
 static uint32_t elf64_sym_count_from_hash(uint64_t hash_addr) {
   if (!hash_addr)
     return 0;
@@ -385,6 +410,8 @@ static int elf64_parse_dynamic(elf64_image_t *img, const elf64_ehdr_t *ehdr,
   bool has_syment = false;
   bool has_strsz = false;
   bool has_pltrel = false;
+  bool has_relr = false;
+  bool has_relrsz = false;
   img->needed_count = 0;
 
   Elf64_Dyn *dyn = (Elf64_Dyn *)(uintptr_t)img->dyn_addr;
@@ -414,6 +441,17 @@ static int elf64_parse_dynamic(elf64_image_t *img, const elf64_ehdr_t *ehdr,
     case DT_JMPREL:
       img->jmprel_addr = (ehdr->e_type == ET_DYN) ? (img->load_base + ptr) : ptr;
       has_jmprel = true;
+      break;
+    case DT_RELR:
+      img->relr_addr = (ehdr->e_type == ET_DYN) ? (img->load_base + ptr) : ptr;
+      has_relr = true;
+      break;
+    case DT_RELRSZ:
+      img->relr_sz = val;
+      has_relrsz = true;
+      break;
+    case DT_RELRENT:
+      img->relr_ent = val;
       break;
     case DT_PLTRELSZ:
       img->pltrel_sz = val;
@@ -463,6 +501,10 @@ static int elf64_parse_dynamic(elf64_image_t *img, const elf64_ehdr_t *ehdr,
     img->jmprel_addr = 0;
   if (!has_pltrelsz)
     img->pltrel_sz = 0;
+  if (!has_relr)
+    img->relr_addr = 0;
+  if (!has_relrsz)
+    img->relr_sz = 0;
   if (!has_pltrel)
     img->pltrel_type = DT_RELA;
   if (img->pltrel_sz > 0 && img->pltrel_type != DT_RELA) {
@@ -475,6 +517,8 @@ static int elf64_parse_dynamic(elf64_image_t *img, const elf64_ehdr_t *ehdr,
     img->syment = sizeof(Elf64_Sym);
   if (!img->rela_ent)
     img->rela_ent = sizeof(Elf64_Rela);
+  if (!img->relr_ent)
+    img->relr_ent = sizeof(uint64_t);
   if (!img->sym_count) {
     img->sym_count = elf64_sym_count_from_hash(img->hash_addr);
     if (!img->sym_count)
@@ -700,6 +744,13 @@ static uint64_t init_static_tls(elf64_image_t *images, int img_count) {
   return fs_base;
 }
 
+static uint64_t elf64_call_ifunc_resolver(uint64_t resolver_addr) {
+  if (!resolver_addr)
+    return 0;
+  uint64_t (*resolver)(void) = (uint64_t(*)(void))(uintptr_t)resolver_addr;
+  return resolver();
+}
+
 static int elf64_apply_relocations(elf64_image_t *img,
                                    elf64_image_t **images,
                                    int img_count,
@@ -736,8 +787,35 @@ static int elf64_apply_relocations(elf64_image_t *img,
                       (void *)(uintptr_t)reloc_va,
                       sym_name ? sym_name : "(none)");
 
+      if (type == R_X86_64_NONE) {
+        continue;
+      }
+
       if (type == R_X86_64_RELATIVE) {
         *where = img->load_base + (uint64_t)rela->r_addend;
+        continue;
+      }
+
+      if (type == R_X86_64_IRELATIVE) {
+        uint64_t resolver_addr = img->load_base + (uint64_t)rela->r_addend;
+        *where = elf64_call_ifunc_resolver(resolver_addr);
+        continue;
+      }
+
+      if (type == R_X86_64_TPOFF64 && symi == 0) {
+        if (!img->tls_block_offset)
+          exec64_abortf("local tpoff without TLS block");
+        *where = (uint64_t)rela->r_addend - img->tls_block_offset;
+        continue;
+      }
+
+      if (type == R_X86_64_DTPMOD64 && symi == 0) {
+        *where = 1;
+        continue;
+      }
+
+      if (type == R_X86_64_DTPOFF64 && symi == 0) {
+        *where = (uint64_t)rela->r_addend;
         continue;
       }
 
@@ -760,12 +838,30 @@ static int elf64_apply_relocations(elf64_image_t *img,
         }
       }
 
+      if (sym && ELF64_ST_TYPE(sym->st_info) == STT_GNU_IFUNC && sym_addr) {
+        sym_addr = elf64_call_ifunc_resolver(sym_addr);
+      }
+
       switch (type) {
       case R_X86_64_64:
       case R_X86_64_GLOB_DAT:
       case R_X86_64_JUMP_SLOT:
         *where = sym_addr + (uint64_t)rela->r_addend;
         break;
+      case R_X86_64_COPY: {
+        if (!sym_addr)
+          exec64_abortf("copy reloc unresolved for symbol: %s",
+                        sym_name ? sym_name : "(unknown)");
+        uint64_t copy_sz = sym && sym->st_size ? sym->st_size : sym_size;
+        if (!copy_sz)
+          copy_sz = sym_size;
+        if (!copy_sz)
+          exec64_abortf("copy reloc has zero size for symbol: %s",
+                        sym_name ? sym_name : "(unknown)");
+        memcpy((void *)(uintptr_t)where, (const void *)(uintptr_t)sym_addr,
+               (size_t)copy_sz);
+        break;
+      }
       case R_X86_64_DTPMOD64:
         *where = def_img ? 1 : 0;
         break;
@@ -792,6 +888,41 @@ static int elf64_apply_relocations(elf64_image_t *img,
     }
     return 0;
   };
+
+  auto apply_relr = [&](uint64_t relr_base, uint64_t relr_size,
+                        uint64_t ent_size) -> int {
+    if (!relr_base || relr_size == 0)
+      return 0;
+    if (!ent_size)
+      ent_size = sizeof(uint64_t);
+    uint64_t count = relr_size / ent_size;
+    uint64_t next_off = 0;
+    for (uint64_t i = 0; i < count; i++) {
+      uint64_t *entryp = (uint64_t *)(uintptr_t)(relr_base + i * ent_size);
+      uint64_t entry = *entryp;
+      if ((entry & 1ULL) == 0) {
+        uint64_t *where = (uint64_t *)(uintptr_t)(img->load_base + entry);
+        *where += img->load_base;
+        next_off = entry + sizeof(uint64_t);
+        continue;
+      }
+      uint64_t bitmap = entry >> 1;
+      for (uint64_t bit = 0; bit < 63; ++bit) {
+        if ((bitmap & (1ULL << bit)) == 0)
+          continue;
+        uint64_t off = next_off + bit * sizeof(uint64_t);
+        uint64_t *where = (uint64_t *)(uintptr_t)(img->load_base + off);
+        *where += img->load_base;
+      }
+      next_off += 63 * sizeof(uint64_t);
+    }
+    return 0;
+  };
+
+  if (img->relr_sz > 0 && img->relr_addr) {
+    if (apply_relr(img->relr_addr, img->relr_sz, img->relr_ent) < 0)
+      return -1;
+  }
 
   if (apply_rela(img->rela_addr, img->rela_sz, img->rela_ent) < 0)
     return -1;
@@ -827,6 +958,7 @@ static int load_elf64_image(const uint8_t *file_data, size_t file_size,
   uint64_t base = load_base;
   bool base_set = false;
   bool has_dynamic = false;
+  bool has_interp = false;
 
   for (uint16_t i = 0; i < eh->e_phnum; i++) {
     if (phdr[i].p_type != PT_LOAD)
@@ -843,6 +975,7 @@ static int load_elf64_image(const uint8_t *file_data, size_t file_size,
   for (uint16_t i = 0; i < eh->e_phnum; i++) {
     if (phdr[i].p_type == PT_PHDR) phdr_addr = base + phdr[i].p_vaddr;
     if (phdr[i].p_type == PT_DYNAMIC) has_dynamic = true;
+    if (phdr[i].p_type == PT_INTERP) has_interp = true;
     if (phdr[i].p_type == PT_INTERP && interp_buf && interp_buf_sz > 0) {
       size_t len = (size_t)phdr[i].p_filesz;
       if (len >= interp_buf_sz) len = interp_buf_sz - 1;
@@ -887,6 +1020,12 @@ static int load_elf64_image(const uint8_t *file_data, size_t file_size,
     for (uint64_t va = start; va < end; va += 0x1000) {
       paging64_protect_page(va, map_flags);
     }
+    if (user64_register_vma(start, end, phdr_flags_to_user_prot(phdr[i].p_flags),
+                            0) < 0) {
+      terminal_printf("[EXEC64] failed to register PT_LOAD VMA %p-%p\n",
+                      (void *)(uintptr_t)start, (void *)(uintptr_t)end);
+      return -1;
+    }
   }
 
   if (out_img) {
@@ -896,6 +1035,12 @@ static int load_elf64_image(const uint8_t *file_data, size_t file_size,
     out_img->phdr = phdr_addr ? phdr_addr : (base + eh->e_phoff);
     out_img->phent = eh->e_phentsize;
     out_img->phnum = eh->e_phnum;
+    if (has_interp && interp_buf && interp_buf_sz > 0) {
+      /* For ET_EXEC/ET_DYN binaries with PT_INTERP, the kernel only maps the
+       * main image and hands off dynamic linking to ld-linux. Do not reject
+       * the exec here because of a kernel-side DT_* parser limitation. */
+      return 0;
+    }
     if (eh->e_type == ET_DYN || has_dynamic) {
       if (elf64_parse_dynamic(out_img, eh, phdr) < 0)
         return -1;
@@ -936,16 +1081,16 @@ static uint64_t build_user_stack(char **argv, char **envp, uint64_t stack_top,
 
   sp = sp & ~0xFULL; /* Initial alignment */
 
-  int auxv_entries = 15; /* includes AT_NULL; add AT_EXECFN if argc>0 */
+  int auxv_entries = 17; /* includes AT_NULL; add AT_EXECFN if argc>0 */
   if (argc > 0)
     auxv_entries++;
 
-  uint64_t total_entries = 1 + (uint64_t)argc + 1 + (uint64_t)envc + 1 +
+  uint64_t total_entries = 2 /* AT_RANDOM payload */ + 1 /* argc */ +
+                           (uint64_t)argc + 1 /* argv NULL */ +
+                           (uint64_t)envc + 1 /* envp NULL */ +
                            (uint64_t)auxv_entries * 2;
-  uint64_t total_bytes = total_entries * 8;
-
-  if (((sp - total_bytes) & 0xFULL) != 0) {
-    sp -= 8; /* padding so final RSP is 16-byte aligned at entry */
+  if ((total_entries & 1ULL) != 0) {
+    sp -= 8; /* ELF process entry requires rsp % 16 == 0. */
   }
 
   auto push64 = [&](uint64_t v) {
@@ -968,10 +1113,12 @@ static uint64_t build_user_stack(char **argv, char **envp, uint64_t stack_top,
 
   push64(random_ptr); push64(AT_RANDOM);
   push64(0); push64(AT_SECURE);
+  push64(0); push64(AT_HWCAP2);
   push64(0); push64(AT_EUID);
   push64(0); push64(AT_UID);
   push64(0); push64(AT_EGID);
   push64(0); push64(AT_GID);
+  push64(0); push64(AT_FLAGS);
   push64(0); push64(AT_HWCAP);
   push64(100); push64(AT_CLKTCK);
 
@@ -1131,6 +1278,22 @@ static int elf64_collect_needed(const elf64_image_t *img, const char **out,
   return count;
 }
 
+static void exec64_reset_task_runtime(task64_t *t) {
+  if (!t)
+    return;
+  t->sig_pending = 0;
+  t->sig_mask = 0;
+  memset(t->sig_actions, 0, sizeof(t->sig_actions));
+  t->sig_saved_rip = 0;
+  t->sig_saved_rsp = 0;
+  t->sig_active = 0;
+  t->clear_tid_addr = 0;
+  t->robust_list_head = 0;
+  t->robust_list_len = 0;
+  memset(t->epoll_table, 0, sizeof(t->epoll_table));
+  t->gs.user_gs_base = 0;
+}
+
 static int elf64_is_loaded(elf64_image_t *images, int img_count,
                            const char *name) {
   if (!name)
@@ -1140,6 +1303,32 @@ static int elf64_is_loaded(elf64_image_t *images, int img_count,
       return 1;
   }
   return 0;
+}
+
+static elf64_image_t *elf64_find_loaded_image(elf64_image_t *images, int img_count,
+                                              const char *name) {
+  if (!name)
+    return nullptr;
+  const char *base = name;
+  for (const char *p = name; *p; ++p) {
+    if (*p == '/' || *p == '\\')
+      base = p + 1;
+  }
+  for (int i = 0; i < img_count; i++) {
+    if (!images[i].name)
+      continue;
+    if (strcmp(images[i].name, name) == 0)
+      return &images[i];
+    const char *other = images[i].name;
+    const char *other_base = other;
+    for (const char *p = other; *p; ++p) {
+      if (*p == '/' || *p == '\\')
+        other_base = p + 1;
+    }
+    if (strcmp(other_base, base) == 0)
+      return &images[i];
+  }
+  return nullptr;
 }
 
 static int elf64_find_library(const char *name, const char *base_dir,
@@ -1231,6 +1420,7 @@ static int exec64_from_buffer(const uint8_t *file_data, size_t file_size,
   t->cr3 = new_cr3;
 
   serial_write_string("[EXEC64] switched to new PML4\r\n");
+  user64_reset_process();
 
   elf64_image_t images[32];
   elf64_image_t *image_ptrs[32];
@@ -1257,97 +1447,179 @@ static int exec64_from_buffer(const uint8_t *file_data, size_t file_size,
                   (void *)(uintptr_t)images[0].load_base,
                   (void *)(uintptr_t)images[0].entry);
 
-  if (interp_path[0]) {
-    terminal_printf(
-        "[EXEC64] interpreter present (kernel loader will link without it): %s\n",
-        interp_path);
+  if (interp_path[0] && k_exec64_kernel_link_dynamic) {
+    const elf64_phdr_t *main_phdr =
+        (const elf64_phdr_t *)(kfile + eh->e_phoff);
+    if (elf64_parse_dynamic(&images[0], eh, main_phdr) < 0) {
+      terminal_printf("[EXEC64] main dynamic parse failed under kernel-link path\n");
+      kfree(kfile);
+      paging64_restore_boot_pml4();
+      return -1;
+    }
+    terminal_printf("[EXEC64] PT_INTERP present, using kernel-link path\n");
+  }
+
+  if (interp_path[0] && !k_exec64_kernel_link_dynamic) {
+    terminal_printf("[EXEC64] interpreter requested: %s\n", interp_path);
+
+    const uint8_t *interp_data = nullptr;
+    size_t interp_size = 0;
+    int interp_owned = 0;
+    if (read_exec64_path(interp_path, &interp_data, &interp_size, &interp_owned) <
+        0) {
+      terminal_printf("[EXEC64] failed to load interpreter: %s\n", interp_path);
+      kfree(kfile);
+      paging64_restore_boot_pml4();
+      return -1;
+    }
+
+    if (load_elf64_image(interp_data, interp_size, ELF64_INTERP_BASE,
+                         &images[1], nullptr, 0) < 0) {
+      terminal_printf("[EXEC64] failed to map interpreter: %s\n", interp_path);
+      if (interp_owned)
+        kfree((void *)interp_data);
+      kfree(kfile);
+      paging64_restore_boot_pml4();
+      return -1;
+    }
+
+    images[1].file_data = interp_data;
+    images[1].file_size = interp_size;
+    images[1].owned = interp_owned;
+    images[1].name = interp_path;
+    images[1].is_main = 0;
+    image_ptrs[1] = &images[1];
+    img_count = 2;
+    terminal_printf("[EXEC64] interpreter loaded: base=%p entry=%p\n",
+                    (void *)(uintptr_t)images[1].load_base,
+                    (void *)(uintptr_t)images[1].entry);
   }
 
   char base_dir_buf[256];
   const char *base_dir = basename_dir(image_path, base_dir_buf, sizeof(base_dir_buf));
 
-  int lib_index = 0;
-  for (int idx = 0; idx < img_count; idx++) {
-    const char *needed[32];
-    int needed_count = elf64_collect_needed(&images[idx], needed, 32);
-    for (int i = 0; i < needed_count; i++) {
-      const char *libname = needed[i];
-      if (!libname || elf64_is_loaded(images, img_count, libname))
-        continue;
+  if (!interp_path[0] || k_exec64_kernel_link_dynamic) {
+    int lib_index = 0;
+    for (int idx = 0; idx < img_count; idx++) {
+      const char *needed[32];
+      int needed_count = elf64_collect_needed(&images[idx], needed, 32);
+      for (int i = 0; i < needed_count; i++) {
+        const char *libname = needed[i];
+        if (!libname || elf64_is_loaded(images, img_count, libname))
+          continue;
 
-      terminal_printf("[EXEC64] DT_NEEDED: %s\n", libname);
+        terminal_printf("[EXEC64] DT_NEEDED: %s\n", libname);
 
-      const uint8_t *lib_data = nullptr;
-      size_t lib_size = 0;
-      int lib_owned = 0;
-      if (elf64_find_library(libname, base_dir, &lib_data, &lib_size, &lib_owned) < 0) {
-        terminal_printf("[EXEC64] missing shared library: %s\n", libname);
-        kfree(kfile);
-        paging64_restore_boot_pml4();
-        return -1;
+        const uint8_t *lib_data = nullptr;
+        size_t lib_size = 0;
+        int lib_owned = 0;
+        if (elf64_find_library(libname, base_dir, &lib_data, &lib_size, &lib_owned) < 0) {
+          terminal_printf("[EXEC64] missing shared library: %s\n", libname);
+          kfree(kfile);
+          paging64_restore_boot_pml4();
+          return -1;
+        }
+
+        if (img_count >= (int)(sizeof(images) / sizeof(images[0]))) {
+          terminal_printf("[EXEC64] too many shared libraries\n");
+          kfree(kfile);
+          paging64_restore_boot_pml4();
+          return -1;
+        }
+
+        const elf64_ehdr_t *lib_eh = (const elf64_ehdr_t *)lib_data;
+        uint64_t lib_base = (lib_eh && lib_eh->e_type == ET_DYN)
+                                ? (ELF64_LIB_BASE + ELF64_LIB_STRIDE * (uint64_t)lib_index)
+                                : 0;
+
+        if (load_elf64_image(lib_data, lib_size, lib_base, &images[img_count], nullptr, 0) < 0) {
+          terminal_printf("[EXEC64] failed to load library: %s\n", libname);
+          if (lib_owned)
+            kfree((void *)lib_data);
+          kfree(kfile);
+          paging64_restore_boot_pml4();
+          return -1;
+        }
+
+        images[img_count].file_data = lib_data;
+        images[img_count].file_size = lib_size;
+        images[img_count].owned = lib_owned;
+        images[img_count].name = libname;
+        image_ptrs[img_count] = &images[img_count];
+        terminal_printf("[EXEC64] loaded %s: base=%p entry=%p\n", libname,
+                        (void *)(uintptr_t)images[img_count].load_base,
+                        (void *)(uintptr_t)images[img_count].entry);
+        img_count++;
+        lib_index++;
       }
-
-      if (img_count >= (int)(sizeof(images) / sizeof(images[0]))) {
-        terminal_printf("[EXEC64] too many shared libraries\n");
-        kfree(kfile);
-        paging64_restore_boot_pml4();
-        return -1;
-      }
-
-      const elf64_ehdr_t *lib_eh = (const elf64_ehdr_t *)lib_data;
-      uint64_t lib_base = (lib_eh && lib_eh->e_type == ET_DYN)
-                              ? (ELF64_LIB_BASE + ELF64_LIB_STRIDE * (uint64_t)lib_index)
-                              : 0;
-
-      if (load_elf64_image(lib_data, lib_size, lib_base, &images[img_count], nullptr, 0) < 0) {
-        terminal_printf("[EXEC64] failed to load library: %s\n", libname);
-        if (lib_owned)
-          kfree((void *)lib_data);
-        kfree(kfile);
-        paging64_restore_boot_pml4();
-        return -1;
-      }
-
-      images[img_count].file_data = lib_data;
-      images[img_count].file_size = lib_size;
-      images[img_count].owned = lib_owned;
-      images[img_count].name = libname;
-      image_ptrs[img_count] = &images[img_count];
-      terminal_printf("[EXEC64] loaded %s: base=%p entry=%p\n", libname,
-                      (void *)(uintptr_t)images[img_count].load_base,
-                      (void *)(uintptr_t)images[img_count].entry);
-      img_count++;
-      lib_index++;
     }
   }
 
   kfree(kfile);
 
-  for (int i = 0; i < img_count; i++) {
-    if (elf64_apply_relocations(&images[i], image_ptrs, img_count, true) < 0) {
-      terminal_printf("[EXEC64] relocations failed\n");
+  uint64_t fs_base = 0;
+  if (!interp_path[0] || k_exec64_kernel_link_dynamic) {
+    fs_base = init_static_tls(images, img_count);
+    terminal_printf("[EXEC64] tls fs_base=%p\n", (void *)(uintptr_t)fs_base);
+
+    for (int i = 0; i < img_count; i++) {
+      if (elf64_apply_relocations(&images[i], image_ptrs, img_count, true) < 0) {
+        terminal_printf("[EXEC64] relocations failed\n");
+        paging64_restore_boot_pml4();
+        return -1;
+      }
+    }
+  } else {
+    elf64_image_t *interp_img =
+        elf64_find_loaded_image(images, img_count, interp_path);
+    if (!interp_img)
+      interp_img = &images[1];
+    elf64_image_t *interp_only[1] = {interp_img};
+    if (elf64_apply_relocations(interp_img, interp_only, 1, true) < 0) {
+      terminal_printf("[EXEC64] interpreter relocations failed\n");
       paging64_restore_boot_pml4();
       return -1;
     }
   }
 
-  uint64_t image_end = 0;
-  for (int i = 0; i < img_count; i++) {
-    if (images[i].image_end > image_end) image_end = images[i].image_end;
-  }
+  uint64_t main_image_end = images[0].image_end;
 
   uint64_t stack_top = ELF64_STACK_TOP;
   if (map_user_stack(stack_top, ELF64_STACK_SIZE) < 0) {
     paging64_restore_boot_pml4();
     return -1;
   }
+  if (user64_register_vma(stack_top - ELF64_STACK_SIZE, stack_top,
+                          USER64_PROT_READ | USER64_PROT_WRITE, 0) < 0) {
+    terminal_printf("[EXEC64] failed to register stack VMA\n");
+    paging64_restore_boot_pml4();
+    return -1;
+  }
   terminal_printf("[EXEC64] stack mapped\n");
-
-  uint64_t fs_base = init_static_tls(images, img_count);
-  terminal_printf("[EXEC64] tls fs_base=%p\n", (void *)(uintptr_t)fs_base);
 
   uint64_t at_base = 0;
   uint64_t entry = images[0].entry;
+  if (interp_path[0] && !k_exec64_kernel_link_dynamic) {
+    elf64_image_t *interp_img =
+        elf64_find_loaded_image(images, img_count, interp_path);
+    if (!interp_img)
+      interp_img = elf64_find_loaded_image(images, img_count,
+                                           "ld-linux-x86-64.so.2");
+    if (!interp_img) {
+      terminal_printf("[EXEC64] interpreter image not loaded: %s\n", interp_path);
+      paging64_restore_boot_pml4();
+      return -1;
+    }
+    at_base = interp_img->load_base;
+    entry = interp_img->entry;
+    fs_base = 0;
+    terminal_printf("[EXEC64] interpreter entry=%p base=%p\n",
+                    (void *)(uintptr_t)entry,
+                    (void *)(uintptr_t)at_base);
+  } else if (interp_path[0]) {
+    terminal_printf("[EXEC64] direct entry for PT_INTERP image: entry=%p\n",
+                    (void *)(uintptr_t)entry);
+  }
   
   uint64_t rsp = build_user_stack(kargv, kenvp, stack_top,
                                   images[0].entry, images[0].phdr,
@@ -1367,7 +1639,8 @@ static int exec64_from_buffer(const uint8_t *file_data, size_t file_size,
   free_string_array(kargv);
   free_string_array(kenvp);
 
-  user64_init_process(image_end);
+  exec64_reset_task_runtime(t);
+  user64_init_process(main_image_end);
   if (image_path) {
     strncpy(t->exe_path, image_path, sizeof(t->exe_path) - 1);
     t->exe_path[sizeof(t->exe_path) - 1] = 0;
@@ -1378,6 +1651,7 @@ static int exec64_from_buffer(const uint8_t *file_data, size_t file_size,
   terminal_printf("[EXEC64] entering user mode: rip=%p rsp=%p\n",
                   (void *)entry, (void *)rsp);
 
+  syscall64_prepare_exec_transition();
   void (*enter_fn)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t) =
       user64_enter;
   register uint64_t r8 asm("r8") = 0;

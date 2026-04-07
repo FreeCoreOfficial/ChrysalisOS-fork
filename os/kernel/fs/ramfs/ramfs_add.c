@@ -118,7 +118,7 @@ int ramfs_unlink_node(struct FSNode* node) {
     return 0;
 }
 
-static struct FSNode* ramfs_find_path(const char* path) {
+struct FSNode* ramfs_find_path_node(const char* path) {
     if (!path)
         return NULL;
     FSNode* cur = ramfs_fs_root();
@@ -159,6 +159,78 @@ static struct FSNode* ramfs_find_path(const char* path) {
         }
     }
     return cur;
+}
+
+static int ramfs_split_parent(const char* path, FSNode** out_dir, char* out_name,
+                              size_t out_name_size) {
+    if (!path || !out_dir || !out_name || out_name_size == 0 || path[0] != '/')
+        return -1;
+
+    FSNode* cur = ramfs_fs_root();
+    if (!cur)
+        return -1;
+
+    const char* p = path + 1;
+    while (*p == '/')
+        p++;
+    if (!*p)
+        return -1;
+
+    while (*p) {
+        const char* start = p;
+        while (*p && *p != '/')
+            p++;
+        size_t len = (size_t)(p - start);
+        if (len == 0)
+            return -1;
+
+        while (*p == '/')
+            p++;
+        if (!*p) {
+            if (len >= out_name_size)
+                return -1;
+            memcpy(out_name, start, len);
+            out_name[len] = 0;
+            *out_dir = cur;
+            return 0;
+        }
+
+        if (len == 1 && start[0] == '.')
+            continue;
+        if (len == 2 && start[0] == '.' && start[1] == '.') {
+            if (cur->parent)
+                cur = cur->parent;
+            continue;
+        }
+
+        char name[256];
+        if (len >= sizeof(name))
+            return -1;
+        memcpy(name, start, len);
+        name[len] = 0;
+        cur = ramfs_find_child(cur, name);
+        if (!cur || cur->flags != FS_DIR)
+            return -1;
+    }
+
+    return -1;
+}
+
+int ramfs_link_path(const char* oldpath, const char* newpath) {
+    FSNode* src = ramfs_find_path_node(oldpath);
+    if (!src || src->flags != FS_FILE)
+        return -1;
+
+    FSNode* dir = NULL;
+    char name[256];
+    if (ramfs_split_parent(newpath, &dir, name, sizeof(name)) < 0)
+        return -1;
+    if (!dir || dir->flags != FS_DIR)
+        return -1;
+    if (ramfs_find_child(dir, name))
+        return -2;
+
+    return ramfs_create_file_at(dir, name, src->data, src->length, 1) ? 0 : -1;
 }
 
 
@@ -217,7 +289,7 @@ void ramfs_create_file(const char* name, const void* data, size_t len) {
 }
 
 const void* ramfs_read_file(const char* name, size_t* out_size) {
-    FSNode* node = ramfs_find_path(name);
+    FSNode* node = ramfs_find_path_node(name);
     if (!node || node->flags != FS_FILE)
         return NULL;
     if (out_size)

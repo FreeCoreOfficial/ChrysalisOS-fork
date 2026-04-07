@@ -29,7 +29,12 @@ static dev_node_t dev_event1;
 static dev_node_t dev_console;
 
 #define FBIOGET_VSCREENINFO 0x4600
+#define FBIOPUT_VSCREENINFO 0x4601
 #define FBIOGET_FSCREENINFO 0x4602
+#define FBIOGETCMAP 0x4604
+#define FBIOPUTCMAP 0x4605
+#define FBIOPAN_DISPLAY 0x4606
+#define FBIOBLANK 0x4611
 
 /* VT/KD ioctls (minimal subset for Xorg fbdev) */
 #define KDSETMODE 0x4B3A
@@ -103,7 +108,7 @@ struct fb_var_screeninfo {
 
 struct fb_fix_screeninfo {
   char id[16];
-  uint64_t smem_start;
+  unsigned long smem_start;
   uint32_t smem_len;
   uint32_t type;
   uint32_t type_aux;
@@ -112,19 +117,44 @@ struct fb_fix_screeninfo {
   uint16_t ypanstep;
   uint16_t ywrapstep;
   uint32_t line_length;
-  uint32_t mmio_start;
+  unsigned long mmio_start;
   uint32_t mmio_len;
   uint32_t accel;
   uint16_t capabilities;
   uint16_t reserved[2];
 };
 
+struct fb_cmap {
+  uint32_t start;
+  uint32_t len;
+  unsigned long red;
+  unsigned long green;
+  unsigned long blue;
+  unsigned long transp;
+};
+
+#ifdef __x86_64__
+_Static_assert(sizeof(struct fb_var_screeninfo) == 160,
+               "fb_var_screeninfo ABI mismatch");
+_Static_assert(sizeof(struct fb_fix_screeninfo) == 80,
+               "fb_fix_screeninfo ABI mismatch");
+_Static_assert(sizeof(struct fb_cmap) == 40, "fb_cmap ABI mismatch");
+#else
+_Static_assert(sizeof(struct fb_var_screeninfo) == 160,
+               "fb_var_screeninfo ABI mismatch");
+_Static_assert(sizeof(struct fb_fix_screeninfo) == 68,
+               "fb_fix_screeninfo ABI mismatch");
+_Static_assert(sizeof(struct fb_cmap) == 24, "fb_cmap ABI mismatch");
+#endif
+
 #include "../../input/input.h"
 #include "../../linux_compat/linux_abi.h"
 #ifdef __x86_64__
 #define copy_to_user(d, s, n) (memcpy(d, s, n), 0)
+#define copy_from_user(d, s, n) (memcpy(d, s, n), 0)
 #else
 extern int copy_to_user(void *dst, const void *src, uint32_t size);
+extern int copy_from_user(void *dst, const void *src, uint32_t size);
 #endif
 
 static int devfs_open(struct vnode *n) {
@@ -198,6 +228,8 @@ static int devfs_ioctl(struct vnode *n, uint32_t cmd, void *arg) {
       info.xres_virtual = gpu->width;
       info.yres_virtual = gpu->height;
       info.bits_per_pixel = gpu->bpp;
+      info.height = (uint32_t)-1;
+      info.width = (uint32_t)-1;
       info.red.offset = 16;
       info.red.length = 8;
       info.green.offset = 8;
@@ -206,19 +238,91 @@ static int devfs_ioctl(struct vnode *n, uint32_t cmd, void *arg) {
       info.blue.length = 8;
       info.transp.offset = 24;
       info.transp.length = 8;
+      serial_printf("[LINUX] fb0 FBIOGET_VSCREENINFO x=%u y=%u xv=%u yv=%u bpp=%u\r\n",
+                    info.xres, info.yres, info.xres_virtual, info.yres_virtual,
+                    info.bits_per_pixel);
+      return copy_to_user(arg, &info, sizeof(info));
+    }
+    if (cmd == FBIOPUT_VSCREENINFO) {
+      struct fb_var_screeninfo info;
+      if (copy_from_user(&info, arg, sizeof(info)) < 0)
+        return -1;
+      serial_printf("[LINUX] fb0 FBIOPUT_VSCREENINFO req x=%u y=%u xv=%u yv=%u bpp=%u act=0x%x\r\n",
+                    info.xres, info.yres, info.xres_virtual, info.yres_virtual,
+                    info.bits_per_pixel, info.activate);
+      if (info.bits_per_pixel == 24 && gpu->bpp == 32)
+        info.bits_per_pixel = 32;
+      if (info.bits_per_pixel != gpu->bpp)
+        return -1;
+      if (info.xres_virtual < info.xres)
+        info.xres_virtual = info.xres;
+      if (info.yres_virtual < info.yres)
+        info.yres_virtual = info.yres;
+      info.height = (uint32_t)-1;
+      info.width = (uint32_t)-1;
+      info.red.offset = 16;
+      info.red.length = 8;
+      info.green.offset = 8;
+      info.green.length = 8;
+      info.blue.offset = 0;
+      info.blue.length = 8;
+      info.transp.offset = 24;
+      info.transp.length = 8;
+      if (info.xres != gpu->width || info.yres != gpu->height) {
+        if (!gpu->ops || !gpu->ops->set_mode)
+          return -1;
+        int rc =
+            gpu->ops->set_mode(gpu, info.xres, info.yres, info.bits_per_pixel);
+        if (rc < 0)
+          return rc;
+      }
       return copy_to_user(arg, &info, sizeof(info));
     }
     if (cmd == FBIOGET_FSCREENINFO) {
       struct fb_fix_screeninfo info;
       memset(&info, 0, sizeof(info));
+#ifdef DEBUG
+      static int g_fb_abi_logged = 0;
+      if (!g_fb_abi_logged) {
+        g_fb_abi_logged = 1;
+        serial_printf("[LINUX] fb ABI sizes var=%u fix=%u cmap=%u off(smem=%u mmio=%u)\r\n",
+                      (unsigned)sizeof(struct fb_var_screeninfo),
+                      (unsigned)sizeof(struct fb_fix_screeninfo),
+                      (unsigned)sizeof(struct fb_cmap),
+                      (unsigned)__builtin_offsetof(struct fb_fix_screeninfo, smem_start),
+                      (unsigned)__builtin_offsetof(struct fb_fix_screeninfo, mmio_start));
+      }
+#endif
       memcpy(info.id, "chrysfb0", 9);
-      info.smem_start = (uint64_t)gpu->phys_addr;
+      info.smem_start = (unsigned long)gpu->phys_addr;
       info.smem_len = gpu->pitch * gpu->height;
-      info.type = 0;   /* FB_TYPE_PACKED_PIXELS */
-      info.visual = 2; /* FB_VISUAL_TRUECOLOR */
+      info.type = 0;      /* FB_TYPE_PACKED_PIXELS */
+      info.type_aux = 0;
+      info.visual = 2;    /* FB_VISUAL_TRUECOLOR */
+      info.xpanstep = 0;
+      info.ypanstep = 0;
+      info.ywrapstep = 0;
       info.line_length = gpu->pitch;
+      info.mmio_start = 0;
+      info.mmio_len = 0;
+      info.accel = 0;
+      info.capabilities = 0;
+      serial_printf("[LINUX] fb0 FBIOGET_FSCREENINFO smem=%u line=%u visual=%u type=%u\r\n",
+                    info.smem_len, info.line_length, info.visual, info.type);
       return copy_to_user(arg, &info, sizeof(info));
     }
+    if (cmd == FBIOGETCMAP) {
+      struct fb_cmap cmap;
+      if (copy_from_user(&cmap, arg, sizeof(cmap)) < 0)
+        return -1;
+      serial_printf("[LINUX] fb0 FBIOGETCMAP len=%u\r\n", cmap.len);
+      return 0;
+    }
+    if (cmd == FBIOPUTCMAP || cmd == FBIOPAN_DISPLAY || cmd == FBIOBLANK) {
+      serial_printf("[LINUX] fb0 ioctl cmd=0x%x (noop)\r\n", cmd);
+      return 0;
+    }
+    serial_printf("[LINUX] fb0 ioctl unknown cmd=0x%x\r\n", cmd);
     return -1;
   }
   if (dn->type == DEV_DRI_CARD0) {

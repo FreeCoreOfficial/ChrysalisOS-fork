@@ -19,6 +19,9 @@ typedef struct pipe {
 
 vnode_t* pipe_create_vnode(pipe_t* p, int is_writer);
 int pipe_create(vnode_t **rnode, vnode_t **wnode);
+int pipe_is_vnode(vnode_t *node);
+int pipe_read_file(vnode_t *node, int nonblocking, uint8_t *buf, uint32_t size);
+int pipe_write_file(vnode_t *node, int nonblocking, const uint8_t *buf, uint32_t size);
 
 #ifdef __cplusplus
 }

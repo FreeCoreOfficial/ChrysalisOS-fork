@@ -5,6 +5,11 @@
 extern "C" {
 #endif
 
+#define TASK64_VMA_MAX 512
+#define TASK64_CWD_MAX 256
+
+struct file;
+
 typedef enum {
   TASK64_UNUSED = 0,
   TASK64_READY,
@@ -13,6 +18,26 @@ typedef enum {
   TASK64_WAITING,
   TASK64_ZOMBIE
 } task64_state_t;
+
+typedef enum {
+  TASK64_VMA_NONE = 0,
+  TASK64_VMA_GENERIC,
+  TASK64_VMA_ANON,
+  TASK64_VMA_FILE,
+  TASK64_VMA_DEVICE_PHYS
+} task64_vma_kind_t;
+
+typedef struct task64_vma {
+  uint64_t start;
+  uint64_t end;
+  int prot;
+  int flags;
+  uint64_t backing_start;
+  uint8_t kind;
+  uint8_t used;
+  uint16_t reserved16;
+  uint32_t reserved32;
+} task64_vma_t;
 
 typedef struct task64 {
   uint64_t id;
@@ -28,13 +53,7 @@ typedef struct task64 {
   uint64_t user_brk_start;
   uint64_t user_brk_end;
   uint64_t user_mmap_base;
-  struct {
-    uint64_t start;
-    uint64_t end;
-    int prot;
-    int flags;
-    int used;
-  } vmas[128];
+  task64_vma_t vmas[TASK64_VMA_MAX];
   void (*entry)(void *arg);
   void *arg;
   task64_state_t state;
@@ -52,9 +71,14 @@ typedef struct task64 {
   int sig_active;
 
   uint64_t clear_tid_addr;
+  uint64_t robust_list_head;
+  uint64_t robust_list_len;
+  struct file *files[64];
+  uint8_t fd_flags[64];
 
   void *epoll_table[32];
   char exe_path[128];
+  char cwd[TASK64_CWD_MAX];
 
   uint32_t uid, gid;
   uint32_t euid, egid;

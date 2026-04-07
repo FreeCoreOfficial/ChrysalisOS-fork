@@ -37,6 +37,10 @@ void __syscall_handler(syscall64_state_t *state);
 syscall64_state_t *syscall64_get_state(void);
 struct file *syscall64_get_file(int fd);
 void syscall64_set_file(int fd, struct file *f);
+uint8_t syscall64_get_fd_flags(int fd);
+void syscall64_set_fd_flags(int fd, uint8_t flags);
+int syscall64_resolve_path(const char *path, char *out, uint64_t out_size);
+void syscall64_prepare_exec_transition(void);
 
 #ifdef __cplusplus
 }
