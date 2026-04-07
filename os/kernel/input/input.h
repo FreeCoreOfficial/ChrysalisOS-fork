@@ -22,6 +22,25 @@ typedef struct {
     int32_t mouse_y;
 } input_event_t;
 
+typedef struct {
+    uint32_t tv_sec;
+    uint32_t tv_usec;
+} input_timeval_t;
+
+typedef struct input_linux_event {
+    input_timeval_t time;
+    uint16_t type;
+    uint16_t code;
+    int32_t value;
+} input_linux_event_t;
+
+#define EV_SYN 0x00
+#define EV_KEY 0x01
+#define EV_REL 0x02
+#define REL_X 0x00
+#define REL_Y 0x01
+#define SYN_REPORT 0
+
 void input_init(void);
 void input_push(input_event_t event);
 bool input_pop(input_event_t *out_event);
@@ -31,8 +50,7 @@ void input_push_key(uint32_t keycode, bool pressed);
 void input_signal_ready(void);
 bool input_is_ready(void);
 
-struct linux_input_event;
-bool input_pop_evdev(struct linux_input_event *out_event);
+bool input_pop_evdev(input_linux_event_t *out_event);
 
 /* USB Keyboard State */
 void input_set_usb_keyboard_active(bool active);

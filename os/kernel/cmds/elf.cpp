@@ -10,9 +10,6 @@ extern "C" {
 #include "../terminal.h"
 extern "C" int fs_readfile(const char* path, void** out_buf, uint32_t* out_len);
 extern "C" int exec_from_path(const char* path, char* const argv[]); /* from kernel/proc/exec.c */
-extern "C" int exec_from_path_linux_i386(const char* path, char* const argv[]);
-extern "C" int exec_from_path_linux_x86_64(const char* path, char* const argv[]);
-extern "C" int exec_from_path_linux_auto(const char* path, char* const argv[]);
 extern void terminal_printf(const char* fmt, ...);
 
 /* Minimal string equality helper (avoids bringing libc++/string headers) */
@@ -30,8 +27,6 @@ static void usage() {
     terminal_printf("  elf info <file>              show ELF headers/segments\n");
     terminal_printf("  elf load <file>              load into kernel space (no exec)\n");
     terminal_printf("  elf run  <file> [args...]    execute ELF with optional args\n");
-    terminal_printf("  elf run-linux <file> [args...] execute ELF with Linux ABI (auto)\n");
-    terminal_printf("  elf run-linux64 <file> [args...] execute ELF with Linux x86_64 ABI\n");
     terminal_printf("  elf help                      show this help\n");
     terminal_printf("Tip: use 'elf-debug <file>' for detailed segment info.\n");
 }
@@ -112,44 +107,6 @@ int cmd_elf(int argc, char** argv) {
             return -1;
         }
         terminal_printf("[elf] exec pid=%d\n", pid);
-        return 0;
-    }
-
-    if (str_eq(sub, "run-linux")) {
-        if (argc < 3) { terminal_printf("[elf] run-linux requires <file>\n"); return -1; }
-        const char* path = argv[2];
-        char* exec_argv[16];
-        int exec_argc = 0;
-        for (int i = 2; i < argc && exec_argc < 15; ++i) {
-            exec_argv[exec_argc++] = argv[i];
-        }
-        exec_argv[exec_argc] = 0;
-
-        int pid = exec_from_path_linux_auto(path, exec_argv);
-        if (pid < 0) {
-            terminal_printf("[elf] exec failed (pid=%d)\n", pid);
-            return -1;
-        }
-        terminal_printf("[elf] exec pid=%d (linux auto)\n", pid);
-        return 0;
-    }
-
-    if (str_eq(sub, "run-linux64")) {
-        if (argc < 3) { terminal_printf("[elf] run-linux64 requires <file>\n"); return -1; }
-        const char* path = argv[2];
-        char* exec_argv[16];
-        int exec_argc = 0;
-        for (int i = 2; i < argc && exec_argc < 15; ++i) {
-            exec_argv[exec_argc++] = argv[i];
-        }
-        exec_argv[exec_argc] = 0;
-
-        int pid = exec_from_path_linux_x86_64(path, exec_argv);
-        if (pid < 0) {
-            terminal_printf("[elf] exec failed (pid=%d)\n", pid);
-            return -1;
-        }
-        terminal_printf("[elf] exec pid=%d (linux x86_64)\n", pid);
         return 0;
     }
 

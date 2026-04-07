@@ -1,5 +1,4 @@
 #include "input.h"
-#include "../linux_compat/linux_abi.h"
 #include "../time/timer.h"
 
 extern void serial(const char *fmt, ...);
@@ -11,7 +10,7 @@ static input_event_t queue[INPUT_QUEUE_SIZE];
 static int head = 0;
 static int tail = 0;
 
-static struct linux_input_event evdev_queue[EVDEV_QUEUE_SIZE];
+static input_linux_event_t evdev_queue[EVDEV_QUEUE_SIZE];
 static int evdev_head = 0;
 static int evdev_tail = 0;
 
@@ -19,7 +18,7 @@ static volatile bool input_ready = false;
 static volatile bool usb_keyboard_active = false;
 
 static void evdev_push(uint16_t type, uint16_t code, int32_t value) {
-    struct linux_input_event ev;
+    input_linux_event_t ev;
     uint32_t ms = timer_uptime_ms();
     ev.time.tv_sec = ms / 1000;
     ev.time.tv_usec = (ms % 1000) * 1000;
@@ -93,7 +92,7 @@ bool input_pop(input_event_t *out_event) {
     return true;
 }
 
-bool input_pop_evdev(struct linux_input_event *out_event) {
+bool input_pop_evdev(input_linux_event_t *out_event) {
     if (evdev_head == evdev_tail) {
         return false;
     }

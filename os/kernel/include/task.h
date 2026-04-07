@@ -30,13 +30,6 @@ typedef enum {
 } task_state_t;
 
 #define TASK_ABI_CHRYSALIS 0
-#define TASK_ABI_LINUX_I386 1
-#define TASK_ABI_LINUX_X86_64 2
-#define TASK_ABI_LINUX_X32 3
-
-#define TASK_LINUX_MAX_SIGNALS 64
-#define TASK_LINUX_EPOLL_FD_BASE 64
-#define TASK_LINUX_EPOLL_MAX 32
 #define USER32_VMA_MAX 64
 
 typedef struct user32_vma {
@@ -47,12 +40,6 @@ typedef struct user32_vma {
   int used;
 } user32_vma_t;
 
-typedef struct linux_sig_action {
-  void (*handler)(int);
-  uint32_t flags;
-  uint64_t mask;
-} linux_sig_action_t;
-
 #define TASK_EVENT_QUEUE_SIZE 32
 
 typedef struct task {
@@ -60,7 +47,7 @@ typedef struct task {
   char name[32];
   void (*entry_noarg)(void); /* saved entry point; used by task trampoline */
   uint8_t is_user_app;       /* dynamically loaded .petal task */
-  uint8_t abi;               /* task ABI selector (Chrysalis/Linux) */
+  uint8_t abi;               /* task ABI selector */
   char launch_arg[256];      /* argv[1] passed by execve for standalone apps */
   uint32_t
       *kstack_ptr; /* pointer la frame-ul salvat (folosit de context_switch) */
@@ -88,18 +75,7 @@ typedef struct task {
   /* New fields for state-aware scheduler */
   uint64_t sleep_until;
 
-  /* Linux compatibility: signal + epoll state */
-  uint64_t sig_pending;
-  uint64_t sig_mask;
-  linux_sig_action_t sig_actions[TASK_LINUX_MAX_SIGNALS];
-  void *epoll_table[TASK_LINUX_EPOLL_MAX];
-
-  /* Linux compatibility: i386 TLS + TID addresses */
-  uint32_t tls_base;
-  uint32_t clear_tid_addr;
-  uint32_t set_tid_addr;
-
-  /* Linux compatibility: i386 user-space memory tracking */
+  /* User-space memory tracking */
   uint32_t user_brk_start;
   uint32_t user_brk_end;
   uint32_t user_mmap_base;

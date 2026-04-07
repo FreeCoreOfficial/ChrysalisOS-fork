@@ -127,8 +127,6 @@ OBJS = \
 	$(BUILD)/arch/x86_64/longmode.o \
 	$(BUILD)/sched/pcb.o \
 	$(BUILD)/sched/scheduler.o \
-	$(BUILD)/linux_compat/linux_syscall_i386.o \
-	$(BUILD)/linux_compat/linux_syscall_x86_64.o \
 	$(BUILD)/ram.o \
 	$(BUILD)/tpm.o \
 	$(BUILD)/videomemory.o \
@@ -302,7 +300,6 @@ OBJS64 = \
 	$(BUILD64)/video/fb_console.o \
 	$(BUILD64)/vt/vt.o \
 	$(BUILD64)/video/kms.o \
-	$(BUILD64)/linux_compat/linux_syscall_x86_64.o \
 	$(BUILD64)/sched/task64.o \
 	$(BUILD64)/drivers/serial.o \
 	$(BUILD64)/string.o \
@@ -363,7 +360,6 @@ dirs64: $(BUILD64)
 	mkdir -p $(BUILD64)/mem
 	mkdir -p $(BUILD64)/time
 	mkdir -p $(BUILD64)/fs
-	mkdir -p $(BUILD64)/linux_compat
 	mkdir -p $(BUILD64)/sched
 	mkdir -p $(BUILD64)/user
 	mkdir -p $(BUILD64)/video
@@ -614,10 +610,6 @@ $(BUILD64)/video/fb_console.o: kernel/video/fb_console.c | dirs64
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS64) -c $< -o $@
 
-$(BUILD64)/linux_compat/linux_syscall_x86_64.o: kernel/linux_compat/linux_syscall_x86_64.cpp | dirs64
-	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS64) -c $< -o $@
-
 $(BUILD64)/video/gpu.o: kernel/video/gpu.c | dirs64
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS64) -c $< -o $@
@@ -712,14 +704,6 @@ $(BUILD)/cmd_login.o: kernel/cmds/login.cpp | dirs
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(BUILD)/services/services.o: kernel/services/services.cpp | dirs
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-$(BUILD)/linux_compat/linux_syscall_i386.o: kernel/linux_compat/linux_syscall_i386.cpp | dirs
-	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-$(BUILD)/linux_compat/linux_syscall_x86_64.o: kernel/linux_compat/linux_syscall_x86_64.cpp | dirs
-	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(BUILD)/panic.o: kernel/panic.cpp kernel/panic.h | dirs
@@ -1188,127 +1172,6 @@ $(ISO)/system/lib/libc.so: $(LIBC_PIC_OBJS) | dirs
 	@mkdir -p $(ISO)/system/lib
 	$(LD) -shared -m elf_i386 $(LIBC_PIC_OBJS) -o $@
 
-# -------------------------
-# LINUX ABI TEST BINARIES
-# -------------------------
-
-LINUX_TEST_SRC = user/tests/linux_hello.c
-HELLO_LIBC_SRC = user/hello_libc.c
-LINUX_TEST_M2_SRC = user/tests/linux_test_m2.c
-LINUX_TEST_PIPE_SRC = user/tests/linux_test_pipe.c
-LINUX_TEST_M3_SRC = user/tests/linux_test_m3.c
-LINUX_TEST_M4_SRC = user/tests/linux_test_m4.c
-LINUX_TEST_M5_SRC = user/tests/linux_test_m5.c
-LINUX_TEST_XORG_DIRECT_SRC = user/tests/linux_test_xorg_direct.c
-LINUX_TEST_MMAP_SRC = user/tests/linux_test_mmap.c
-LINUX_TEST_MMAP_MIX_SRC = user/tests/linux_test_mmap_mix.c
-LINUX_TESTS = $(ISO)/system/tests/linux-hello64 $(ISO)/system/tests/linux-hello32 $(ISO)/system/tests/hello-libc $(ISO)/system/tests/linux-test-m2 $(ISO)/system/tests/linux-test-pipe $(ISO)/system/tests/linux-test-m3 $(ISO)/system/tests/linux-test-m4 $(ISO)/system/tests/linux-test-m5 $(ISO)/system/tests/linux-test-xorg-direct $(ISO)/system/tests/linux-test-mmap $(ISO)/system/tests/linux-test-mmap-mix
-
-linux_tests: $(LINUX_TESTS)
-
-$(BUILD)/tests/linux-hello64: $(LINUX_TEST_SRC) | dirs
-	@mkdir -p $(dir $@)
-	$(HOSTCC) $(HOSTCFLAGS) -Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2 \
-		$< -o $@
-
-$(BUILD)/tests/linux-hello32: $(LINUX_TEST_SRC) | dirs
-	@mkdir -p $(dir $@)
-	$(HOSTCC) $(HOSTCFLAGS) -m32 -Wl,--dynamic-linker=/lib/ld-linux.so.2 \
-		$< -o $@
-
-$(ISO)/system/tests/linux-hello64: $(BUILD)/tests/linux-hello64 | dirs
-	@mkdir -p $(dir $@)
-	cp $< $@
-
-$(ISO)/system/tests/linux-hello32: $(BUILD)/tests/linux-hello32 | dirs
-	@mkdir -p $(dir $@)
-	cp $< $@
-
-$(BUILD)/tests/hello-libc: $(HELLO_LIBC_SRC) | dirs
-	@mkdir -p $(dir $@)
-	$(HOSTCC) $(HOSTCFLAGS) -Iuser -Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2 \
-		$< -o $@
-
-$(ISO)/system/tests/hello-libc: $(BUILD)/tests/hello-libc | dirs
-	@mkdir -p $(dir $@)
-	cp $< $@
-
-$(BUILD)/tests/linux-test-m2: $(LINUX_TEST_M2_SRC) | dirs
-	@mkdir -p $(dir $@)
-	$(HOSTCC) $(HOSTCFLAGS) -Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2 \
-		$< -o $@
-
-$(ISO)/system/tests/linux-test-m2: $(BUILD)/tests/linux-test-m2 | dirs
-	@mkdir -p $(dir $@)
-	cp $< $@
-
-$(BUILD)/tests/linux-test-pipe: $(LINUX_TEST_PIPE_SRC) | dirs
-	@mkdir -p $(dir $@)
-	$(HOSTCC) $(HOSTCFLAGS) -Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2 \
-		$< -o $@
-
-$(ISO)/system/tests/linux-test-pipe: $(BUILD)/tests/linux-test-pipe | dirs
-	@mkdir -p $(dir $@)
-	cp $< $@
-
-$(BUILD)/tests/linux-test-m3: $(LINUX_TEST_M3_SRC) | dirs
-	@mkdir -p $(dir $@)
-	$(HOSTCC) $(HOSTCFLAGS) -Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2 \
-		$< -o $@
-
-$(ISO)/system/tests/linux-test-m3: $(BUILD)/tests/linux-test-m3 | dirs
-	@mkdir -p $(dir $@)
-	cp $< $@
-
-$(BUILD)/tests/linux-test-m4: $(LINUX_TEST_M4_SRC) Makefile | dirs
-	@mkdir -p $(dir $@)
-	$(HOSTCC) $(HOSTCFLAGS) -Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2 \
-		$< -o $@
-
-$(ISO)/system/tests/linux-test-m4: $(BUILD)/tests/linux-test-m4 | dirs
-	@mkdir -p $(dir $@)
-	cp $< $@
-
-$(BUILD)/tests/linux-test-m5: $(LINUX_TEST_M5_SRC) Makefile | dirs
-	@mkdir -p $(dir $@)
-	rm -f $@
-	$(HOSTCC) $(HOSTCFLAGS) -Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2 \
-		$< -o $@
-
-$(ISO)/system/tests/linux-test-m5: $(BUILD)/tests/linux-test-m5 | dirs
-	@mkdir -p $(dir $@)
-	cp $< $@
-
-$(BUILD)/tests/linux-test-xorg-direct: $(LINUX_TEST_XORG_DIRECT_SRC) Makefile | dirs
-	@mkdir -p $(dir $@)
-	rm -f $@
-	$(HOSTCC) $(HOSTCFLAGS) -Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2 \
-		$< -o $@
-
-$(ISO)/system/tests/linux-test-xorg-direct: $(BUILD)/tests/linux-test-xorg-direct | dirs
-	@mkdir -p $(dir $@)
-	cp $< $@
-
-$(BUILD)/tests/linux-test-mmap: $(LINUX_TEST_MMAP_SRC) Makefile | dirs
-	@mkdir -p $(dir $@)
-	rm -f $@
-	$(HOSTCC) $(HOSTCFLAGS) -Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2 \
-		$< -o $@
-
-$(ISO)/system/tests/linux-test-mmap: $(BUILD)/tests/linux-test-mmap | dirs
-	@mkdir -p $(dir $@)
-	cp $< $@
-
-$(BUILD)/tests/linux-test-mmap-mix: $(LINUX_TEST_MMAP_MIX_SRC) Makefile | dirs
-	@mkdir -p $(dir $@)
-	rm -f $@
-	$(HOSTCC) $(HOSTCFLAGS) -Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2 \
-		$< -o $@
-
-$(ISO)/system/tests/linux-test-mmap-mix: $(BUILD)/tests/linux-test-mmap-mix | dirs
-	@mkdir -p $(dir $@)
-	cp $< $@
-
 $(BUILD)/surface.o: kernel/video/surface.c | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -1439,58 +1302,14 @@ icons:
 		echo "[ICONS] Wallpaper copied to $(ISO)/system/bg.bmp"; \
 	else echo "WARN: bg.bmp not found in tools/icons/out/"; fi
 
-iso: all linux_tests iso/boot/grub/grub.cfg icons
+iso: all iso/boot/grub/grub.cfg icons
 	@mkdir -p $(ISO)/boot/grub
 	@mkdir -p $(ISO)/system/pkg/installed
 	@cp kernel/chryspkg/catalog.json $(ISO)/system/pkg/catalog.json
-	@if [ -d ../toolchain/linux-sysroot/lib ] || [ -d ../toolchain/linux-sysroot/lib64 ]; then \
-		echo "[LINUX] Copying userland sysroot..."; \
-		rm -rf $(ISO)/lib $(ISO)/lib64 $(ISO)/usr $(ISO)/etc; \
-		mkdir -p $(ISO)/lib $(ISO)/lib64 $(ISO)/lib/x86_64-linux-gnu; \
-		if [ -d ../toolchain/linux-sysroot/lib/x86_64-linux-gnu ]; then \
-			cp -a ../toolchain/linux-sysroot/lib/x86_64-linux-gnu/* $(ISO)/lib/x86_64-linux-gnu/ 2>/dev/null || true; \
-		fi; \
-		cp -an ../toolchain/linux-sysroot/lib/* $(ISO)/lib/ 2>/dev/null || true; \
-		cp -an ../toolchain/linux-sysroot/lib64/* $(ISO)/lib64/ 2>/dev/null || true; \
-		if [ ! -f $(ISO)/lib/x86_64-linux-gnu/libc.so.6 ]; then \
-			if [ -f $(ISO)/lib64/libc.so.6 ]; then cp -a $(ISO)/lib64/libc.so.6 $(ISO)/lib/x86_64-linux-gnu/libc.so.6; \
-			elif [ -f $(ISO)/lib/libc.so.6 ]; then cp -a $(ISO)/lib/libc.so.6 $(ISO)/lib/x86_64-linux-gnu/libc.so.6; fi; \
-		fi; \
-		if [ ! -f $(ISO)/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 ]; then \
-			if [ -f $(ISO)/lib64/ld-linux-x86-64.so.2 ]; then cp -a $(ISO)/lib64/ld-linux-x86-64.so.2 $(ISO)/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2; \
-			elif [ -f $(ISO)/lib/ld-linux-x86-64.so.2 ]; then cp -a $(ISO)/lib/ld-linux-x86-64.so.2 $(ISO)/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2; fi; \
-		fi; \
-		if [ -d ../toolchain/linux-sysroot/usr ]; then \
-			echo "[LINUX] Copying usr/ from sysroot..."; \
-			cp -a ../toolchain/linux-sysroot/usr $(ISO)/ 2>/dev/null || true; \
-		fi; \
-		if [ -d ../toolchain/linux-sysroot/etc ]; then \
-			echo "[LINUX] Copying etc/ from sysroot..."; \
-			cp -a ../toolchain/linux-sysroot/etc $(ISO)/ 2>/dev/null || true; \
-		fi; \
-		mkdir -p $(ISO)/bin $(ISO)/usr/bin; \
-		if [ ! -f $(ISO)/bin/sh ] && [ -x /bin/dash ]; then cp -L /bin/dash $(ISO)/bin/sh; fi; \
-		if [ ! -f $(ISO)/bin/dash ] && [ -x /bin/dash ]; then cp -L /bin/dash $(ISO)/bin/dash; fi; \
-		if [ ! -f $(ISO)/usr/bin/xkbcomp ] && [ -x /usr/bin/xkbcomp ]; then cp -L /usr/bin/xkbcomp $(ISO)/usr/bin/xkbcomp; fi; \
-		if [ ! -f $(ISO)/lib/x86_64-linux-gnu/libxkbfile.so.1 ] && [ -e /lib/x86_64-linux-gnu/libxkbfile.so.1 ]; then cp -L /lib/x86_64-linux-gnu/libxkbfile.so.1 $(ISO)/lib/x86_64-linux-gnu/libxkbfile.so.1; fi; \
-	else \
-		echo "[LINUX] No linux-sysroot found in toolchain/linux-sysroot"; \
-	fi
+	@echo "[LINUX] Linux ABI layer removed; skipping sysroot copy"
 	@echo "[GRUB] Installing theme..."
 	@mkdir -p $(ISO)/boot/grub/themes/chrysalis
 	@cp ../grub-theme/* $(ISO)/boot/grub/themes/chrysalis/ 2>/dev/null || true
-	@echo "[GRUB] Generating X11 share module list..."
-	@mkdir -p $(ISO)/boot/grub
-	@{ \
-		cfg="$(ISO)/boot/grub/x11-share-modules.cfg"; \
-		: > "$$cfg"; \
-		if [ -d "$(ISO)/usr/share/X11" ]; then \
-			find "$(ISO)/usr/share/X11" -type f | LC_ALL=C sort | while read -r f; do \
-				rel="$${f#$(ISO)}"; \
-				printf '    module2 %s %s\n' "$$rel" "$$rel" >> "$$cfg"; \
-			done; \
-		fi; \
-	}
 	@echo "[GRUB] Creating ISO with graphical modules..."
 	GRUB_FONT_PATH=/usr/share/grub grub-mkrescue -o chrysalis.iso --modules="gfxterm gfxmenu png tga jpeg font all_video" $(ISO) 2>&1 | grep -v "xorriso:"
 

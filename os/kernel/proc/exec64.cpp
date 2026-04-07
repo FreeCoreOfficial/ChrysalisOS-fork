@@ -146,7 +146,14 @@ typedef struct {
 #define AT_HWCAP2 26
 #define AT_EXECFN 31
 
-static constexpr bool k_exec64_kernel_link_dynamic = true;
+/*
+ * Keep PT_INTERP binaries on the interpreter handoff path.
+ *
+ * Attempting to kernel-link a glibc/Xorg-style ET_DYN main executable and then
+ * jump directly to its _start leaves rtld/libc process startup state
+ * incomplete. That path produced earlier user exceptions inside libc.
+ */
+static constexpr bool k_exec64_kernel_link_dynamic = false;
 
 
 typedef struct {
@@ -234,37 +241,6 @@ static int read_exec64_path(const char *path, const uint8_t **out_data,
     return -1;
   *out_data = read_exec64(path, out_size, out_owned);
   return (*out_data) ? 0 : -1;
-}
-
-static const char *env_lookup(char *const envp[], const char *key) {
-  if (!envp || !key)
-    return nullptr;
-  size_t klen = strlen(key);
-  for (int i = 0; envp[i]; i++) {
-    const char *e = envp[i];
-    if (!e)
-      continue;
-    if (strncmp(e, key, klen) == 0 && e[klen] == '=')
-      return e + klen + 1;
-  }
-  return nullptr;
-}
-
-static int exec64_try_path(const char *dir, const char *name,
-                           const uint8_t **out_data, size_t *out_size,
-                           int *out_owned, char *out_path, size_t out_path_sz) {
-  if (!dir || !*dir || !name || !*name || !out_data || !out_size)
-    return -1;
-  size_t dlen = strlen(dir);
-  size_t nlen = strlen(name);
-  size_t need = dlen + 1 + nlen + 1;
-  if (need > out_path_sz)
-    return -1;
-  memcpy(out_path, dir, dlen);
-  out_path[dlen] = '/';
-  memcpy(out_path + dlen + 1, name, nlen);
-  out_path[dlen + 1 + nlen] = 0;
-  return read_exec64_path(out_path, out_data, out_size, out_owned);
 }
 
 static int map_user_segment(uint64_t vaddr, uint64_t memsz, uint64_t flags) {
@@ -1667,80 +1643,4 @@ int exec64_from_module(void *start, uint64_t size, const char *image_path) {
   char *argv[] = {(char *)"module", nullptr};
   char *envp[] = {nullptr};
   return exec64_from_buffer((const uint8_t *)start, (size_t)size, argv, envp, image_path);
-}
-
-int execve_linux_x86_64_full(const char *filename, char *const argv[], char *const envp[]) {
-  if (!filename || !*filename)
-    return -2;
-
-  size_t file_size = 0;
-  int owned = 0;
-  const uint8_t *file_data = nullptr;
-  char chosen_path[256];
-  chosen_path[0] = 0;
-
-  const char *path_env = env_lookup(envp, "PATH");
-  char *fallback_envp[3];
-  if (!path_env || !*path_env) {
-    fallback_envp[0] = (char *)"PATH=/usr/bin:/usr/lib/xorg:/bin:/usr/lib";
-    fallback_envp[1] = (char *)"HOME=/root";
-    fallback_envp[2] = nullptr;
-    envp = fallback_envp;
-    path_env = fallback_envp[0] + 5;
-  }
-
-  if (strchr(filename, '/')) {
-    file_data = read_exec64(filename, &file_size, &owned);
-    if (!file_data)
-      return -2;
-    int r = exec64_from_buffer(file_data, file_size, argv, envp, filename);
-    if (owned) kfree((void *)file_data);
-    return r;
-  }
-
-  if (path_env && *path_env) {
-    const char *p = path_env;
-    while (*p) {
-      const char *start = p;
-      while (*p && *p != ':')
-        p++;
-      size_t len = (size_t)(p - start);
-      if (len > 0 && len < sizeof(chosen_path)) {
-        char dir[256];
-        memcpy(dir, start, len);
-        dir[len] = 0;
-        if (exec64_try_path(dir, filename, &file_data, &file_size, &owned,
-                            chosen_path, sizeof(chosen_path)) == 0) {
-          int r = exec64_from_buffer(file_data, file_size, argv, envp, chosen_path);
-          if (owned) kfree((void *)file_data);
-          return r;
-        }
-      }
-      if (*p == ':')
-        p++;
-    }
-  }
-
-  const char *fallbacks[] = {"/usr/bin", "/usr/lib/xorg", "/bin", "/usr/lib", nullptr};
-  for (int i = 0; fallbacks[i]; i++) {
-    if (exec64_try_path(fallbacks[i], filename, &file_data, &file_size, &owned,
-                        chosen_path, sizeof(chosen_path)) == 0) {
-      int r = exec64_from_buffer(file_data, file_size, argv, envp, chosen_path);
-      if (owned) kfree((void *)file_data);
-      return r;
-    }
-  }
-
-  if (strcmp(filename, "X") == 0) {
-    const char *xalts[] = {"/usr/lib/xorg/Xorg", "/usr/bin/Xorg", nullptr};
-    for (int i = 0; xalts[i]; i++) {
-      if (read_exec64_path(xalts[i], &file_data, &file_size, &owned) == 0) {
-        int r = exec64_from_buffer(file_data, file_size, argv, envp, xalts[i]);
-        if (owned) kfree((void *)file_data);
-        return r;
-      }
-    }
-  }
-
-  return -2;
 }

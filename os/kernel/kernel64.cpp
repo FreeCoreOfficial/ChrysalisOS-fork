@@ -31,7 +31,6 @@
 extern "C" void paging64_init(void);
 extern "C" void idt64_init(void);
 extern "C" void syscall64_init(void);
-extern "C" void syscall64_set_linux_abi(int enabled);
 extern "C" void paging64_dump_pte(uint64_t virt);
 extern "C" char kernel64_end;
 
@@ -66,7 +65,6 @@ static uint8_t g_vga_attr = 0x0F;
 
 static bool g_force_pic = false;
 static bool g_boot_gui = false;
-static bool g_linux_abi = false;
 static uint8_t g_heap64[4 * 1024 * 1024];
 alignas(16) static uint8_t g_kernel_stack0[16384];
 
@@ -319,10 +317,6 @@ static void parse_cmdline(const char *cmdline) {
       cmdline_has_token(cmdline, "boot=gui")) {
     g_boot_gui = true;
   }
-  if (cmdline_has_token(cmdline, "linuxabi=1") ||
-      cmdline_has_token(cmdline, "linuxabi")) {
-    g_linux_abi = true;
-  }
 }
 
 static void shell64_prompt(void) {
@@ -358,9 +352,9 @@ static int shell64_readline(char *buf, int max) {
 }
 
 static void shell64_cmd_help(void) {
-  vga_puts("Commands: help, echo, uname, mods, ram, runmod, runuser, linuxabi, reboot, halt\n");
+  vga_puts("Commands: help, echo, uname, mods, ram, runmod, runuser, reboot, halt\n");
   serial_write_string(
-      "Commands: help, echo, uname, mods, ram, runmod, runuser, linuxabi, reboot, halt\r\n");
+      "Commands: help, echo, uname, mods, ram, runmod, runuser, reboot, halt\r\n");
 }
 
 static void shell64_cmd_uname(void) {
@@ -394,25 +388,6 @@ static void shell64_cmd_ram(void) {
   vga_puts("RAM: ");
   vga_put_u32((uint32_t)g_total_ram_mb);
   vga_puts(" MB\n");
-}
-
-static void shell64_cmd_linuxabi(int argc, char **argv) {
-  if (argc < 2) {
-    serial_write_string(g_linux_abi ? "linuxabi=1\r\n" : "linuxabi=0\r\n");
-    return;
-  }
-  if (strcmp(argv[1], "1") == 0 || strcmp(argv[1], "on") == 0 ||
-      strcmp(argv[1], "enable") == 0) {
-    g_linux_abi = true;
-  } else if (strcmp(argv[1], "0") == 0 || strcmp(argv[1], "off") == 0 ||
-             strcmp(argv[1], "disable") == 0) {
-    g_linux_abi = false;
-  } else {
-    serial_write_string("Usage: linuxabi [on|off]\r\n");
-    return;
-  }
-  syscall64_set_linux_abi(g_linux_abi ? 1 : 0);
-  serial_write_string(g_linux_abi ? "linuxabi=1\r\n" : "linuxabi=0\r\n");
 }
 
 struct runmod64_req {
@@ -577,8 +552,6 @@ static void shell64_exec(char *line) {
     shell64_cmd_runmod(argc, argv);
   } else if (strcmp(argv[0], "runuser") == 0) {
     shell64_cmd_runuser(argc, argv);
-  } else if (strcmp(argv[0], "linuxabi") == 0) {
-    shell64_cmd_linuxabi(argc, argv);
   } else if (strcmp(argv[0], "reboot") == 0) {
     serial_write_string("Rebooting...\r\n");
     outb(0x64, 0xFE);
@@ -711,24 +684,8 @@ extern "C" void kernel_main64(unsigned long long magic,
                          (void*)(uintptr_t)g_mb_modules[i].start,
                          (size_t)(g_mb_modules[i].end - g_mb_modules[i].start));
 
-        /* xinit expects to find "X" or "Xorg" in PATH. Provide aliases
-         * even if the multiboot module is only shipped as /usr/lib/xorg/Xorg. */
-        if (strcmp(g_mb_modules[i].name, "/usr/lib/xorg/Xorg") == 0) {
-          ramfs_create_file("/usr/bin/X",
-                           (void*)(uintptr_t)g_mb_modules[i].start,
-                           (size_t)(g_mb_modules[i].end - g_mb_modules[i].start));
-          ramfs_create_file("/usr/bin/Xorg",
-                           (void*)(uintptr_t)g_mb_modules[i].start,
-                           (size_t)(g_mb_modules[i].end - g_mb_modules[i].start));
-          serial_write_string("    -> aliases: /usr/bin/X, /usr/bin/Xorg\r\n");
-        }
-
     }
   }
-
-
-
-  syscall64_set_linux_abi(g_linux_abi ? 1 : 0);
   if (!mb2_valid(info)) {
     serial_write_string("[K64] WARN: multiboot2 info invalid\r\n");
   } else if (g_mb_module_count == 0) {

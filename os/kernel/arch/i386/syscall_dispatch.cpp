@@ -13,8 +13,6 @@
 #include "../../ui/flyui/bmp.h"
 #include "../../ui/flyui/draw.h"
 #include "../../ui/wm/wm.h"
-#include "../../linux_compat/linux_syscall_i386.h"
-#include "../../linux_compat/linux_syscall_x86_64.h"
 #include "../../user/user.h"
 #include "../../mm/paging.h"
 #include <stdint.h>
@@ -437,12 +435,6 @@ int syscall_dispatch(uint32_t num, uint32_t a1, uint32_t a2, uint32_t a3,
     cur->last_syscall_a3 = a3;
   }
 
-  if (cur && cur->abi == TASK_ABI_LINUX_I386) {
-    return linux_syscall_dispatch_i386(num, a1, a2, a3, a4, a5, a6);
-  }
-  if (cur && cur->abi == TASK_ABI_LINUX_X86_64) {
-    return linux_syscall_dispatch_x86_64(nullptr, num, a1, a2, a3, a4, a5, a6);
-  }
   return syscall_dispatch_chrys(num, a1, a2, a3, a4, a5, a6);
 }
 

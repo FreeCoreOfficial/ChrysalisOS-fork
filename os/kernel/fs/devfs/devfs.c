@@ -148,7 +148,6 @@ _Static_assert(sizeof(struct fb_cmap) == 24, "fb_cmap ABI mismatch");
 #endif
 
 #include "../../input/input.h"
-#include "../../linux_compat/linux_abi.h"
 #ifdef __x86_64__
 #define copy_to_user(d, s, n) (memcpy(d, s, n), 0)
 #define copy_from_user(d, s, n) (memcpy(d, s, n), 0)
@@ -399,7 +398,7 @@ static int devfs_read(struct vnode *n, uint32_t off, uint8_t *buf,
     return 0;
   case DEV_INPUT_EVENT0:
   case DEV_INPUT_EVENT1: {
-    struct linux_input_event ev;
+    input_linux_event_t ev;
     if (size < sizeof(ev)) return 0;
     if (input_pop_evdev(&ev)) {
       memcpy(buf, &ev, sizeof(ev));

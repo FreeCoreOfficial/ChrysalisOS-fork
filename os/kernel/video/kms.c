@@ -2,7 +2,6 @@
 #include "gpu.h"
 #include "../mem/kmalloc.h"
 #include "../string.h"
-#include "../linux_compat/linux_abi.h"
 
 #ifdef __x86_64__
 #define copy_to_user(d, s, n) (memcpy(d, s, n), 0)
@@ -11,6 +10,38 @@
 extern int copy_from_user(void *dst, const void *src, uint32_t size);
 extern int copy_to_user(void *dst, const void *src, uint32_t size);
 #endif
+
+typedef struct {
+  int version_major;
+  int version_minor;
+  int version_patchlevel;
+  uint64_t name_len;
+  uint64_t name;
+  uint64_t date_len;
+  uint64_t date;
+  uint64_t desc_len;
+  uint64_t desc;
+} kms_drm_version_t;
+
+typedef struct {
+  uint64_t fb_id_ptr;
+  uint64_t crtc_id_ptr;
+  uint64_t connector_id_ptr;
+  uint64_t encoder_id_ptr;
+  uint32_t count_fbs;
+  uint32_t count_crtcs;
+  uint32_t count_connectors;
+  uint32_t count_encoders;
+  uint32_t min_width;
+  uint32_t max_width;
+  uint32_t min_height;
+  uint32_t max_height;
+} kms_drm_mode_card_res_t;
+
+#define DRM_IOCTL_VERSION 0xC0406400
+#define DRM_IOCTL_GET_RESOURCES 0xC01064A0
+#define DRM_IOCTL_SET_MASTER 0x0000641E
+#define DRM_IOCTL_DROP_MASTER 0x0000641F
 
 typedef struct kms_buf {
   uint32_t handle;
@@ -86,7 +117,7 @@ int kms_init(void) {
 }
 
 static int drm_ioctl_version(void *arg) {
-  struct linux_drm_version v;
+  kms_drm_version_t v;
   memset(&v, 0, sizeof(v));
   v.version_major = 1;
   v.version_minor = 0;
@@ -95,7 +126,7 @@ static int drm_ioctl_version(void *arg) {
 }
 
 static int drm_ioctl_get_resources(void *arg) {
-  struct linux_drm_mode_card_res res;
+  kms_drm_mode_card_res_t res;
   memset(&res, 0, sizeof(res));
   if (!g_kms_gpu) return -1;
 
@@ -227,3 +258,34 @@ int kms_ioctl(uint32_t cmd, void *arg) {
     return -1;
   }
 }
+struct kms_drm_version {
+  int version_major;
+  int version_minor;
+  int version_patchlevel;
+  uint64_t name_len;
+  uint64_t name;
+  uint64_t date_len;
+  uint64_t date;
+  uint64_t desc_len;
+  uint64_t desc;
+};
+
+struct kms_drm_mode_card_res {
+  uint64_t fb_id_ptr;
+  uint64_t crtc_id_ptr;
+  uint64_t connector_id_ptr;
+  uint64_t encoder_id_ptr;
+  uint32_t count_fbs;
+  uint32_t count_crtcs;
+  uint32_t count_connectors;
+  uint32_t count_encoders;
+  uint32_t min_width;
+  uint32_t max_width;
+  uint32_t min_height;
+  uint32_t max_height;
+};
+
+#define DRM_IOCTL_VERSION 0xC0406400
+#define DRM_IOCTL_GET_RESOURCES 0xC01064A0
+#define DRM_IOCTL_SET_MASTER 0x0000641E
+#define DRM_IOCTL_DROP_MASTER 0x0000641F

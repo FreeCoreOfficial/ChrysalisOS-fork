@@ -329,16 +329,6 @@ static int wrap_cmd_exec(int argc, char **argv) {
     return -1;
   return execve(argv[1], argv + 1, nullptr);
 }
-static int wrap_cmd_exec_linux(int argc, char **argv) {
-  if (argc < 2)
-    return -1;
-  return execve_linux_auto(argv[1], argv + 1);
-}
-static int wrap_cmd_exec_linux64(int argc, char **argv) {
-  if (argc < 2)
-    return -1;
-  return execve_linux_x86_64(argv[1], argv + 1);
-}
 static int wrap_cmd_bridge(int argc, char **argv) {
   return wrap_new_int(cmd_bridge, argc, argv);
 }
@@ -365,8 +355,6 @@ Command command_table[] = {
     {"elf-debug", wrap_cmd_elf_debug},
     {"elf-crash", wrap_cmd_elf_crash},
     {"exec", wrap_cmd_exec},
-    {"exec-linux", wrap_cmd_exec_linux},
-    {"exec-linux64", wrap_cmd_exec_linux64},
     {"exit", wrap_cmd_shutdown},
     {"fat", wrap_cmd_fat},
     {"fortune", wrap_cmd_fortune},

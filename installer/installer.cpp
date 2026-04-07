@@ -1486,14 +1486,6 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   if (mr != 0 && !upgrade_mode) {
     serial("[INSTALLER] WARN: mkdir /system/tests failed (err=%d)\n", mr);
   }
-  /* NEW: Library directories for M1 */
-  char lib64_dir[] = "/lib64";
-  mr = fat32_create_directory_verified(lib64_dir, 1);
-  char lib_base_dir[] = "/lib";
-  fat32_create_directory_verified(lib_base_dir, 1);
-  char lib_x64_dir[] = "/lib/x86_64-linux-gnu";
-  fat32_create_directory_verified(lib_x64_dir, 1);
-
   mr = fat32_create_directory_verified(themes_dir, 1);
   if (mr != 0 && !upgrade_mode) {
     serial("[INSTALLER] WARN: mkdir /boot/grub/themes failed (err=%d)\n", mr);
@@ -1532,8 +1524,6 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   size_t kernel64_size = 0;
   void *hello64_data = NULL;
   size_t hello64_size = 0;
-  int have_linux_hello32 = 0;
-  int have_linux_hello64 = 0;
   int have_hello64 = 0;
 
   int module_total = installer_count_modules(addr);
@@ -1651,54 +1641,6 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
           fat32_create_file_verified(path, (void *)(uintptr_t)mod->mod_start,
                                      (uint32_t)(mod->mod_end - mod->mod_start),
                                      0);
-          kmalloc_reset();
-        } else if (strcmp(current_mod_name, "linux-hello32") == 0 ||
-                   strcmp(current_mod_name, "linux-hello64") == 0) {
-          if (strcmp(current_mod_name, "linux-hello32") == 0)
-            have_linux_hello32 = 1;
-          if (strcmp(current_mod_name, "linux-hello64") == 0)
-            have_linux_hello64 = 1;
-          char path[64] = "/system/tests/";
-          size_t off = strlen(path);
-          memcpy(path + off, current_mod_name, strlen(current_mod_name) + 1);
-          serial("[INSTALLER] Test binary: %s -> %s\n", current_mod_name, path);
-          fat32_create_file_verified(path, (void *)(uintptr_t)mod->mod_start,
-                                     (uint32_t)(mod->mod_end - mod->mod_start),
-                                     0);
-          if (strcmp(current_mod_name, "linux-hello64") == 0) {
-            char boot_path[64] = "/boot/chrysalis/";
-            size_t boff = strlen(boot_path);
-            memcpy(boot_path + boff, current_mod_name,
-                   strlen(current_mod_name) + 1);
-            serial("[INSTALLER] Test mirror: %s -> %s\n", current_mod_name,
-                   boot_path);
-            fat32_create_file_verified(boot_path,
-                                       (void *)(uintptr_t)mod->mod_start,
-                                       (uint32_t)(mod->mod_end - mod->mod_start),
-                                       0);
-          }
-          kmalloc_reset();
-        } else if (strcmp(current_mod_name, "ld-linux-x86-64.so.2") == 0) {
-          serial("[INSTALLER] Dynamic Linker: %s -> /lib64/\n", current_mod_name);
-          fat32_create_file_verified("/lib64/ld-linux-x86-64.so.2", 
-                                     (void *)(uintptr_t)mod->mod_start,
-                                     (uint32_t)(mod->mod_end - mod->mod_start), 1);
-          kmalloc_reset();
-        } else if (strcmp(current_mod_name, "libc.so.6") == 0) {
-          serial("[INSTALLER] Libc: %s -> /lib/x86_64-linux-gnu/\n", current_mod_name);
-          fat32_create_file_verified("/lib/x86_64-linux-gnu/libc.so.6", 
-                                     (void *)(uintptr_t)mod->mod_start,
-                                     (uint32_t)(mod->mod_end - mod->mod_start), 1);
-          /* Also mirror to /lib64 for older dynamic linkers */
-          fat32_create_file_verified("/lib64/libc.so.6", 
-                                     (void *)(uintptr_t)mod->mod_start,
-                                     (uint32_t)(mod->mod_end - mod->mod_start), 1);
-          kmalloc_reset();
-        } else if (strcmp(current_mod_name, "hello-libc") == 0) {
-          serial("[INSTALLER] Hello Libc: %s -> /system/tests/\n", current_mod_name);
-          fat32_create_file_verified("/system/tests/hello-libc", 
-                                     (void *)(uintptr_t)mod->mod_start,
-                                     (uint32_t)(mod->mod_end - mod->mod_start), 1);
           kmalloc_reset();
         } else {
 
@@ -1819,101 +1761,10 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
                   "  terminal_output console\n");
     ui_append_str(grub_cfg, sizeof(grub_cfg),
                   "  multiboot2 /boot/chrysalis/kernel64.bin\n");
-    if (have_linux_hello64) {
-      ui_append_str(grub_cfg, sizeof(grub_cfg),
-                    "  module2 /boot/chrysalis/linux-hello64 linux-hello64\n");
-      ui_append_str(grub_cfg, sizeof(grub_cfg),
-                    "  module2 /system/tests/linux-hello64 linux-hello64\n");
-    }
     if (have_hello64) {
       ui_append_str(grub_cfg, sizeof(grub_cfg),
                     "  module2 /boot/chrysalis/hello64.elf hello64.elf\n");
     }
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib64/ld-linux-x86-64.so.2 /lib64/ld-linux-x86-64.so.2\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib/x86_64-linux-gnu/libc.so.6 /lib/x86_64-linux-gnu/libc.so.6\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /system/tests/hello-libc /system/tests/hello-libc\n");
-
-    ui_append_str(grub_cfg, sizeof(grub_cfg), "  boot\n}\n\n");
-
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "menuentry \"Chrysalis OS (64-bit Prototype, Linux ABI)\" {\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  set gfxpayload=text\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  terminal_output console\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  multiboot2 /boot/chrysalis/kernel64.bin linuxabi=1\n");
-    if (have_linux_hello64) {
-      ui_append_str(grub_cfg, sizeof(grub_cfg),
-                    "  module2 /boot/chrysalis/linux-hello64 linux-hello64\n");
-      ui_append_str(grub_cfg, sizeof(grub_cfg),
-                    "  module2 /system/tests/linux-hello64 linux-hello64\n");
-    }
-    if (have_hello64) {
-      ui_append_str(grub_cfg, sizeof(grub_cfg),
-                    "  module2 /boot/chrysalis/hello64.elf hello64.elf\n");
-    }
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib64/ld-linux-x86-64.so.2 /lib64/ld-linux-x86-64.so.2\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib/x86_64-linux-gnu/libc.so.6 /lib/x86_64-linux-gnu/libc.so.6\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /system/tests/hello-libc /system/tests/hello-libc\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib/x86_64-linux-gnu/libX11.so.6 /lib/x86_64-linux-gnu/libX11.so.6\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib/x86_64-linux-gnu/libxcb.so.1 /lib/x86_64-linux-gnu/libxcb.so.1\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib/x86_64-linux-gnu/libXau.so.6 /lib/x86_64-linux-gnu/libXau.so.6\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib/x86_64-linux-gnu/libXdmcp.so.6 /lib/x86_64-linux-gnu/libXdmcp.so.6\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib/x86_64-linux-gnu/libXext.so.6 /lib/x86_64-linux-gnu/libXext.so.6\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib/x86_64-linux-gnu/libXrender.so.1 /lib/x86_64-linux-gnu/libXrender.so.1\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib/x86_64-linux-gnu/libXrandr.so.2 /lib/x86_64-linux-gnu/libXrandr.so.2\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib/x86_64-linux-gnu/libXft.so.2 /lib/x86_64-linux-gnu/libXft.so.2\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib/x86_64-linux-gnu/libfontconfig.so.1 /lib/x86_64-linux-gnu/libfontconfig.so.1\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib/x86_64-linux-gnu/libexpat.so.1 /lib/x86_64-linux-gnu/libexpat.so.1\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib/x86_64-linux-gnu/libfreetype.so.6 /lib/x86_64-linux-gnu/libfreetype.so.6\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib/x86_64-linux-gnu/libz.so.1 /lib/x86_64-linux-gnu/libz.so.1\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib/x86_64-linux-gnu/libbz2.so.1.0 /lib/x86_64-linux-gnu/libbz2.so.1.0\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib/x86_64-linux-gnu/libpng16.so.16 /lib/x86_64-linux-gnu/libpng16.so.16\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib/x86_64-linux-gnu/libbrotlidec.so.1 /lib/x86_64-linux-gnu/libbrotlidec.so.1\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib/x86_64-linux-gnu/libbrotlicommon.so.1 /lib/x86_64-linux-gnu/libbrotlicommon.so.1\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib/x86_64-linux-gnu/libXaw.so.7 /lib/x86_64-linux-gnu/libXaw.so.7\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib/x86_64-linux-gnu/libXmu.so.6 /lib/x86_64-linux-gnu/libXmu.so.6\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib/x86_64-linux-gnu/libXinerama.so.1 /lib/x86_64-linux-gnu/libXinerama.so.1\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib/x86_64-linux-gnu/libXpm.so.4 /lib/x86_64-linux-gnu/libXpm.so.4\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib/x86_64-linux-gnu/libXt.so.6 /lib/x86_64-linux-gnu/libXt.so.6\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib/x86_64-linux-gnu/libICE.so.6 /lib/x86_64-linux-gnu/libICE.so.6\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib/x86_64-linux-gnu/libutempter.so.0 /lib/x86_64-linux-gnu/libutempter.so.0\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib/x86_64-linux-gnu/libtinfo.so.6 /lib/x86_64-linux-gnu/libtinfo.so.6\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib/x86_64-linux-gnu/libSM.so.6 /lib/x86_64-linux-gnu/libSM.so.6\n");
-    ui_append_str(grub_cfg, sizeof(grub_cfg),
-                  "  module2 /lib/x86_64-linux-gnu/libuuid.so.1 /lib/x86_64-linux-gnu/libuuid.so.1\n");
 
     ui_append_str(grub_cfg, sizeof(grub_cfg), "  boot\n}\n\n");
   }

@@ -6,7 +6,6 @@
 #include "../../fs/vfs/vfs.h"
 #include "../../fs/ramfs/ramfs.h"
 #include "../../fs/pipe/pipe.h"
-#include "../../linux_compat/linux_syscall_x86_64.h"
 #include "../../mem/kmalloc.h"
 #include "../../sched/task64.h"
 #include "../../string.h"
@@ -43,7 +42,6 @@ static file_t *g_boot_files[MAX_FILES_PER_PROCESS];
 static uint8_t g_boot_fd_flags[MAX_FILES_PER_PROCESS];
 static file_t g_file_pool[MAX_FILES_PER_PROCESS];
 static uint8_t g_file_used[MAX_FILES_PER_PROCESS];
-static int g_linux_abi_mode = 0;
 static syscall64_state_t *g_syscall_state = nullptr;
 
 static void append_path_component(char *dst, uint64_t cap, const char *src) {
@@ -412,8 +410,6 @@ void syscall64_init(void) {
   init_syscall_table();
 }
 
-void syscall64_set_linux_abi(int enabled) { g_linux_abi_mode = enabled ? 1 : 0; }
-
 syscall64_state_t *syscall64_get_state(void) { return g_syscall_state; }
 
 file_t *syscall64_get_file(int fd) {
@@ -469,11 +465,6 @@ extern "C" uint64_t syscall64_dispatch_native(syscall64_state_t *state, uint64_t
 extern "C" uint64_t syscall64_dispatch(syscall64_state_t *state, uint64_t num, uint64_t a1, uint64_t a2,
                             uint64_t a3, uint64_t a4, uint64_t a5,
                             uint64_t a6) {
-  if (g_linux_abi_mode) {
-    return (uint64_t)linux_syscall_dispatch_x86_64((void *)state, num, a1, a2, a3,
-                                                   a4, a5, a6);
-  }
-
   return syscall64_dispatch_native(state, num, a1, a2, a3, a4, a5, a6);
 }
 

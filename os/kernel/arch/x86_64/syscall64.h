@@ -26,7 +26,6 @@ typedef struct {
 } syscall64_state_t;
 
 void syscall64_init(void);
-void syscall64_set_linux_abi(int enabled);
 uint64_t syscall64_dispatch(syscall64_state_t *state, uint64_t num, uint64_t a1, uint64_t a2,
                             uint64_t a3, uint64_t a4, uint64_t a5,
                             uint64_t a6);

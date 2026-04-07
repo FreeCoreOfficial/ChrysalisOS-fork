@@ -1155,48 +1155,6 @@ static int execve_impl(const char *filename, char *const argv[],
     at_base = images[interp_index].load_base;
   }
 
-  if (abi == TASK_ABI_LINUX_I386) {
-    if (images[0].tls_memsz > 0) {
-      uint32_t tls_base = ELF32_TLS_BASE;
-      if (images[0].tls_align && (images[0].tls_align & (images[0].tls_align - 1)) == 0) {
-        tls_base &= ~(images[0].tls_align - 1);
-      }
-      uint32_t tls_size =
-          (images[0].tls_memsz + PAGE_SIZE - 1) & PAGE_FRAME_MASK;
-      if (map_user_region(as, tls_base, tls_size,
-                          PAGE_PRESENT | PAGE_RW | PAGE_USER) < 0) {
-        terminal_printf("[EXEC] Error: Could not map TLS region\n");
-        address_space_destroy(as);
-        return -1;
-      }
-      if (images[0].tls_filesz > 0 &&
-          images[0].tls_offset + images[0].tls_filesz <= images[0].file_size) {
-        if (as_write(as, tls_base,
-                     images[0].file_data + images[0].tls_offset,
-                     images[0].tls_filesz) < 0) {
-          terminal_printf("[EXEC] Error: Could not init TLS image\n");
-          address_space_destroy(as);
-          return -1;
-        }
-      }
-      at_tls = tls_base;
-    }
-
-    if (map_user_stack(as, ELF32_STACK_TOP, ELF32_STACK_SIZE) < 0) {
-      terminal_printf("[EXEC] Error: Could not map user stack\n");
-      address_space_destroy(as);
-      return -1;
-    }
-    user_sp = build_linux_stack32(as, filename, argv, envp, images[0].phdr,
-                                  images[0].phent, images[0].phnum,
-                                  main_entry, at_base, at_tls);
-    if (!user_sp) {
-      terminal_printf("[EXEC] Error: Could not build user stack\n");
-      address_space_destroy(as);
-      return -1;
-    }
-  }
-
   void (*entry_point)(void) =
       (void (*)(void))(uintptr_t)(entry_addr);
   for (int i = 0; i < img_count; i++) {
@@ -1276,103 +1234,11 @@ static int execve64_impl(const char *filename, char *const argv[],
   return -1;
 }
 
-static int detect_linux_abi(const uint8_t *file_data, size_t file_size) {
-  if (!file_data || file_size < 5)
-    return -1;
-  if (file_data[0] != 0x7F || file_data[1] != 'E' || file_data[2] != 'L' ||
-      file_data[3] != 'F')
-    return -1;
-
-  uint8_t cls = file_data[4];
-  if (cls == ELFCLASS32) {
-    if (file_size < sizeof(Elf32_Ehdr))
-      return -1;
-    const Elf32_Ehdr *eh = (const Elf32_Ehdr *)file_data;
-    if (eh->e_machine == EM_386)
-      return TASK_ABI_LINUX_I386;
-    if (eh->e_machine == EM_X86_64)
-      return TASK_ABI_LINUX_X32;
-    return -1;
-  }
-
-  if (cls == ELFCLASS64) {
-    if (file_size < sizeof(elf64_ehdr_t))
-      return -1;
-    const elf64_ehdr_t *eh = (const elf64_ehdr_t *)file_data;
-    if (eh->e_machine == EM_X86_64)
-      return TASK_ABI_LINUX_X86_64;
-    return -1;
-  }
-
-  return -1;
-}
-
 extern "C" int execve(const char *filename, char *const argv[],
                       char *const envp[]) {
   return execve_impl(filename, argv, envp, TASK_ABI_CHRYSALIS);
 }
 
-extern "C" int execve_linux_i386(const char *filename, char *const argv[]) {
-  return execve_impl(filename, argv, nullptr, TASK_ABI_LINUX_I386);
-}
-
-extern "C" int execve_linux_x86_64_full(const char *filename,
-                                        char *const argv[],
-                                        char *const envp[]);
-
-extern "C" int execve_linux_x86_64(const char *filename, char *const argv[]) {
-  if (cpu_is_long_mode()) {
-    return execve_linux_x86_64_full(filename, argv, nullptr);
-  }
-  return execve64_impl(filename, argv, TASK_ABI_LINUX_X86_64);
-}
-
-static int execve_linux_x32(const char *filename, char *const argv[]) {
-  (void)filename;
-  (void)argv;
-  terminal_printf("[EXEC] Error: Linux x32 ABI not supported yet\n");
-  return -1;
-}
-
-extern "C" int execve_linux_auto(const char *filename, char *const argv[]) {
-  size_t file_size = 0;
-  int owned = 0;
-  const uint8_t *file_data = read_executable(filename, &file_size, &owned);
-  if (!file_data) {
-    terminal_printf("[EXEC] Error: Could not read file '%s'\n", filename);
-    return -1;
-  }
-
-  int abi = detect_linux_abi(file_data, file_size);
-  if (owned)
-    kfree((void *)file_data);
-
-  if (abi == TASK_ABI_LINUX_I386)
-    return execve_linux_i386(filename, argv);
-  if (abi == TASK_ABI_LINUX_X86_64)
-    return execve_linux_x86_64(filename, argv);
-  if (abi == TASK_ABI_LINUX_X32)
-    return execve_linux_x32(filename, argv);
-
-  terminal_printf("[EXEC] Error: Unsupported Linux ELF ABI\n");
-  return -1;
-}
-
 extern "C" int exec_from_path(const char *path, char *const argv[]) {
   return execve(path, argv, nullptr);
-}
-
-extern "C" int exec_from_path_linux_i386(const char *path,
-                                         char *const argv[]) {
-  return execve_linux_i386(path, argv);
-}
-
-extern "C" int exec_from_path_linux_x86_64(const char *path,
-                                           char *const argv[]) {
-  return execve_linux_x86_64(path, argv);
-}
-
-extern "C" int exec_from_path_linux_auto(const char *path,
-                                         char *const argv[]) {
-  return execve_linux_auto(path, argv);
 }
