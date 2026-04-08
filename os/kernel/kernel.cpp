@@ -738,6 +738,9 @@ extern "C" void kernel_main(uint32_t magic, uint32_t addr) {
   asm volatile("sti");
   serial("[KERNEL] Interrupts enabled (STI). System alive.\n");
 
+  /* Initialize Ethernet Subsystem (AFTER interrupts are enabled so DHCP timer works) */
+  net_init();
+
   /* If IRQs are misrouted (common when IOAPIC/ISO overrides go wrong),
      the timer won't tick. Detect and fallback to PIC. */
   uint64_t t0 = timer_ticks();
@@ -811,9 +814,6 @@ extern "C" void kernel_main(uint32_t magic, uint32_t addr) {
   /* Initialize USB Subsystem (UHCI) */
   usb_core_init();
   terminal_writestring("[kernel] USB init done.\n");
-
-  /* Initialize Ethernet Subsystem */
-  net_init();
 
   // 22) Main loop: shell polling + halt (no unsafe yields)
   // If you want the shell to be preempted by tasks, move shell into its own

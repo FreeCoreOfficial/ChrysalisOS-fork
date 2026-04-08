@@ -18,6 +18,7 @@
 #define E1000_TDLEN    0x3808
 #define E1000_TDH      0x3810
 #define E1000_TDT      0x3818
+#define E1000_TIPG     0x0410
 #define E1000_MTA      0x5200
 
 #define RCTL_EN        (1 << 1)

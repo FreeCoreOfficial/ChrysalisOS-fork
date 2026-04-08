@@ -223,12 +223,13 @@ device_found:
     bochs_device.type = GPU_TYPE_BOCHS;
     bochs_device.phys_addr = bar0;
     bochs_device.ops = &bochs_ops;
+    bochs_device.virt_addr = (void*)BOCHS_LFB_VIRT_BASE;
 
-    /* Set default mode: 1024x768x32 */
+    /* Set default mode parameters */
     uint32_t width = 1024;
     uint32_t height = 768;
     uint32_t bpp = 32;
-    uint32_t fb_size = width * height * (bpp / 8);
+    uint32_t fb_size = width * (bpp / 8) * height;
 
     /* Align size to page boundary */
     fb_size = (fb_size + 0xFFF) & 0xFFFFF000;
@@ -250,7 +251,12 @@ device_found:
     }
 #endif
 
-    bochs_device.virt_addr = (void*)BOCHS_LFB_VIRT_BASE;
+    /* Now that it's mapped, set the mode (which clears the screen safely) */
+    if (bochs_set_mode(&bochs_device, width, height, bpp) != 0) {
+        serial("[GPU] Error: Failed to set Bochs VBE mode.\n");
+        return;
+    }
+
     serial("[GPU] Bochs framebuffer mapped: phys=0x%x virt=0x%x size=%d\n", bar0, BOCHS_LFB_VIRT_BASE, fb_size);
 
     /* Register with Core */

@@ -37,7 +37,6 @@ KERNEL = kernel.bin
 KERNEL64 = kernel64.bin
 
 OBJS = \
-	$(BUILD)/user/libpetal.o \
 	build/arch/i386/multiboot2_header.o \
 	$(BUILD)/boot.o \
 	$(BUILD)/gdt_flush.o \
@@ -217,43 +216,7 @@ OBJS = \
 	$(BUILD)/kms.o \
 	$(BUILD)/vt.o \
 	$(BUILD)/colors/cl.o \
-	$(BUILD)/surface.o \
-	$(BUILD)/compositor.o \
-	$(BUILD)/ui/wm/wm.o \
-	$(BUILD)/ui/wm/window.o \
-	$(BUILD)/ui/wm/wm_layout.o \
-	$(BUILD)/ui/wm/chrome_zig.o \
-	$(BUILD)/ui/wm/wm_hooks.o \
-	$(BUILD)/ui/flyui/core.o \
-	$(BUILD)/ui/flyui/widget.o \
-	$(BUILD)/ui/flyui/event.o \
-	$(BUILD)/ui/flyui/bmp.o \
-	$(BUILD)/ui/flyui/draw.o \
-	$(BUILD)/ui/flyui/surface.o \
-	$(BUILD)/ui/flyui/layout.o \
-	$(BUILD)/ui/flyui/theme.o \
-	$(BUILD)/ui/flyui/widgets/label.o \
-	$(BUILD)/ui/flyui/widgets/button.o \
-	$(BUILD)/ui/flyui/widgets/panel.o \
-	$(BUILD)/ui/flyui/widgets/image.o \
-	$(BUILD)/ui/flyui/widgets/icon_button.o \
-	$(BUILD)/ui/flyui/widgets/textbox.o \
 	$(BUILD)/toolchain/cc.o \
-	$(BUILD)/apps/app_manager.o \
-	$(BUILD)/apps/calculator_app.o \
-	$(BUILD)/apps/calendar_app.o \
-	$(BUILD)/apps/clock_app.o \
-	$(BUILD)/apps/demo3d_app.o \
-	$(BUILD)/apps/file_manager_app.o \
-	$(BUILD)/apps/image_viewer_app.o \
-	$(BUILD)/apps/minesweeper_app.o \
-	$(BUILD)/apps/notepad_app.o \
-	$(BUILD)/apps/paint_app.o \
-	$(BUILD)/apps/run_dialog_app.o \
-	$(BUILD)/apps/sysinfo_app.o \
-	$(BUILD)/apps/task_manager_app.o \
-	$(BUILD)/apps/tic_tac_toe_app.o \
-	$(BUILD)/apps/icons/icons.o \
 	$(BUILD)/ethernet/net.o \
 	$(BUILD)/ethernet/net_device.o \
 	$(BUILD)/ethernet/eth.o \
@@ -316,9 +279,9 @@ OBJS64 = \
 # TARGETURI PRINCIPALE
 # -------------------------
 
-.PHONY: all iso run clean help consolerun dirs dirs64 icons petal_apps
+.PHONY: all iso run clean help consolerun dirs dirs64 icons
 
-all: $(ISO)/boot/$(KERNEL) $(ISO)/boot/$(KERNEL64) $(ISO)/boot/hello64.elf petal_apps
+all: $(ISO)/boot/$(KERNEL) $(ISO)/boot/$(KERNEL64) $(ISO)/boot/hello64.elf
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -339,10 +302,7 @@ dirs: $(BUILD)
 	mkdir -p $(BUILD)/smp
 	mkdir -p $(BUILD)/hardware
 	mkdir -p ${BUILD}/colors
-	mkdir -p $(BUILD)/ui/wm
-	mkdir -p $(BUILD)/ui/flyui
 	mkdir -p $(BUILD)/toolchain
-	mkdir -p $(BUILD)/apps
 	mkdir -p ${BUILD}/ethernet
 	mkdir -p ${BUILD}/ethernet/drivers
 	mkdir -p ${BUILD}/crypto
@@ -1106,166 +1066,9 @@ $(BUILD)/vt.o: kernel/vt/vt.c | dirs
 $(BUILD)/colors/cl.o: kernel/colors/cl.c | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# -------------------------
-# USERLAND (LibPetal & Apps)
-# -------------------------
-
-HOSTCC ?= gcc
-HOSTCFLAGS ?= -O2 -Wall -Wextra -fno-plt -no-pie
-
-$(BUILD)/user/libpetal.o: user/libpetal/src/libpetal.c | dirs
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-LIBC_SRCS = \
-	user/libc/src/string.c \
-	user/libc/src/stdlib.c \
-	user/libc/src/unistd.c \
-	user/libc/src/errno.c
-
-LIBC_OBJS = $(patsubst user/libc/src/%.c,$(BUILD)/user/libc_%.o,$(LIBC_SRCS))
-LIBC_PIC_OBJS = $(patsubst user/libc/src/%.c,$(BUILD)/user/libc_pic_%.o,$(LIBC_SRCS))
-
-$(BUILD)/user/libc_%.o: user/libc/src/%.c | dirs
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD)/user/libc_pic_%.o: user/libc/src/%.c | dirs
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -fPIC -c $< -o $@
-
-PETAL_APPS_SRC_CPP = $(filter-out apps/konsole.cpp, $(wildcard apps/*.cpp))
-PETAL_APPS_SRC_ZIG = $(wildcard apps/*.zig)
-PETAL_APPS = \
-	$(patsubst apps/%.cpp, $(ISO)/system/apps/%.petal, $(PETAL_APPS_SRC_CPP)) \
-	$(patsubst apps/%.zig, $(ISO)/system/apps/%.petal, $(PETAL_APPS_SRC_ZIG))
-PETAL_LIBS = $(ISO)/system/lib/libc.so
-
-PETAL_CXXFLAGS = $(CXXFLAGS) -fno-pic -Iuser/libpetal/include -Iuser/libc/include
-PETAL_LDFLAGS = -m elf_i386
-PETAL_HEADERS = user/libpetal/include/petal.h
-ZIG_USERFLAGS = -O ReleaseSmall -target x86-freestanding -mcpu=i386 -fno-stack-protector -I user/libpetal/include
-
-$(BUILD)/user/start.o: user/libpetal/src/start.asm | dirs
-	$(AS) -f elf32 $< -o $@
-
-$(ISO)/system/apps/konsole.petal: apps/konsole.zig $(BUILD)/user/libpetal.o $(BUILD)/user/start.o $(LIBC_OBJS) $(PETAL_HEADERS) | dirs
-	@mkdir -p $(dir $@)
-	ZIG_LOCAL_CACHE_DIR=$(BUILD)/zig-cache ZIG_GLOBAL_CACHE_DIR=$(BUILD)/zig-cache-global \
-		$(ZIG) build-obj $(ZIG_USERFLAGS) -femit-bin=$(BUILD)/apps/konsole.o $<
-	$(LD) $(PETAL_LDFLAGS) $(BUILD)/user/start.o $(BUILD)/apps/konsole.o $(BUILD)/user/libpetal.o $(LIBC_OBJS) -o $@
-
-$(ISO)/system/apps/%.petal: apps/%.cpp $(BUILD)/user/libpetal.o $(BUILD)/user/start.o $(LIBC_OBJS) $(PETAL_HEADERS) | dirs
-	@mkdir -p $(dir $@)
-	$(CXX) $(PETAL_CXXFLAGS) -c $< -o $(BUILD)/apps/$*.o
-	$(LD) $(PETAL_LDFLAGS) $(BUILD)/user/start.o $(BUILD)/apps/$*.o $(BUILD)/user/libpetal.o $(LIBC_OBJS) -o $@
-
-$(ISO)/system/apps/%.petal: apps/%.zig $(BUILD)/user/libpetal.o $(BUILD)/user/start.o $(LIBC_OBJS) $(PETAL_HEADERS) | dirs
-	@mkdir -p $(dir $@)
-	ZIG_LOCAL_CACHE_DIR=$(BUILD)/zig-cache ZIG_GLOBAL_CACHE_DIR=$(BUILD)/zig-cache-global \
-		$(ZIG) build-obj $(ZIG_USERFLAGS) -femit-bin=$(BUILD)/apps/$*.o $<
-	$(LD) $(PETAL_LDFLAGS) $(BUILD)/user/start.o $(BUILD)/apps/$*.o $(BUILD)/user/libpetal.o $(LIBC_OBJS) -o $@
-
-petal_apps: $(PETAL_APPS) $(PETAL_LIBS)
-
-$(ISO)/system/lib/libc.so: $(LIBC_PIC_OBJS) | dirs
-	@mkdir -p $(ISO)/system/lib
-	$(LD) -shared -m elf_i386 $(LIBC_PIC_OBJS) -o $@
-
-$(BUILD)/surface.o: kernel/video/surface.c | dirs
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD)/compositor.o: kernel/video/compositor.c | dirs
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD)/ui/wm/wm.o: kernel/ui/wm/wm.c | dirs
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD)/ui/wm/chrome_zig.o: kernel/ui/wm/chrome.zig | dirs
-	@mkdir -p $(dir $@) $(BUILD)/zig-cache $(BUILD)/zig-cache-global
-	ZIG_LOCAL_CACHE_DIR=$(BUILD)/zig-cache ZIG_GLOBAL_CACHE_DIR=$(BUILD)/zig-cache-global \
-		$(ZIG) build-obj $(ZIGFLAGS) -femit-bin=$@ $<
-
-$(BUILD)/ui/wm/window.o: kernel/ui/wm/window.c | dirs
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD)/ui/wm/wm_layout.o: kernel/ui/wm/wm_layout.c | dirs
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD)/ui/wm/wm_hooks.o: kernel/ui/wm/wm_hooks.c | dirs
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD)/ui/flyui/core.o: kernel/ui/flyui/core.c | dirs
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD)/ui/flyui/widget.o: kernel/ui/flyui/widget.c | dirs
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD)/ui/flyui/event.o: kernel/ui/flyui/event.c | dirs
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD)/ui/flyui/bmp.o: kernel/ui/flyui/bmp.c | dirs
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD)/ui/flyui/draw.o: kernel/ui/flyui/draw.c | dirs
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD)/ui/flyui/surface.o: kernel/ui/flyui/surface.c | dirs
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD)/ui/flyui/layout.o: kernel/ui/flyui/layout.c | dirs
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD)/ui/flyui/theme.o: kernel/ui/flyui/theme.c | dirs
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD)/ui/flyui/widgets/label.o: kernel/ui/flyui/widgets/label.c | dirs
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD)/ui/flyui/widgets/button.o: kernel/ui/flyui/widgets/button.c | dirs
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD)/ui/flyui/widgets/panel.o: kernel/ui/flyui/widgets/panel.c | dirs
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD)/ui/flyui/widgets/image.o: kernel/ui/flyui/widgets/image.c | dirs
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD)/ui/flyui/widgets/icon_button.o: kernel/ui/flyui/widgets/icon_button.c | dirs
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD)/ui/flyui/widgets/textbox.o: kernel/ui/flyui/widgets/textbox.c | dirs
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
-
 $(BUILD)/toolchain/%.o: kernel/toolchain/%.cpp | dirs
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-$(BUILD)/apps/%.o: kernel/apps/%.cpp | dirs
-	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-$(BUILD)/apps/icons/icons.o: kernel/apps/icons/icons.c | dirs
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/ethernet/%.o: kernel/ethernet/%.c | dirs
 	@mkdir -p $(dir $@)
@@ -1291,18 +1094,7 @@ $(ISO)/boot/$(KERNEL64): $(OBJS64) | dirs64
 # ISO & RUN
 # -------------------------
 
-icons:
-	@echo "[ICONS] Generating icons BMPs..."
-	cd ../tools/icons && python3 mkicons.py
-	@mkdir -p $(ISO)/icons
-	@mkdir -p $(ISO)/system
-	cp ../tools/icons/out/*.bmp $(ISO)/icons/
-	@if [ -f ../tools/icons/out/bg.bmp ]; then \
-		cp ../tools/icons/out/bg.bmp $(ISO)/system/bg.bmp; \
-		echo "[ICONS] Wallpaper copied to $(ISO)/system/bg.bmp"; \
-	else echo "WARN: bg.bmp not found in tools/icons/out/"; fi
-
-iso: all iso/boot/grub/grub.cfg icons
+iso: all iso/boot/grub/grub.cfg
 	@mkdir -p $(ISO)/boot/grub
 	@mkdir -p $(ISO)/system/pkg/installed
 	@cp kernel/chryspkg/catalog.json $(ISO)/system/pkg/catalog.json
@@ -1323,12 +1115,6 @@ clean:
 	rm -rf $(BUILD) $(BUILD64) *.iso $(ISO)/boot/$(KERNEL) $(ISO)/boot/$(KERNEL64) $(ISO)/boot/hello64.elf $(ISO)/icons ../tools/icons/out
 
 # -------------------------
-# ASSETS
-# -------------------------
-assets:
-	mcopy -i hdd.img@@1M -o kernel/ui/flyui/assets/wallpaper.bmp ::/bg.bmp
-
-# -------------------------
 # HELP
 # -------------------------
 # OUTDATED COMMANDS USE COMMANDS FROM PACKAGE.JSON
@@ -1336,7 +1122,7 @@ help:
 	@echo ""
 	@echo "Chrysalis OS - Makefile commands"
 	@echo "--------------------------------"
-	@echo "make           -> compilează kernelul + app-urile .petal"
+	@echo "make           -> compilează kernelul și aplicațiile native"
 	@echo "make iso       -> creează imaginea bootabilă ISO"
 	@echo "make run       -> rulează OS-ul în QEMU (cu grafică)"
 	@echo "make consolerun-> rulează OS-ul în QEMU (doar consolă)"

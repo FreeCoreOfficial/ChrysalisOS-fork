@@ -12,6 +12,8 @@ void net_init(void) {
     /* Probe Drivers */
     if (e1000_init() == 0) {
         serial("[NET] E1000 driver loaded.\n");
+        extern void sleep(uint32_t ms);
+        sleep(200);      /* Give some time for Link to go UP */
         dhcp_discover(); /* Auto-configure */
         return;
     }

@@ -1000,7 +1000,7 @@ static int execve_impl(const char *filename, char *const argv[],
   interp_path = elf32_find_interp(file_data, file_size, ehdr, interp_buf,
                                   sizeof(interp_buf));
 
-  /* Create a private address space for this user app so multiple .petal apps
+  /* Create a private address space for this user app so multiple native apps
      can coexist without overlapping at the same virtual addresses. */
   address_space_t *as = address_space_create();
   if (!as || !as->page_directory) {

@@ -196,8 +196,6 @@ installer.iso: $(BUILD)/installer.elf
 	@if [ -f ../os/iso/boot/hello64.elf ]; then cp ../os/iso/boot/hello64.elf $(ISO)/boot/chrysalis/; else echo "WARNING: hello64.elf not found!"; fi
 	@mkdir -p $(ISO)/icons
 	@if [ -d ../os/iso/icons ]; then cp ../os/iso/icons/*.bmp $(ISO)/icons/; else echo "WARNING: icons bmp not found!"; fi
-	@mkdir -p $(ISO)/system/apps
-	@if [ -d ../os/iso/system/apps ]; then cp ../os/iso/system/apps/*.petal $(ISO)/system/apps/; else echo "WARNING: petal apps not found!"; fi
 	@mkdir -p $(ISO)/system/tests
 	@if [ -d ../os/iso/system/tests ]; then cp ../os/iso/system/tests/* $(ISO)/system/tests/ 2>/dev/null || true; else echo "WARNING: system tests not found!"; fi
 	@mkdir -p $(ISO)/lib $(ISO)/lib64
@@ -259,10 +257,6 @@ installer.iso: $(BUILD)/installer.elf
 		fi \
 	done
 
-	@for f in $(ISO)/system/apps/*.petal; do \
-		nm=$$(basename $$f); \
-		echo "  module2 /system/apps/$$nm $$nm" >> $(ISO)/boot/grub/grub.cfg; \
-	done
 	@for f in $(ISO)/system/tests/*; do \
 		nm=$$(basename $$f); \
 		echo "  module2 /system/tests/$$nm $$nm" >> $(ISO)/boot/grub/grub.cfg; \

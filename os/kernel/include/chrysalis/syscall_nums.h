@@ -20,7 +20,7 @@
 #define SYS_WM_GET_POS 14
 #define SYS_WM_GET_SIZE 15
 
-/* Drawing Syscalls (FlyUI Backend) */
+/* Drawing Syscalls */
 #define SYS_FLY_DRAW_RECT_FILL 20
 #define SYS_FLY_DRAW_TEXT 21
 #define SYS_FLY_DRAW_SURFACE 22

@@ -11,6 +11,13 @@
  *          then load *%ebx into ESP and restore registers (popal/popfl) and return.
  */
 context_switch:
+    /* Get arguments from the stack (cdecl convention)
+       4(%esp) = &prev->kstack_ptr
+       8(%esp) = &next->kstack_ptr
+     */
+    movl 4(%esp), %eax
+    movl 8(%esp), %edx
+
     cli                 /* disable interrupts during the very short switch */
 
     pushfl              /* push EFLAGS */
@@ -21,7 +28,7 @@ context_switch:
     movl %esp, (%eax)
 
     /* load next->kstack_ptr into ESP (switch stacks) */
-    movl (%ebx), %esp
+    movl (%edx), %esp
 
     popal               /* restore registers for next task */
     popfl               /* restore flags for next task */

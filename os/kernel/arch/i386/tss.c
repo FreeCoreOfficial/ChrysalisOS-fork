@@ -12,9 +12,9 @@ void tss_init(uint32_t kernel_stack) {
     uint32_t base = (uint32_t) &tss_entry;
     uint32_t limit = sizeof(tss_entry);
 
-    // Setăm descriptorul TSS în GDT (index 5)
+    // Setăm descriptorul TSS în GDT (index 6)
     // Base, Limit, Access(0xE9 = Present|Ring3|Executable|Accessed), Granularity
-    gdt_set_gate(5, base, limit, 0xE9, 0x00);
+    gdt_set_gate(6, base, limit, 0xE9, 0x00);
 
     // Zero memory
     memset(&tss_entry, 0, sizeof(tss_entry));

@@ -75,7 +75,7 @@ static void* usb_map_mmio(uint32_t phys, uint32_t size) {
     (void)size;
     return (void *)(uintptr_t)phys;
 #else
-    static uint32_t usb_mmio_next = 0xE2000000u;
+    static uint32_t usb_mmio_next = 0xE4000000u;
     uint32_t aligned = (size + 0xFFFu) & ~0xFFFu;
     uint32_t vaddr = usb_mmio_next;
     usb_mmio_next += aligned;

@@ -8,11 +8,7 @@
 #include "../proc/exec.h"
 #include "../string.h"
 #include "../terminal.h"
-#include "../ui/flyui/draw.h"
-#include "../ui/flyui/theme.h"
-#include "../ui/wm/wm.h"
 #include "../user/user.h"
-#include "../video/surface.h"
 
 /* Configuration */
 #define SHELL_BUF_SIZE 256
@@ -92,7 +88,6 @@ static void shell_render_line() {
   }
 
   ctx->last_rendered_len = ctx->line_len;
-  wm_mark_dirty();
 }
 
 static void shell_history_add(const char *cmd) {
@@ -432,51 +427,6 @@ static void shell_autocomplete() {
 
 /* --- Public API --- */
 
-static window_t *shell_win = NULL;
-
-static void shell_on_resize(window_t *win) {
-  if (!win || !win->surface)
-    return;
-  int win_w = win->w;
-  int win_h = win->h;
-  terminal_set_surface(win->surface);
-  terminal_set_rect(0, 25, win_w, win_h - 25);
-  terminal_clear();
-  wm_mark_dirty();
-}
-
-static void shell_on_close(window_t *win) {
-  (void)win;
-  shell_destroy_window();
-}
-
-static void fly_draw_line(surface_t *surf, int x0, int y0, int x1, int y1,
-                          uint32_t color) {
-  int dx = (x1 > x0) ? (x1 - x0) : (x0 - x1);
-  int sx = (x0 < x1) ? 1 : -1;
-  int dy = (y1 > y0) ? -(y1 - y0) : -(y0 - y1);
-  int sy = (y0 < y1) ? 1 : -1;
-  int err = dx + dy;
-  int e2;
-
-  for (;;) {
-    if (x0 >= 0 && x0 < (int)surf->width && y0 >= 0 && y0 < (int)surf->height) {
-      surf->pixels[y0 * surf->width + x0] = color;
-    }
-    if (x0 == x1 && y0 == y1)
-      break;
-    e2 = 2 * err;
-    if (e2 >= dy) {
-      err += dy;
-      x0 += sx;
-    }
-    if (e2 <= dx) {
-      err += dx;
-      y0 += sy;
-    }
-  }
-}
-
 void shell_init() {
   /* Text Mode Init Only */
   shell_init_context(0);
@@ -486,79 +436,17 @@ void shell_init() {
 }
 
 void shell_create_window() {
-  fly_theme_t *th = theme_get();
-  int win_w = 640;
-  int win_h = 400 + 25; /* +24 for title bar + 1 border */
-  surface_t *s = surface_create(win_w, win_h);
-  if (s) {
-    surface_clear(s, th->win_bg); /* Window background */
-
-    /* Draw Title Bar  */
-    fly_draw_rect_fill(s, 0, 0, win_w, 24, th->win_title_active_bg);
-    const char *title = "Chrysalis OS : Konsole";
-    int title_len = strlen(title);
-    int title_x = (win_w - (title_len * 8)) / 2;
-    fly_draw_text(s, title_x, 4, title, th->win_title_active_fg);
-
-    /* Close Button [X] */
-    int bx = win_w - 20;
-    int by = 4;
-    fly_draw_rect_fill(s, bx, by, 16, 16, th->win_bg);
-    fly_draw_rect_outline(s, bx, by, 16, 16, th->color_lo_2);
-    fly_draw_line(s, bx, by, bx + 15, by, th->color_hi_1);
-    fly_draw_line(s, bx, by, bx, by + 15, th->color_hi_1);
-    fly_draw_text(s, bx + 4, by, "X", th->color_text);
-
-    /* Border between title bar and content */
-    fly_draw_rect_fill(s, 0, 24, win_w, 1, th->color_lo_1);
-
-    shell_win = wm_create_window(s, 50, 50);
-    if (shell_win) {
-      wm_set_title(shell_win, "Konsole");
-      wm_set_on_close(shell_win, shell_on_close);
-      wm_set_on_resize(shell_win, shell_on_resize);
-    }
-
-    terminal_set_surface(s);
-    terminal_set_rect(0, 25, win_w, 400);
-    terminal_set_text_attr(cl_default());
-
-    serial("[SHELL] Window created and terminal attached.\n");
-  } else {
-    serial("[SHELL] Error: Failed to create surface (OOM?)\n");
-  }
+  serial("[SHELL] GUI window mode removed.\n");
 }
 
-void shell_destroy_window() {
-  if (shell_win) {
-    wm_destroy_window(shell_win);
-    shell_win = NULL;
-    terminal_set_surface(NULL);
-    terminal_set_rendering(false);
-  }
-}
+void shell_destroy_window() {}
 
-int shell_is_window_active() { return (shell_win != NULL); }
+int shell_is_window_active() { return 0; }
 
-window_t *shell_get_window(void) { return shell_win; }
+window_t *shell_get_window(void) { return NULL; }
 
 bool shell_handle_event(input_event_t *ev) {
-  if (!shell_win)
-    return false;
-
-  if (ev->type == INPUT_MOUSE_CLICK && ev->pressed) {
-    int lx = ev->mouse_x - shell_win->x;
-    int ly = ev->mouse_y - shell_win->y;
-
-    /* Close Button Rect: x=W-20, y=4, w=16, h=16 */
-    if (lx >= shell_win->w - 20 && lx <= shell_win->w - 4 && ly >= 4 &&
-        ly <= 20) {
-      serial("[SHELL] Close button clicked.\n");
-      shell_destroy_window();
-      wm_mark_dirty();
-      return true;
-    }
-  }
+  (void)ev;
   return false;
 }
 
@@ -657,7 +545,6 @@ void shell_handle_char(char c) {
         /* Optimization: Just print the char if we are at the end */
         terminal_putchar(c);
         ctx->last_rendered_len = ctx->line_len;
-        wm_mark_dirty(); /* Ensure GUI refresh wakes up */
       } else {
         shell_render_line();
       }

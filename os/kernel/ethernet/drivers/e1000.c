@@ -112,7 +112,14 @@ static int e1000_poll(net_device_t* dev) {
 static void e1000_irq_handler(registers_t* r) {
     (void)r;
     uint32_t status = e1000_read(E1000_ICR);
-    if (status & 0x80) { /* RXDMT0 */
+
+    /* Check for Link Status Change */
+    if (status & 0x04) {
+        serial("[E1000] Link Status Changed: %s\n", (e1000_read(E1000_STATUS) & 2) ? "UP" : "DOWN");
+    }
+
+    /* Check for Receive Interrupts (RXDMT0 or RXT0) */
+    if (status & 0x80 || status & 0x40) {
         e1000_poll(&e1000_dev);
     }
 }
@@ -143,21 +150,37 @@ pci_found:
 
     /* Read BAR0 (MMIO) */
     uint32_t bar0 = pci_read(bus, slot, 0, 0x10);
-    uint32_t mmio_phys = bar0 & 0xFFFFFFF0;
-    
+    if (!(bar0 & 0x1)) { // Memory Space BAR
+        uint32_t mmio_phys = bar0 & 0xFFFFFFF0;
+        
+        /* Map MMIO to a safe virtual address */
+        /* For now we use identity mapping but ensure it's mapped with PCD/PWT for hardware */
+        uint32_t* pd = vmm_get_current_pd();
+        vmm_map_region(pd, mmio_phys, mmio_phys, 128 * 1024, PAGE_PRESENT | PAGE_RW | PAGE_PCD | PAGE_PWT);
+        mmio_base = (uint8_t*)mmio_phys;
+        serial("[E1000] MMIO mapped at %x (Phys: %x)\n", mmio_base, mmio_phys);
+    } else {
+        serial("[E1000] Error: BAR0 is not MMIO. Networking will fail.\n");
+        return -1;
+    }
+
     /* Read IRQ */
     uint32_t irq_info = pci_read(bus, slot, 0, 0x3C);
     uint8_t irq = irq_info & 0xFF;
 
     /* Enable Bus Mastering */
-    uint32_t cmd = pci_read(bus, slot, 0, 0x04);
+    uint32_t pci_cmd = pci_read(bus, slot, 0, 0x04);
     outl(PCI_CONFIG_ADDR, (1 << 31) | (bus << 16) | (slot << 11) | 0x04);
-    outl(PCI_CONFIG_DATA, cmd | 0x4); // Bus Master
+    outl(PCI_CONFIG_DATA, pci_cmd | 0x4); // Bus Master
 
-    /* Map MMIO */
-    vmm_identity_map(mmio_phys, 128 * 1024);
-    mmio_base = (uint8_t*)mmio_phys;
-    serial("[E1000] MMIO mapped at %x, IRQ %d\n", mmio_phys, irq);
+    /* Set Link Up */
+    uint32_t ctrl = e1000_read(E1000_CTRL);
+    e1000_write(E1000_CTRL, ctrl | (1 << 6)); /* SLU */
+
+    /* Clear MTA */
+    for (int i = 0; i < 128; i++) {
+        e1000_write(E1000_MTA + i * 4, 0);
+    }
 
     /* Read MAC */
     uint16_t mac16[3];
@@ -206,11 +229,13 @@ pci_found:
     e1000_write(E1000_TDLEN, sizeof(e1000_tx_desc) * E1000_NUM_TX_DESC);
     e1000_write(E1000_TDH, 0);
     e1000_write(E1000_TDT, 0);
-    e1000_write(E1000_TCTL, TCTL_EN | TCTL_PSP);
+    e1000_write(E1000_TCTL, TCTL_EN | TCTL_PSP | (0x40 << 12)); /* COLD=40h */
+    e1000_write(E1000_TIPG, 0x0060200A); /* 10, 8, 6 */
 
     /* Enable Interrupts */
     irq_install_handler(irq, e1000_irq_handler);
-    e1000_write(E1000_IMS, 0x1F6DC);
+    /* IMS: TXDW, LSC, RXDMT0, RXT0 */
+    e1000_write(E1000_IMS, 0x01 | 0x04 | 0x40 | 0x80);
     e1000_read(E1000_ICR);
 
     return 0;

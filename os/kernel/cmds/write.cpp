@@ -8,7 +8,6 @@
 #include "../shell/shell.h"
 #include "../string.h"
 #include "../terminal.h"
-#include "../ui/wm/wm.h"
 #include "cd.h"
 #include "fat.h"
 #include <stdarg.h>

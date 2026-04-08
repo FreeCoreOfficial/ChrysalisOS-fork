@@ -54,7 +54,6 @@
     "// --- Tools & Utilities --- //": "",
     "readelf": "readelf -h clickme.test",
     "ld-find": "find . -name \"*.ld\"",
-    "clickme-test": "g++ -ffreestanding -O2 -Wall -Wextra -Ikernel/include -m32 -fno-exceptions -fno-rtti -static -nostdlib -e _start apps/clickme.cpp build/user/libpetal.o -o clickme.test",
     "grub-convert": "cd ../ && cd grub-theme && convert background.jpg -resize 1024x768! background.tga && convert select_c.png -resize 600x30! select_c.tga && cd .. && cd os",
     "disk:create": "qemu-img create -f raw hdd.img 2G",
     "disk:info": "qemu-img info hdd.img",

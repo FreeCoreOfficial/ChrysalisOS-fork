@@ -46,7 +46,7 @@ typedef struct task {
   int pid;
   char name[32];
   void (*entry_noarg)(void); /* saved entry point; used by task trampoline */
-  uint8_t is_user_app;       /* dynamically loaded .petal task */
+  uint8_t is_user_app;       /* dynamically loaded user task */
   uint8_t abi;               /* task ABI selector */
   char launch_arg[256];      /* argv[1] passed by execve for standalone apps */
   uint32_t
@@ -80,6 +80,10 @@ typedef struct task {
   uint32_t user_brk_end;
   uint32_t user_mmap_base;
   user32_vma_t user_vmas[USER32_VMA_MAX];
+
+  /* TLS and Threading */
+  uint32_t tls_base;
+  uint32_t clear_tid_addr;
 } task_t;
 
 /* Helper to push event to task queue */

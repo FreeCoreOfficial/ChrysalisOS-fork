@@ -1633,15 +1633,6 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
                                      (uint32_t)(mod->mod_end - mod->mod_start),
                                      0);
           kmalloc_reset();
-        } else if (has_extension(current_mod_name, ".petal")) {
-          char path[64] = "/system/apps/";
-          size_t off = strlen(path);
-          memcpy(path + off, current_mod_name, strlen(current_mod_name) + 1);
-          serial("[INSTALLER] Dynamic App: %s -> %s\n", current_mod_name, path);
-          fat32_create_file_verified(path, (void *)(uintptr_t)mod->mod_start,
-                                     (uint32_t)(mod->mod_end - mod->mod_start),
-                                     0);
-          kmalloc_reset();
         } else {
 
           serial("[INSTALLER] Module '%s' did not match any expected file.\n",
@@ -1892,7 +1883,7 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
     }
   }
 
-  /* Files (.bmp and .petal) are now installed dynamically during the module
+  /* Files (.bmp) are now installed dynamically during the module
    * scan. */
 
   /* 7.1 Create User Data (Only for Fresh Install) */

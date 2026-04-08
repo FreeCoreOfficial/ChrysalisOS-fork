@@ -10,9 +10,6 @@
 #include "../../time/clock.h"
 #include "../../time/timer.h"
 #include "../../toolchain/cc.h"
-#include "../../ui/flyui/bmp.h"
-#include "../../ui/flyui/draw.h"
-#include "../../ui/wm/wm.h"
 #include "../../user/user.h"
 #include "../../mm/paging.h"
 #include <stdint.h>
@@ -234,45 +231,27 @@ int syscall_dispatch_chrys(uint32_t num, uint32_t a1, uint32_t a2,
     return 0;
 
   case SYS_WM_CREATE_WINDOW: {
-    surface_t *s = surface_create(a1, a2);
-    if (!s)
-      return 0;
-    window_t *win = wm_create_window(s, a3, a4);
-    if (win && a5) {
-      wm_set_title(win, (const char *)(uintptr_t)a5);
-    }
-    /* Link window to task for event routing */
-    pcb_t *cur = pcb_get_current();
-    if (cur && win) {
-      win->owner = cur;
-    }
-    return (uint32_t)(uintptr_t)win;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
+    return 0;
   }
 
   case SYS_WM_DESTROY_WINDOW: {
-    window_t *win = (window_t *)(uintptr_t)a1;
-    wm_destroy_window(win);
+    (void)a1;
     return 0;
   }
 
   case SYS_WM_MARK_DIRTY:
-    wm_mark_dirty();
-    wm_render();
     return 0;
 
-  case SYS_WM_GET_POS: {
-    window_t *win = (window_t *)(uintptr_t)a1;
-    if (win)
-      return (uint32_t)((win->x << 16) | (win->y & 0xFFFF));
+  case SYS_WM_GET_POS:
     return 0;
-  }
 
-  case SYS_WM_GET_SIZE: {
-    window_t *win = (window_t *)(uintptr_t)a1;
-    if (win)
-      return (uint32_t)(((win->w & 0xFFFF) << 16) | (win->h & 0xFFFF));
+  case SYS_WM_GET_SIZE:
     return 0;
-  }
 
   case SYS_GET_EVENT: {
     input_event_t *out_ev = (input_event_t *)(uintptr_t)a1;
@@ -304,69 +283,17 @@ int syscall_dispatch_chrys(uint32_t num, uint32_t a1, uint32_t a2,
     schedule();
     return 0;
 
-  case SYS_FLY_DRAW_TEXT: {
-    window_t *win = (window_t *)(uintptr_t)a1;
-    if (win && win->surface) {
-      fly_draw_text(win->surface, a2, a3, (const char *)(uintptr_t)a4, a5);
-    }
+  case SYS_FLY_DRAW_TEXT:
     return 0;
-  }
 
-  case SYS_FLY_DRAW_RECT_FILL: {
-    window_t *win = (window_t *)(uintptr_t)a1;
-    if (win && win->surface) {
-      fly_draw_rect_fill(win->surface, a2, a3, a4, (uint16_t)a5, a6);
-    }
+  case SYS_FLY_DRAW_RECT_FILL:
     return 0;
-  }
 
-  case SYS_FLY_DRAW_BMP: {
-    window_t *win = (window_t *)(uintptr_t)a1;
-    const char *path = (const char *)(uintptr_t)a2;
-    if (win && win->surface && path)
-      return fly_load_bmp_to_surface(win->surface, path);
+  case SYS_FLY_DRAW_BMP:
     return -1;
-  }
 
-  case SYS_FLY_DRAW_BMP_FIT: {
-    window_t *win = (window_t *)(uintptr_t)a1;
-    const char *path = (const char *)(uintptr_t)a2;
-    if (!win || !win->surface || !path)
-      return -1;
-
-    surface_t *img = fly_load_bmp(path);
-    if (!img)
-      return -1;
-
-    int dst_w = (int)win->surface->width;
-    int dst_h = (int)win->surface->height;
-    if (dst_w <= 0 || dst_h <= 0 || img->width == 0 || img->height == 0) {
-      surface_destroy(img);
-      return -1;
-    }
-
-    fly_draw_rect_fill(win->surface, 0, 0, dst_w, dst_h, 0xFF101010);
-
-    int draw_w = dst_w;
-    int draw_h = (int)(((uint64_t)img->height * (uint64_t)dst_w) /
-                       (uint64_t)img->width);
-    if (draw_h > dst_h) {
-      draw_h = dst_h;
-      draw_w = (int)(((uint64_t)img->width * (uint64_t)dst_h) /
-                     (uint64_t)img->height);
-    }
-    if (draw_w < 1)
-      draw_w = 1;
-    if (draw_h < 1)
-      draw_h = 1;
-
-    int draw_x = (dst_w - draw_w) / 2;
-    int draw_y = (dst_h - draw_h) / 2;
-    fly_draw_surface_scaled(win->surface, img, draw_x, draw_y, draw_w, draw_h);
-
-    surface_destroy(img);
+  case SYS_FLY_DRAW_BMP_FIT:
     return 0;
-  }
 
   case SYS_GET_TIME: {
     datetime t;

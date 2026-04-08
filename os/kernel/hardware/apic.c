@@ -28,10 +28,17 @@ static void pic_disable(void) {
 }
 
 static void pic_enable(void) {
-    // Remap PIC to default (32/40) and unmask
+    /* Disable interrupts during transition */
+    asm volatile("cli");
+
+    /* Remap PIC to default (32/40) */
     pic_remap(); 
-    outb(0x21, 0x00);
-    outb(0xA1, 0x00);
+
+    /* Mask all except Timer and Keyboard which we know we need */
+    outb(0x21, 0xFC); /* 11111100 */
+    outb(0xA1, 0xFF); /* 11111111 */
+
+    asm volatile("sti");
     serial_printf("[apic] PIC re-enabled\n");
 }
 

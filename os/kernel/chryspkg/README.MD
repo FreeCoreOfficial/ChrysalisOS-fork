@@ -1,17 +1,18 @@
 # chrys-pkg
 
-Minimal package manager for ChrysalisOS.
+Minimal package catalog for ChrysalisOS.
 
 ## Features
 - Parses local `catalog.json`
-- Lists available applications
-- Installs `.petal` packages (uncompressed TAR archives)
+- Lists available native catalog entries
+- Does not install external app bundles
 
 ## Structure
 - `catalog.json`: Repository metadata and app list.
-- `installed/`: Directory containing marker files for installed packages.
+- `installed/`: Directory reserved for future native package state.
 
 ## Usage
 ```bash
+pkg init
 pkg list
-pkg install /path/to/package.petal
+```

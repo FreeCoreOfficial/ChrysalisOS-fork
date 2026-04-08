@@ -1,6 +1,7 @@
 #pragma once
 #include "../input/input.h"
-#include "../ui/wm/window.h"
+
+typedef struct window window_t;
 
 #ifdef __cplusplus
 extern "C" {

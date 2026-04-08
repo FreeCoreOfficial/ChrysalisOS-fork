@@ -20,9 +20,10 @@ uint8_t base_high;
 } __attribute__((packed));
 
 
-static gdt_entry gdt[7];
+static gdt_entry gdt[8];
 static gdt_ptr_t gp;
 static const int GDT_TLS_INDEX = 5;
+static const int GDT_TSS_INDEX = 6;
 
 
 /*
@@ -48,13 +49,13 @@ gdt[num].access = access;
 
 extern "C" void gdt_init()
 {
-gp.limit = (sizeof(gdt_entry) * 7) - 1;
+gp.limit = (sizeof(gdt_entry) * 8) - 1;
 gp.base = (uint32_t)&gdt;
 
-
-// 0) NULL
-gdt_set_gate(0, 0, 0, 0, 0);
-
+// Zero GDT
+for (int i = 0; i < 8; i++) {
+    gdt_set_gate(i, 0, 0, 0, 0);
+}
 
 // 1) Kernel code (Ring 0)
 gdt_set_gate(1, 0, 0xFFFFFFFF, 0x9A, 0xCF);
