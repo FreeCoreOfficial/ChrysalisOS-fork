@@ -198,6 +198,8 @@ installer.iso: $(BUILD)/installer.elf
 	@if [ -d ../os/iso/icons ]; then cp ../os/iso/icons/*.bmp $(ISO)/icons/; else echo "WARNING: icons bmp not found!"; fi
 	@mkdir -p $(ISO)/system/tests
 	@if [ -d ../os/iso/system/tests ]; then cp ../os/iso/system/tests/* $(ISO)/system/tests/ 2>/dev/null || true; else echo "WARNING: system tests not found!"; fi
+	@mkdir -p $(ISO)/system/config
+	@cp ./config/*.conf $(ISO)/system/config/ 2>/dev/null || true
 	@mkdir -p $(ISO)/lib $(ISO)/lib64
 	@cp -a ../os/iso/lib/* $(ISO)/lib/ 2>/dev/null || true
 	@cp -a ../os/iso/lib64/* $(ISO)/lib64/ 2>/dev/null || true
@@ -260,6 +262,12 @@ installer.iso: $(BUILD)/installer.elf
 	@for f in $(ISO)/system/tests/*; do \
 		nm=$$(basename $$f); \
 		echo "  module2 /system/tests/$$nm $$nm" >> $(ISO)/boot/grub/grub.cfg; \
+	done
+	@for f in $(ISO)/system/config/*.conf; do \
+		if [ -f $$f ]; then \
+			nm=$$(basename $$f); \
+			echo "  module2 /system/config/$$nm $$nm" >> $(ISO)/boot/grub/grub.cfg; \
+		fi \
 	done
 	@if [ -f $(ISO)/system/bg.bmp ]; then \
 		echo '  module2 /system/bg.bmp bg.bmp' >> $(ISO)/boot/grub/grub.cfg; \

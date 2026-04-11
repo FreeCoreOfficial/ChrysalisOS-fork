@@ -10,6 +10,7 @@
 #include "buildinfo.h"
 #include "cat.h"
 #include "cd.h"
+#include "cc.h"
 #include "chrysver.h"
 #include "clear.h"
 #include "color.h"
@@ -258,16 +259,10 @@ static int wrap_cmd_cd(int argc, char **argv) {
   return wrap_new_int(cmd_cd, argc, argv);
 } /* int cmd_cd(int,char**) */
 static int wrap_cmd_launch(int argc, char **argv) {
-  (void)argc;
-  (void)argv;
-  terminal_printf("Command disabled: launch\n");
-  return -1;
+  return wrap_new_int(cmd_launch, argc, argv);
 } /* int cmd_launch(int,char**) */
 static int wrap_cmd_launch_exit(int argc, char **argv) {
-  (void)argc;
-  (void)argv;
-  terminal_printf("Command disabled: launch-exit\n");
-  return -1;
+  return wrap_new_int(cmd_launch_exit, argc, argv);
 } /* int cmd_launch_exit(int,char**) */
 static int wrap_cmd_net(int argc, char **argv) {
   return wrap_new_int(cmd_net, argc, argv);
@@ -322,6 +317,9 @@ static int wrap_cmd_size(int argc, char **argv) {
 } /* int cmd_size(int,char**) */
 static int wrap_cmd_gcc(int argc, char **argv) {
   return wrap_new_int(cmd_gcc, argc, argv);
+}
+static int wrap_cmd_cc(int argc, char **argv) {
+  return wrap_new_int(cmd_cc, argc, argv);
 }
 /* Wrapper for execve */
 static int wrap_cmd_exec(int argc, char **argv) {
@@ -401,6 +399,7 @@ Command command_table[] = {
     {"hexdump", wrap_cmd_hexdump},
     {"grep", wrap_cmd_grep},
     {"gcc", wrap_cmd_gcc},
+    {"cc", wrap_cmd_cc},
     {"bridge", wrap_cmd_bridge},
 };
 

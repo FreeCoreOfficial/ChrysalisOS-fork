@@ -1,6 +1,7 @@
 #include "shell.h"
 #include "../cmds/cd.h"
 #include "../cmds/registry.h"
+#include "../cmds/pathutil.h"
 #include "../colors/cl.h"
 #include "../drivers/serial.h"
 #include "../events/event_queue.h"
@@ -228,6 +229,25 @@ static void shell_exec_single(char *cmd_str) {
     }
 
     if (!found) {
+      bool looks_like_path = false;
+      if (argv[0] && argv[0][0] == '.')
+        looks_like_path = true;
+      for (const char *s = argv[0]; s && *s; s++) {
+        if (*s == '/') {
+          looks_like_path = true;
+          break;
+        }
+      }
+
+      if (looks_like_path) {
+        char resolved[256];
+        cmd_resolve_path(argv[0], resolved, sizeof(resolved));
+        int pid = execve(resolved, argv, 0);
+        if (pid >= 0) {
+          return;
+        }
+      }
+
       terminal_writestring("Unknown command: ");
       terminal_writestring(argv[0]);
       terminal_writestring("\n");

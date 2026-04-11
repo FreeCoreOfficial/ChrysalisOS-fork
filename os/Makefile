@@ -36,6 +36,16 @@ ISO = iso
 KERNEL = kernel.bin
 KERNEL64 = kernel64.bin
 
+LIBC_SRC = \
+	user/libc/src/errno.c \
+	user/libc/src/stdio.c \
+	user/libc/src/stdlib.c \
+	user/libc/src/string.c \
+	user/libc/src/unistd.c
+
+LIBC_OBJS = $(patsubst user/libc/src/%.c,$(BUILD)/libc/%.o,$(LIBC_SRC))
+LIBC_SO = $(BUILD)/libc.so
+
 OBJS = \
 	build/arch/i386/multiboot2_header.o \
 	$(BUILD)/boot.o \
@@ -180,6 +190,7 @@ OBJS = \
 	$(BUILD)/cmds/command_exec.o \
 	$(BUILD)/cmds/which.o \
 	$(BUILD)/cmds/gcc.o \
+	$(BUILD)/cmds/cc.o \
 	$(BUILD)/cmds/size.o \
 	$(BUILD)/chryspkg/chryspkg.o \
 	$(BUILD)/hardware/pci.o \
@@ -676,6 +687,14 @@ $(BUILD)/cmd_crash.o: kernel/cmds/crash.cpp kernel/cmds/crash.h | dirs
 # C OBJECTS (folosim gcc)
 # -------------------------
 
+$(BUILD)/libc/%.o: user/libc/src/%.c | dirs
+	@mkdir -p $(dir $@)
+	$(CC) -m32 -ffreestanding -fPIC -Iuser/libc/include -c $< -o $@
+
+$(LIBC_SO): $(LIBC_OBJS) | dirs
+	@mkdir -p $(dir $@)
+	$(LD) -shared -m elf_i386 -o $@ $(LIBC_OBJS)
+
 $(BUILD)/ata.o: kernel/storage/ata.c | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -900,6 +919,9 @@ $(BUILD)/cmds/grep.o: kernel/cmds/grep.cpp | dirs
 $(BUILD)/cmds/tee.o: kernel/cmds/tee.cpp | dirs
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+$(BUILD)/cmds/cc.o: kernel/cmds/cc.cpp | dirs
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
 $(BUILD)/cmds/sha256.o: kernel/cmds/sha256.cpp | dirs
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
@@ -1094,11 +1116,27 @@ $(ISO)/boot/$(KERNEL64): $(OBJS64) | dirs64
 # ISO & RUN
 # -------------------------
 
-iso: all iso/boot/grub/grub.cfg
+iso: all iso/boot/grub/grub.cfg $(LIBC_SO)
 	@mkdir -p $(ISO)/boot/grub
 	@mkdir -p $(ISO)/system/pkg/installed
 	@cp kernel/chryspkg/catalog.json $(ISO)/system/pkg/catalog.json
 	@echo "[LINUX] Linux ABI layer removed; skipping sysroot copy"
+	@echo "[SDK] Installing C SDK..."
+	@mkdir -p $(ISO)/system/lib
+	@mkdir -p $(ISO)/usr/include $(ISO)/usr/lib $(ISO)/usr/share/examples/c
+	@cp -a $(LIBC_SO) $(ISO)/system/lib/libc.so 2>/dev/null || true
+	@cp -a $(LIBC_SO) ported-langs/C/lib/libc.so 2>/dev/null || true
+	@cp -a ported-langs/C/include/* $(ISO)/usr/include/ 2>/dev/null || true
+	@cp -a ported-langs/C/lib/libc.so $(ISO)/usr/lib/ 2>/dev/null || true
+	@cp -a ported-langs/C/examples/* $(ISO)/usr/share/examples/c/ 2>/dev/null || true
+	@mkdir -p $(ISO)/system/bin
+	@if [ -f ported-langs/C/toolchain/bin/tcc ]; then \
+		cp -a ported-langs/C/toolchain/bin/tcc $(ISO)/system/bin/; \
+	else \
+		echo "[SDK] TinyCC missing (ported-langs/C/toolchain/bin/tcc). Build it before ISO."; \
+	fi
+	@mkdir -p $(ISO)/usr/bin
+	@ln -sf /system/bin/tcc $(ISO)/usr/bin/tcc
 	@echo "[GRUB] Installing theme..."
 	@mkdir -p $(ISO)/boot/grub/themes/chrysalis
 	@cp ../grub-theme/* $(ISO)/boot/grub/themes/chrysalis/ 2>/dev/null || true

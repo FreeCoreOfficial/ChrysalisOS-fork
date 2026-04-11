@@ -1,111 +1,113 @@
-# Chrysalis OS - Real Installation Architecture
+# ChrysalisOS Installer Architecture
 
 ## Overview
-This follows Debian/Linux installation methodology with a Windows-like installer workflow:
-1. Boot installer.iso (GRUB multiboot2)
-2. Installer prepares target disk (partitioning, formatting)  
-3. Install kernel + rootfs from installation media
-4. Configure bootloader
-5. Reboot and boot from installed disk
+The installer is a native ChrysalisOS setup environment that boots from
+`installer.iso` and runs a guided text-mode wizard. The code is organized as:
+
+1. Setup UI and orchestration in `installer.cpp`
+2. Multiboot entry in `kernel.cpp`
+3. Disk IO adapter in `disk_shim.cpp`
+4. Installation assets bundled under `installer/iso`
+
+The current workflow is:
+1. Welcome screen
+2. Disk and partition review
+3. Target selection
+4. Preflight validation
+5. Installation summary
+6. Explicit confirmation
+7. Installation progress
+8. Success or failure handling
 
 ## Directory Structure
 
-```
+```text
 /installer/
-├── installer.cpp         # Real installation logic
-├── kernel.cpp           # Multiboot2 entry point
-├── iso/                 # Installation media
-│   ├── boot/grub/       # GRUB bootloader
-│   └── install/         # Installation packages
-│       ├── bin/         # Essential utilities (busybox)
-│       ├── lib/         # C runtime libraries
-│       ├── kernel/      # Precompiled kernel binary
-│       └── rootfs.tar   # Root filesystem snapshot
-
-/os/
-├── kernel/kernel.cpp    # Main Chrysalis kernel
-├── hdd.img              # Target installation disk (1GB FAT32)
-└── create-hdd.py        # Pre-create empty disk
+├── installer.cpp         # Wizard flow + install orchestration
+├── kernel.cpp            # Multiboot2 entry point
+├── disk_shim.cpp         # ATA-backed sector read/write shim
+├── Makefile              # Installer ELF + ISO build
+├── build/                # Intermediate objects and installer ELF
+└── iso/                  # Installation media payload
+    ├── boot/grub/        # GRUB bootloader assets
+    ├── boot/chrysalis/   # Kernel payloads
+    ├── system/           # Wallpaper and system resources
+    ├── lib/ + lib64/     # Shared libraries copied from the OS ISO
+    └── icons/            # Icon modules copied onto the target system
 ```
 
-## Installation Stages (Debian-style)
+## Installation Stages
 
 ### Stage 1: Detection
-- Detect IDE/SATA disks
-- Check available space
-- Validate target disk
+- Scan the MBR partition table
+- Detect likely Chrysalis, Windows, Linux, and EFI partitions
+- Select a target partition and infer the current boot strategy
 
-### Stage 2: Formatting
-- Create FAT32 partition table (MBR)
-- Write boot sector with code
-- Initialize FAT and root directory
+### Stage 2: Safety Gates
+- Validate minimum target size
+- Flag destructive fresh installs explicitly
+- Show preflight warnings and an installation summary
+- Require typed confirmation before any write begins
 
-### Stage 3: File Installation
-- Copy `/kernel/kernel.bin` → `/boot/chrysalis/kernel.bin`
-- Extract rootfs.tar → filesystem hierarchy
-- Setup GRUB configuration
+### Stage 3: Provisioning
+- Fresh install: format the selected partition as FAT32
+- Upgrade: validate and mount the existing filesystem
+- Create `/boot`, `/boot/grub`, `/boot/chrysalis`, and `/system` directories
 
-### Stage 4: Bootloader Installation
-- Write MBR code for GRUB handoff
-- Create `/boot/grub/grub.cfg`
-- Mark partition as bootable
+### Stage 4: Media Import
+- Read the kernel and assets from installer multiboot modules
+- Install icons, services, wallpapers, theme assets, and kernel payloads
+- Generate `grub.cfg` on the target filesystem
 
-### Stage 5: Verification
-- Check installed files
-- Validate FAT32 integrity
-- Set boot flag
+### Stage 5: Bootloader Installation
+- Write BIOS/MBR GRUB stage data
+- Install `core.img` and GRUB configuration
+- Copy GRUB theme assets to `/boot/grub/themes/chrysalis`
 
-## Bootloader Chain
-```
-BIOS → MBR boot code → GRUB → kernel.bin → Chrysalis OS
-```
+### Stage 6: Finalization
+- Create initial user metadata on fresh install
+- Verify key files such as `/boot/chrysalis/kernel.bin`
+- Present reboot, shutdown, or recovery options
 
-## Files to Deploy
+## Boot Strategy
 
-### Installation Media Contents
-1. **installer.elf** - Multiboot2 entry point, runs installer
-2. **kernel.bin** - Compiled Chrysalis OS kernel (from /os/build/)
-3. **System files** - Shared libraries, configs
-4. **Boot utilities** - GRUB files
-
-### Target Disk After Installation
-```
-hdd.img (1GB FAT32)
-├── /boot/
-│   ├── /grub/
-│   │   ├── /boot.cfg
-│   │   └── /menu.lst
-│   └── /chrysalis/
-│       └── /kernel.bin
-├── /lib/
-│   ├── libc.so.6
-│   └── other libraries
-├── /etc/
-│   ├── fstab
-│   ├── hostname
-│   └── configs
-├── /bin/ & /sbin/
-│   └── Essential utilities
-└── /root/
-    └── User data
+```text
+BIOS -> MBR boot code -> GRUB -> kernel.bin -> ChrysalisOS
 ```
 
-## Linux Kernel Integration
+Notes:
+- The current boot install path is BIOS/MBR based.
+- The wizard now exposes boot strategy and target context earlier, so hybrid
+  BIOS+UEFI support can be added later without redesigning the flow again.
 
-Instead of compiling full Linux kernel from scratch:
-1. Use existing ChrysalisOS kernel (which already works)
-2. Package it as FAT32-bootable vmlinuz  
-3. GRUB loads it just like standard Linux kernels
-4. Kernel initializes hardware and runs GUI/shell
+## Files Deployed
 
-This maintains ChrysalisOS uniqueness while using professional installation pattern.
+### Installation Media
+1. `installer.elf` - multiboot entry and installer runtime
+2. `kernel.bin` - primary ChrysalisOS kernel payload
+3. `kernel64.bin` / `hello64.elf` - optional prototype payloads
+4. `boot.img` + `core.img` - GRUB bootloader images
+5. Theme, wallpaper, icon, service, and library modules
+
+### Target Filesystem
+```text
+/boot/chrysalis/kernel.bin
+/boot/grub/grub.cfg
+/boot/grub/core.img
+/boot/grub/themes/chrysalis/*
+/system/bg.bmp
+/system/icons/*
+/system/services/*
+/system/users/<name>/data.json
+```
 
 ## Implementation Status
 
 ✅ Installer boots from ISO
-✅ IDE disk detection
-✅ FAT32 partition creation
-⏳ Real file copying (in progress)
-⏳ Bootloader integration
-⏳ Full workflow testing
-
+✅ Guided wizard flow
+✅ Partition scan and target selection
+✅ Preflight, summary, and explicit confirmation
+✅ FAT32 provisioning and staged file installation
+✅ GRUB BIOS bootloader installation
+⏳ Hybrid BIOS+UEFI boot installation
+⏳ Broader hardware validation

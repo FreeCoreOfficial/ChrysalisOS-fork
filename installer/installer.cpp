@@ -93,10 +93,13 @@ uint32_t disk_get_capacity(void);
 int disk_write_sector(uint32_t lba, const uint8_t *buffer);
 int disk_read_sector(uint32_t lba, uint8_t *buffer);
 void ata_set_allow_mbr_write(int allow);
+void installer_main(uint32_t magic, uint32_t addr);
 }
 
 /* Forward declarations for menu/input helpers used below */
 static char kbd_getchar();
+static void get_input(char *buf, int max);
+static void recovery_shell();
 
 static bool has_extension(const char *name, const char *ext) {
   size_t nl = strlen(name);
@@ -178,6 +181,12 @@ enum installer_os_hint_t {
   INSTALLER_OS_OTHER = 5
 };
 
+enum installer_boot_strategy_t {
+  INSTALLER_BOOT_BIOS_MBR = 0,
+  INSTALLER_BOOT_UEFI_GPT = 1,
+  INSTALLER_BOOT_HYBRID = 2
+};
+
 struct installer_partition_info_t {
   bool present;
   uint8_t bootable;
@@ -193,7 +202,23 @@ static uint32_t g_install_target_count = 0;
 static int g_install_target_os_hint = INSTALLER_OS_NONE;
 
 static const uint32_t INSTALLER_DEFAULT_START_LBA = 2048;
-static const uint32_t INSTALLER_MIN_PARTITION_SECTORS = 131072; /* 64 MiB */
+static const uint32_t INSTALLER_MIN_PARTITION_SECTORS = 1048576; /* 512 MiB */
+static const uint32_t INSTALLER_WARN_PARTITION_SECTORS = 4194304; /* 2 GiB */
+
+struct installer_preflight_result_t {
+  bool ok;
+  bool destructive;
+  bool live_overlap_risk;
+  bool small_disk_warning;
+  bool upgrade_on_non_chrysalis;
+  bool existing_os_detected;
+  bool existing_chrysalis_detected;
+  uint32_t disk_sectors;
+  uint32_t target_sectors;
+  int target_index;
+  int target_os_hint;
+  installer_boot_strategy_t boot_strategy;
+};
 
 static uint32_t installer_read_u32_le(const uint8_t *p) {
   return ((uint32_t)p[0]) | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
@@ -261,6 +286,39 @@ static const char *installer_os_hint_name(int hint) {
   default:
     return "None";
   }
+}
+
+static const char *
+installer_boot_strategy_name(installer_boot_strategy_t strategy) {
+  switch (strategy) {
+  case INSTALLER_BOOT_UEFI_GPT:
+    return "UEFI/GPT";
+  case INSTALLER_BOOT_HYBRID:
+    return "Hybrid BIOS+UEFI";
+  case INSTALLER_BOOT_BIOS_MBR:
+  default:
+    return "Legacy BIOS/MBR";
+  }
+}
+
+static installer_boot_strategy_t installer_detect_boot_strategy(
+    const installer_partition_info_t parts[4], bool has_valid_mbr) {
+  int efi_parts = 0;
+  int gpt_hint = 0;
+  for (int i = 0; i < 4; i++) {
+    if (!parts[i].present)
+      continue;
+    if (parts[i].type == 0xEF)
+      efi_parts++;
+    if (parts[i].type == 0xEE)
+      gpt_hint++;
+  }
+
+  if (gpt_hint || efi_parts)
+    return INSTALLER_BOOT_HYBRID;
+  if (has_valid_mbr)
+    return INSTALLER_BOOT_BIOS_MBR;
+  return INSTALLER_BOOT_BIOS_MBR;
 }
 
 static bool installer_fat32_boot_sector_is_valid(uint32_t lba) {
@@ -697,13 +755,23 @@ static int ui_last_percent = -1;
 static const uint32_t UI_DELAY_MAJOR_ITERS = 3500000U;
 static const uint32_t UI_DELAY_MINOR_ITERS = 700000U;
 
-static const uint8_t UI_BG = 0x17;          /* Blue background, light gray */
-static const uint8_t UI_PANEL = 0x1F;       /* Blue background, white */
-static const uint8_t UI_PANEL_MUTED = 0x1B; /* Blue background, light cyan */
-static const uint8_t UI_PANEL_TITLE = 0x1E; /* Blue background, yellow */
-static const uint8_t UI_HEADER = 0x3F;      /* Cyan background, white */
-static const uint8_t UI_FOOTER = 0x1E;      /* Blue background, yellow */
-static uint8_t ui_input_color = 0x1F;
+static uint8_t UI_BG = 0x17;
+static uint8_t UI_PANEL = 0x70;
+static uint8_t UI_PANEL_MUTED = 0x78;
+static uint8_t UI_PANEL_TITLE = 0x1F;
+static uint8_t UI_HEADER = 0x30;
+static uint8_t UI_FOOTER = 0x17;
+static uint8_t UI_HEADER_ACCENT = 0x3F;
+static uint8_t UI_FRAME = 0x17;
+static uint8_t UI_SHADOW = 0x10;
+static uint8_t ui_input_color = 0x78;
+static char ui_brand[40] = "CHRYSALISOS INSTALLER";
+static char ui_tagline[96] =
+    "Partition Logic inspired workflow  |  Guided and safe";
+static char ui_hero_title[72] = "Welcome to ChrysalisOS Setup";
+static char ui_hero_subtitle[96] =
+    "Classic installer feel, modern guided flow";
+static char ui_theme_choice[64] = "installer-ui.conf";
 
 static int ui_clamp_int(int value, int min_v, int max_v) {
   if (value < min_v)
@@ -751,6 +819,224 @@ static void ui_fill_rect_textmode(int x, int y, int w, int h, uint8_t color) {
   }
 }
 
+static char ui_ascii_upper(char c) {
+  if (c >= 'a' && c <= 'z')
+    return (char)(c - ('a' - 'A'));
+  return c;
+}
+
+static int ui_stricmp_ascii(const char *a, const char *b) {
+  if (!a || !b)
+    return (a == b) ? 0 : 1;
+  while (*a && *b) {
+    char ca = ui_ascii_upper(*a++);
+    char cb = ui_ascii_upper(*b++);
+    if (ca != cb)
+      return (int)((unsigned char)ca - (unsigned char)cb);
+  }
+  return (int)((unsigned char)ui_ascii_upper(*a) -
+               (unsigned char)ui_ascii_upper(*b));
+}
+
+static bool ui_starts_with_ascii(const char *text, const char *prefix) {
+  if (!text || !prefix)
+    return false;
+  while (*prefix) {
+    if (ui_ascii_upper(*text++) != ui_ascii_upper(*prefix++))
+      return false;
+  }
+  return true;
+}
+
+static void ui_copy_string(char *dst, size_t dst_sz, const char *src) {
+  if (!dst || dst_sz == 0)
+    return;
+  size_t i = 0;
+  if (!src)
+    src = "";
+  while (src[i] && i + 1 < dst_sz) {
+    dst[i] = src[i];
+    i++;
+  }
+  dst[i] = 0;
+}
+
+static void ui_trim_ascii(char *text) {
+  if (!text)
+    return;
+  size_t len = strlen(text);
+  size_t start = 0;
+  while (text[start] == ' ' || text[start] == '\t' || text[start] == '\r' ||
+         text[start] == '\n')
+    start++;
+  while (len > start &&
+         (text[len - 1] == ' ' || text[len - 1] == '\t' ||
+          text[len - 1] == '\r' || text[len - 1] == '\n'))
+    len--;
+  if (start > 0) {
+    size_t i = 0;
+    while (start + i < len) {
+      text[i] = text[start + i];
+      i++;
+    }
+    text[i] = 0;
+    len = i;
+  } else {
+    text[len] = 0;
+  }
+}
+
+static int ui_hex_value(char c) {
+  if (c >= '0' && c <= '9')
+    return c - '0';
+  c = ui_ascii_upper(c);
+  if (c >= 'A' && c <= 'F')
+    return 10 + (c - 'A');
+  return -1;
+}
+
+static bool ui_parse_u8_value(const char *text, uint8_t *out) {
+  if (!text || !out)
+    return false;
+
+  unsigned value = 0;
+  if (ui_starts_with_ascii(text, "0x")) {
+    text += 2;
+    if (!*text)
+      return false;
+    while (*text) {
+      int hv = ui_hex_value(*text++);
+      if (hv < 0)
+        return false;
+      value = (value << 4) | (unsigned)hv;
+    }
+  } else {
+    if (!*text)
+      return false;
+    while (*text) {
+      if (*text < '0' || *text > '9')
+        return false;
+      value = (value * 10U) + (unsigned)(*text - '0');
+      text++;
+    }
+  }
+
+  if (value > 0xFFU)
+    return false;
+  *out = (uint8_t)value;
+  return true;
+}
+
+static void installer_apply_ui_conf_entry(const char *key, const char *value) {
+  uint8_t parsed = 0;
+  if (!key || !value)
+    return;
+
+  if (ui_stricmp_ascii(key, "installer.text.brand") == 0) {
+    ui_copy_string(ui_brand, sizeof(ui_brand), value);
+  } else if (ui_stricmp_ascii(key, "installer.text.tagline") == 0) {
+    ui_copy_string(ui_tagline, sizeof(ui_tagline), value);
+  } else if (ui_stricmp_ascii(key, "installer.text.hero_title") == 0) {
+    ui_copy_string(ui_hero_title, sizeof(ui_hero_title), value);
+  } else if (ui_stricmp_ascii(key, "installer.text.hero_subtitle") == 0) {
+    ui_copy_string(ui_hero_subtitle, sizeof(ui_hero_subtitle), value);
+  } else if ((ui_stricmp_ascii(key, "installer.color.background") == 0 ||
+              ui_stricmp_ascii(key, "color.desktop") == 0) &&
+             ui_parse_u8_value(value, &parsed)) {
+    UI_BG = parsed;
+  } else if ((ui_stricmp_ascii(key, "installer.color.panel") == 0 ||
+              ui_stricmp_ascii(key, "color.background") == 0) &&
+             ui_parse_u8_value(value, &parsed)) {
+    UI_PANEL = parsed;
+  } else if ((ui_stricmp_ascii(key, "installer.color.panel_title") == 0 ||
+              ui_stricmp_ascii(key, "color.foreground") == 0) &&
+             ui_parse_u8_value(value, &parsed)) {
+    UI_PANEL_TITLE = parsed;
+  } else if (ui_stricmp_ascii(key, "installer.color.panel_muted") == 0 &&
+             ui_parse_u8_value(value, &parsed)) {
+    UI_PANEL_MUTED = parsed;
+  } else if (ui_stricmp_ascii(key, "installer.color.header") == 0 &&
+             ui_parse_u8_value(value, &parsed)) {
+    UI_HEADER = parsed;
+  } else if (ui_stricmp_ascii(key, "installer.color.footer") == 0 &&
+             ui_parse_u8_value(value, &parsed)) {
+    UI_FOOTER = parsed;
+  } else if (ui_stricmp_ascii(key, "installer.color.accent") == 0 &&
+             ui_parse_u8_value(value, &parsed)) {
+    UI_HEADER_ACCENT = parsed;
+  } else if (ui_stricmp_ascii(key, "installer.color.frame") == 0 &&
+             ui_parse_u8_value(value, &parsed)) {
+    UI_FRAME = parsed;
+  } else if (ui_stricmp_ascii(key, "installer.color.shadow") == 0 &&
+             ui_parse_u8_value(value, &parsed)) {
+    UI_SHADOW = parsed;
+  } else if (ui_stricmp_ascii(key, "installer.color.input") == 0 &&
+             ui_parse_u8_value(value, &parsed)) {
+    ui_input_color = parsed;
+  }
+}
+
+static void installer_apply_ui_conf_data(const char *data, size_t size) {
+  if (!data || size == 0)
+    return;
+
+  char line[160];
+  size_t pos = 0;
+  while (pos < size) {
+    size_t len = 0;
+    while (pos < size && data[pos] != '\n' && len + 1 < sizeof(line))
+      line[len++] = data[pos++];
+    while (pos < size && data[pos] != '\n')
+      pos++;
+    if (pos < size && data[pos] == '\n')
+      pos++;
+
+    line[len] = 0;
+    ui_trim_ascii(line);
+    if (!line[0] || line[0] == '#' || line[0] == ';')
+      continue;
+
+    char *eq = line;
+    while (*eq && *eq != '=')
+      eq++;
+    if (*eq != '=')
+      continue;
+    *eq++ = 0;
+    ui_trim_ascii(line);
+    ui_trim_ascii(eq);
+    installer_apply_ui_conf_entry(line, eq);
+  }
+}
+
+static bool installer_load_ui_conf_from_modules(uint32_t addr,
+                                                const char *filename) {
+  struct multiboot2_tag *tag = (struct multiboot2_tag *)(uintptr_t)(addr + 8);
+  while (tag->type != MULTIBOOT2_TAG_TYPE_END) {
+    if (tag->type == MULTIBOOT2_TAG_TYPE_MODULE) {
+      struct multiboot2_tag_module *mod = (struct multiboot2_tag_module *)tag;
+      char current_mod_name[64];
+      current_mod_name[0] = 0;
+      size_t cmd_len = 0;
+      if (tag->size > sizeof(struct multiboot2_tag_module))
+        cmd_len = tag->size - sizeof(struct multiboot2_tag_module);
+      if (cmd_len > 0 && mod->string[cmd_len - 1] == '\0')
+        cmd_len--;
+      normalize_module_name_len(mod->string, cmd_len, current_mod_name,
+                                sizeof(current_mod_name));
+
+      if (filename && strcmp(current_mod_name, filename) == 0) {
+        installer_apply_ui_conf_data(
+            (const char *)(uintptr_t)mod->mod_start,
+            (size_t)(mod->mod_end - mod->mod_start));
+        serial("[INSTALLER] Applied UI config from %s\n", filename);
+        return true;
+      }
+    }
+    tag = (struct multiboot2_tag *)((uint8_t *)tag + ((tag->size + 7) & ~7));
+  }
+  return false;
+}
+
 static void ui_write_at(int x, int y, uint8_t color, const char *text) {
   if (!text || y < 0 || y >= UI_SCREEN_H || x >= UI_SCREEN_W)
     return;
@@ -788,12 +1074,34 @@ static void ui_center_text(int y, uint8_t color, const char *text) {
 static void ui_draw_panel(int x, int y, int w, int h, uint8_t color,
                           uint8_t shadow_color) {
   ui_fill_rect_textmode(x, y, w, h, color);
+  if (w > 2) {
+    ui_fill_rect_textmode(x, y, w, 1, UI_HEADER_ACCENT);
+  }
+  if (h > 2) {
+    ui_fill_rect_textmode(x, y, 1, h, UI_HEADER_ACCENT);
+  }
   if (shadow_color) {
     if (x + w < UI_SCREEN_W)
       ui_fill_rect_textmode(x + w, y + 1, 1, h, shadow_color);
     if (y + h < UI_SCREEN_H)
       ui_fill_rect_textmode(x + 1, y + h, w, 1, shadow_color);
   }
+}
+
+static void ui_draw_backdrop(void) {
+  ui_fill_rect_textmode(0, 0, UI_SCREEN_W, UI_SCREEN_H, UI_BG);
+  ui_fill_rect_textmode(0, 0, 1, UI_SCREEN_H, UI_HEADER_ACCENT);
+  ui_fill_rect_textmode(UI_SCREEN_W - 1, 0, 1, UI_SCREEN_H, UI_HEADER_ACCENT);
+  ui_fill_rect_textmode(2, 2, UI_SCREEN_W - 4, 1, UI_SHADOW);
+  ui_fill_rect_textmode(2, UI_SCREEN_H - 3, UI_SCREEN_W - 4, 1, UI_SHADOW);
+}
+
+static void ui_draw_hero_box(const char *title, const char *subtitle) {
+  ui_draw_panel(12, 4, 56, 5, UI_PANEL, UI_SHADOW);
+  if (title)
+    ui_center_text(5, UI_PANEL_TITLE, title);
+  if (subtitle)
+    ui_center_text(7, UI_PANEL_MUTED, subtitle);
 }
 
 static void ui_u32_to_dec(uint32_t value, char *out, size_t out_sz) {
@@ -835,27 +1143,28 @@ static void ui_append_str(char *out, size_t out_sz, const char *src) {
 
 static void ui_draw_header(const char *title) {
   ui_fill_rect_textmode(0, 0, UI_SCREEN_W, 1, UI_HEADER);
+  ui_write_at(2, 0, UI_HEADER_ACCENT, ui_brand);
   if (title)
-    ui_center_text(0, UI_HEADER, title);
+    ui_center_text(0, UI_HEADER_ACCENT, title);
+  ui_fill_rect_textmode(0, 1, UI_SCREEN_W, 1, UI_FRAME);
+  ui_write_at(2, 1, UI_FRAME, ui_tagline);
 }
 
 static void ui_draw_footer(const char *text) {
   ui_fill_rect_textmode(0, UI_SCREEN_H - 1, UI_SCREEN_W, 1, UI_FOOTER);
+  ui_write_at(2, UI_SCREEN_H - 1, UI_HEADER_ACCENT, "ChrysalisOS");
   if (text)
-    ui_center_text(UI_SCREEN_H - 1, UI_FOOTER, text);
+    ui_center_text(UI_SCREEN_H - 1, UI_HEADER_ACCENT, text);
 }
 
 static void ui_draw_welcome_screen(bool scan_ok, int present_count,
                                    int chrysalis_count, int other_os_count) {
   terminal_set_color(UI_BG);
   terminal_clear();
-  ui_draw_header("ChrysalisOS Setup");
-  ui_fill_rect_textmode(0, 1, UI_SCREEN_W, UI_SCREEN_H - 2, UI_BG);
-  ui_draw_panel(6, 3, 68, 16, UI_PANEL, 0x10);
-
-  ui_write_at(10, 5, UI_PANEL_TITLE, "Welcome");
-  ui_write_at(10, 6, UI_PANEL_MUTED,
-              "This will install or upgrade ChrysalisOS.");
+  ui_draw_backdrop();
+  ui_draw_header("Setup Home");
+  ui_draw_hero_box(ui_hero_title, ui_hero_subtitle);
+  ui_draw_panel(6, 10, 68, 10, UI_PANEL, UI_SHADOW);
 
   char part_line[80];
   part_line[0] = 0;
@@ -875,36 +1184,65 @@ static void ui_draw_welcome_screen(bool scan_ok, int present_count,
     ui_append_str(part_line, sizeof(part_line), num);
     ui_append_str(part_line, sizeof(part_line), ")");
   }
-  ui_write_at(10, 8, UI_PANEL_MUTED, part_line);
+  ui_write_at(10, 12, UI_PANEL_MUTED, part_line);
 
-  ui_write_at(10, 10, UI_PANEL_TITLE, "Choose an option");
-  ui_write_at(12, 12, UI_PANEL,
-              "1  Fresh Install   - Wipes disk, installs new system");
-  ui_write_at(12, 13, UI_PANEL,
-              "2  Upgrade         - Keeps files and updates system");
-  ui_write_at(12, 14, UI_PANEL,
-              "P  Partition Mgr   - Detect other OS, choose target");
+  ui_write_at(10, 14, UI_PANEL_TITLE, "Choose a path");
   ui_write_at(12, 15, UI_PANEL,
-              "J  Recovery Shell  - Opens a command shell");
+              "1  Guided Install  - Fresh install with safety checks");
   ui_write_at(12, 16, UI_PANEL,
+              "2  Upgrade         - Keep data and refresh system files");
+  ui_write_at(12, 17, UI_PANEL,
+              "P  Disk Review     - Inspect detected partitions");
+  ui_write_at(12, 18, UI_PANEL,
+              "J  Recovery Shell  - Opens a command shell");
+  ui_write_at(12, 19, UI_PANEL,
               "0  Shutdown        - Power off");
 
-  ui_draw_footer("Press 1/2/P/J/0 to continue");
+  ui_draw_footer("Press 1/2/P/J/0 to continue, or T to change theme");
+}
+
+static void ui_draw_centered_info_screen(const char *title,
+                                         const char *subtitle,
+                                         const char *line1,
+                                         const char *line2,
+                                         const char *line3,
+                                         const char *line4,
+                                         const char *line5,
+  const char *footer) {
+  terminal_set_color(UI_BG);
+  terminal_clear();
+  ui_draw_backdrop();
+  ui_draw_header(title ? title : "ChrysalisOS Setup");
+  ui_draw_panel(6, 4, 68, 16, UI_PANEL, UI_SHADOW);
+
+  if (subtitle)
+    ui_write_at(10, 6, UI_PANEL_TITLE, subtitle);
+  if (line1)
+    ui_write_at(10, 8, UI_PANEL, line1);
+  if (line2)
+    ui_write_at(10, 9, UI_PANEL, line2);
+  if (line3)
+    ui_write_at(10, 11, UI_PANEL_MUTED, line3);
+  if (line4)
+    ui_write_at(10, 12, UI_PANEL_MUTED, line4);
+  if (line5)
+    ui_write_at(10, 14, UI_PANEL_MUTED, line5);
+  ui_draw_footer(footer ? footer : "Press Enter to continue");
 }
 
 static void ui_draw_user_setup_screen(void) {
   terminal_set_color(UI_BG);
   terminal_clear();
-  ui_draw_header("ChrysalisOS User Setup");
-  ui_fill_rect_textmode(0, 1, UI_SCREEN_W, UI_SCREEN_H - 2, UI_BG);
-  ui_draw_panel(6, 3, 68, 16, UI_PANEL, 0x10);
-  ui_write_at(10, 5, UI_PANEL_TITLE, "Create your account");
-  ui_write_at(10, 8, UI_PANEL, "Username:");
-  ui_write_at(10, 10, UI_PANEL, "Password:");
-  ui_write_at(10, 12, UI_PANEL, "Device Name:");
-  ui_fill_rect_textmode(UI_INPUT_X, 8, UI_INPUT_W, 1, UI_PANEL_MUTED);
-  ui_fill_rect_textmode(UI_INPUT_X, 10, UI_INPUT_W, 1, UI_PANEL_MUTED);
-  ui_fill_rect_textmode(UI_INPUT_X, 12, UI_INPUT_W, 1, UI_PANEL_MUTED);
+  ui_draw_backdrop();
+  ui_draw_header("Account Setup");
+  ui_draw_panel(6, 4, 68, 15, UI_PANEL, UI_SHADOW);
+  ui_write_at(10, 6, UI_PANEL_TITLE, "Create your first Chrysalis account");
+  ui_write_at(10, 9, UI_PANEL, "Username:");
+  ui_write_at(10, 11, UI_PANEL, "Password:");
+  ui_write_at(10, 13, UI_PANEL, "Device Name:");
+  ui_fill_rect_textmode(UI_INPUT_X, 9, UI_INPUT_W, 1, UI_PANEL_MUTED);
+  ui_fill_rect_textmode(UI_INPUT_X, 11, UI_INPUT_W, 1, UI_PANEL_MUTED);
+  ui_fill_rect_textmode(UI_INPUT_X, 13, UI_INPUT_W, 1, UI_PANEL_MUTED);
   ui_draw_footer("Press Enter after each field");
 }
 
@@ -939,11 +1277,11 @@ static void ui_draw_progress_frame(bool upgrade_mode) {
   }
 
   terminal_set_color(UI_BG);
-  ui_fill_rect_textmode(0, 1, UI_SCREEN_W, UI_SCREEN_H - 2, UI_BG);
-  ui_draw_panel(6, 3, 68, 16, UI_PANEL, 0x10);
+  ui_draw_backdrop();
+  ui_draw_panel(6, 4, 68, 15, UI_PANEL, UI_SHADOW);
 
-  ui_write_at(UI_LABEL_X, 5, UI_PANEL_TITLE, "Installing system components");
-  ui_write_at(UI_LABEL_X, 6, UI_PANEL_MUTED, "Do not power off your computer.");
+  ui_write_at(UI_LABEL_X, 6, UI_PANEL_TITLE, "Installing system components");
+  ui_write_at(UI_LABEL_X, 7, UI_PANEL_MUTED, "Do not power off your computer.");
   ui_write_at(UI_LABEL_X, 8, UI_PANEL, "Stage:");
   ui_write_at(UI_LABEL_X, 9, UI_PANEL, "Detail:");
   ui_write_at(UI_LABEL_X, 11, UI_PANEL, "Progress: 0%");
@@ -966,12 +1304,12 @@ static void ui_draw_success_screen(bool upgrade_mode) {
   terminal_clear();
   ui_draw_header(upgrade_mode ? "ChrysalisOS Upgrade Complete"
                               : "ChrysalisOS Installation Complete");
-  ui_fill_rect_textmode(0, 1, UI_SCREEN_W, UI_SCREEN_H - 2, UI_BG);
-  ui_draw_panel(6, 3, 68, 18, UI_PANEL, 0x10);
+  ui_draw_backdrop();
+  ui_draw_panel(6, 4, 68, 16, UI_PANEL, UI_SHADOW);
 
-  ui_write_at(10, 5, UI_PANEL_TITLE,
+  ui_write_at(10, 6, UI_PANEL_TITLE,
               upgrade_mode ? "Upgrade finished" : "Installation finished");
-  ui_write_at(10, 6, UI_PANEL_MUTED,
+  ui_write_at(10, 7, UI_PANEL_MUTED,
               "ChrysalisOS is ready to boot.");
 
   char line[80];
@@ -982,15 +1320,156 @@ static void ui_draw_success_screen(bool upgrade_mode) {
 #else
   ui_append_str(line, sizeof(line), "Version: unknown");
 #endif
-  ui_write_at(10, 8, UI_PANEL, line);
-  ui_write_at(10, 9, UI_PANEL, "Website: chrysalisos.netlify.app");
+  ui_write_at(10, 9, UI_PANEL, line);
+  ui_write_at(10, 10, UI_PANEL, "Website: chrysalisos.netlify.app");
 
-  ui_write_at(10, 11, UI_PANEL_TITLE, "Choose what to do next");
-  ui_write_at(12, 13, UI_PANEL, "M  Shutdown  - Power off the computer");
-  ui_write_at(12, 14, UI_PANEL, "R  Reboot    - Boot into ChrysalisOS");
-  ui_write_at(12, 15, UI_PANEL, "J  Recovery  - Open recovery shell");
+  ui_write_at(10, 12, UI_PANEL_TITLE, "Choose what to do next");
+  ui_write_at(12, 14, UI_PANEL, "M  Shutdown  - Power off the computer");
+  ui_write_at(12, 15, UI_PANEL, "R  Reboot    - Boot into ChrysalisOS");
+  ui_write_at(12, 16, UI_PANEL, "J  Recovery  - Open recovery shell");
 
   ui_draw_footer("Press M / R / J");
+}
+
+static void ui_draw_failure_screen(const char *stage, const char *detail) {
+  ui_draw_centered_info_screen(
+      "ChrysalisOS Installer", "Installation stopped",
+      stage ? stage : "A critical step failed.", detail,
+      "No further disk changes should be attempted automatically.",
+      "Use Recovery Shell for inspection or go back and retry.",
+      "Logs were sent to the serial console.", "Press M / R / J");
+}
+
+static void ui_draw_preflight_screen(const installer_preflight_result_t &pf,
+                                     bool upgrade_mode) {
+  char line1[80];
+  char line2[80];
+  char line3[80];
+  char line4[80];
+  char line5[80];
+  line1[0] = 0;
+  line2[0] = 0;
+  line3[0] = 0;
+  line4[0] = 0;
+  line5[0] = 0;
+
+  const char *mode = upgrade_mode ? "Upgrade" : "Fresh install";
+  const char *boot = installer_boot_strategy_name(pf.boot_strategy);
+  const char *hint = installer_os_hint_name(pf.target_os_hint);
+
+  char num1[16];
+  char num2[16];
+  ui_u32_to_dec((uint32_t)(pf.target_index + 1), num1, sizeof(num1));
+  ui_u32_to_dec(installer_part_size_mb(pf.target_sectors), num2, sizeof(num2));
+
+  ui_append_str(line1, sizeof(line1), "Mode: ");
+  ui_append_str(line1, sizeof(line1), mode);
+  ui_append_str(line1, sizeof(line1), "    Boot strategy: ");
+  ui_append_str(line1, sizeof(line1), boot);
+
+  ui_append_str(line2, sizeof(line2), "Target partition: p");
+  ui_append_str(line2, sizeof(line2), num1);
+  ui_append_str(line2, sizeof(line2), "    Size: ");
+  ui_append_str(line2, sizeof(line2), num2);
+  ui_append_str(line2, sizeof(line2), " MB");
+
+  ui_append_str(line3, sizeof(line3), "Detected content: ");
+  ui_append_str(line3, sizeof(line3), hint);
+  if (pf.existing_os_detected && !pf.existing_chrysalis_detected) {
+    ui_append_str(line3, sizeof(line3), "    Warning: non-Chrysalis data found");
+  } else if (pf.existing_chrysalis_detected) {
+    ui_append_str(line3, sizeof(line3), "    Existing Chrysalis installation found");
+  } else {
+    ui_append_str(line3, sizeof(line3), "    Looks safe to provision");
+  }
+
+  if (!pf.ok) {
+    ui_append_str(line4, sizeof(line4), "Blocking issue: target partition is too small.");
+  } else if (pf.live_overlap_risk) {
+    ui_append_str(line4, sizeof(line4),
+                  "Warning: installer media may share the same disk path.");
+  } else {
+    ui_append_str(line4, sizeof(line4), "Preflight checks passed.");
+  }
+
+  if (pf.small_disk_warning) {
+    ui_append_str(line5, sizeof(line5),
+                  "Recommendation: use a partition of at least 2 GiB.");
+  } else {
+    ui_append_str(line5, sizeof(line5),
+                  "Next step shows the exact operations before install starts.");
+  }
+
+  ui_draw_centered_info_screen("ChrysalisOS Setup", "Preflight checks", line1,
+                               line2, line3, line4, line5,
+                               pf.ok ? "Press C to continue or B to go back"
+                                     : "Press B to go back");
+}
+
+static void ui_draw_summary_screen(const installer_preflight_result_t &pf,
+                                   bool upgrade_mode) {
+  char line1[80];
+  char line2[80];
+  char line3[80];
+  char line4[80];
+  char line5[80];
+  line1[0] = 0;
+  line2[0] = 0;
+  line3[0] = 0;
+  line4[0] = 0;
+  line5[0] = 0;
+
+  char num[16];
+  ui_u32_to_dec((uint32_t)(pf.target_index + 1), num, sizeof(num));
+  ui_append_str(line1, sizeof(line1), "Target: partition p");
+  ui_append_str(line1, sizeof(line1), num);
+  ui_append_str(line1, sizeof(line1), "   Strategy: ");
+  ui_append_str(line1, sizeof(line1),
+                installer_boot_strategy_name(pf.boot_strategy));
+
+  ui_u32_to_dec(installer_part_size_mb(pf.target_sectors), num, sizeof(num));
+  ui_append_str(line2, sizeof(line2), "Filesystem: FAT32   Capacity: ");
+  ui_append_str(line2, sizeof(line2), num);
+  ui_append_str(line2, sizeof(line2), " MB");
+
+  if (upgrade_mode) {
+    ui_append_str(line3, sizeof(line3),
+                  "Actions: verify filesystem, refresh bootloader, update kernel");
+    ui_append_str(line4, sizeof(line4),
+                  "         preserve user data where possible");
+  } else {
+    ui_append_str(line3, sizeof(line3),
+                  "Actions: format target, recreate /boot and /system tree");
+    ui_append_str(line4, sizeof(line4),
+                  "         install GRUB, kernel, theme assets and user profile");
+  }
+
+  if (pf.existing_os_detected && !upgrade_mode) {
+    ui_append_str(line5, sizeof(line5),
+                  "Warning: detected data on target will be destroyed.");
+  } else {
+    ui_append_str(line5, sizeof(line5),
+                  "Review complete. The next screen requires explicit confirmation.");
+  }
+
+  ui_draw_centered_info_screen("ChrysalisOS Setup", "Installation summary",
+                               line1, line2, line3, line4, line5,
+                               "Press C to continue or B to go back");
+}
+
+static void ui_draw_confirm_screen(bool upgrade_mode) {
+  ui_draw_centered_info_screen(
+      "ChrysalisOS Setup",
+      upgrade_mode ? "Confirm upgrade operations" : "Confirm destructive install",
+      upgrade_mode ? "Upgrade will modify boot files and core system assets."
+                   : "Fresh install will format the selected partition.",
+      upgrade_mode ? "Type UPGRADE exactly to continue."
+                   : "Type ERASE exactly to continue.",
+      "Lowercase is accepted if your keyboard layout forces it.",
+      "This is the last prompt before disk writes begin.", NULL,
+      "Type confirmation and press Enter, or press Esc to cancel");
+  ui_fill_rect_textmode(UI_INPUT_X, 15, UI_INPUT_W, 1, UI_PANEL_MUTED);
+  terminal_set_cursor_pos(UI_INPUT_X, 15);
 }
 
 static void ui_progress_update(int percent, const char *stage,
@@ -1030,6 +1509,93 @@ static void ui_progress_update(int percent, const char *stage,
   } else {
     ui_progress_delay(UI_DELAY_MINOR_ITERS);
   }
+}
+
+static void installer_wait_for_failure_action(void) {
+  while (true) {
+    char c = kbd_getchar();
+    if (c == 'm' || c == 'M') {
+      outw(0x604, 0x2000);
+      outw(0x4004, 0x3400);
+      outw(0xB004, 0x2000);
+    } else if (c == 'r' || c == 'R') {
+      outb(0x64, 0xFE);
+    } else if (c == 'j' || c == 'J') {
+      recovery_shell();
+      return;
+    }
+  }
+}
+
+static bool installer_collect_confirmation_phrase(const char *expected) {
+  char buf[16];
+  ui_input_color = UI_PANEL_MUTED;
+  get_input(buf, sizeof(buf));
+  terminal_set_cursor_pos(0, 0);
+  return ui_stricmp_ascii(buf, expected) == 0;
+}
+
+static void ui_draw_theme_picker(const char *current) {
+  ui_draw_centered_info_screen(
+      "ChrysalisOS Setup", "Choose UI theme",
+      "1  Chrysalis Modern  - Default installer theme",
+      "2  Visopsys Classic  - Cool grey panels and cyan accents",
+      "3  Partlogic Clean   - Simple, bright, high contrast",
+      "Current selection is marked on the next line.",
+      current ? current : "installer-ui.conf",
+      "Press 1/2/3 to apply, or B to go back");
+}
+
+static bool installer_apply_ui_theme(uint32_t addr, const char *filename) {
+  if (!filename)
+    return false;
+  ui_copy_string(ui_theme_choice, sizeof(ui_theme_choice), filename);
+  return installer_load_ui_conf_from_modules(addr, filename);
+}
+
+static bool installer_run_preflight(installer_preflight_result_t *out_pf,
+                                    bool upgrade_mode, uint32_t disk_sectors,
+                                    int target_index, uint32_t target_sectors,
+                                    int target_os_hint,
+                                    installer_boot_strategy_t boot_strategy) {
+  if (!out_pf)
+    return false;
+
+  out_pf->ok = true;
+  out_pf->destructive = !upgrade_mode;
+  out_pf->live_overlap_risk = (target_index == 0 && !upgrade_mode);
+  out_pf->small_disk_warning =
+      (target_sectors > 0 && target_sectors < INSTALLER_WARN_PARTITION_SECTORS);
+  out_pf->upgrade_on_non_chrysalis =
+      (upgrade_mode && target_os_hint != INSTALLER_OS_CHRYSALIS);
+  out_pf->existing_os_detected =
+      (target_os_hint != INSTALLER_OS_NONE &&
+       target_os_hint != INSTALLER_OS_CHRYSALIS);
+  out_pf->existing_chrysalis_detected =
+      (target_os_hint == INSTALLER_OS_CHRYSALIS);
+  out_pf->disk_sectors = disk_sectors;
+  out_pf->target_sectors = target_sectors;
+  out_pf->target_index = target_index;
+  out_pf->target_os_hint = target_os_hint;
+  out_pf->boot_strategy = boot_strategy;
+
+  if (target_index < 0 || target_sectors == 0)
+    out_pf->ok = false;
+  if (target_sectors < INSTALLER_MIN_PARTITION_SECTORS)
+    out_pf->ok = false;
+  if (upgrade_mode && target_os_hint == INSTALLER_OS_NONE)
+    out_pf->ok = false;
+  return out_pf->ok;
+}
+
+static void installer_abort_and_restart(uint32_t magic, uint32_t addr,
+                                        const char *stage,
+                                        const char *detail) {
+  serial("[INSTALLER] FATAL: %s -- %s\n", stage ? stage : "Unknown",
+         detail ? detail : "No detail");
+  ui_draw_failure_screen(stage, detail);
+  installer_wait_for_failure_action();
+  installer_main(magic, addr);
 }
 
 static int installer_count_modules(uint32_t addr) {
@@ -1257,6 +1823,7 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   /* Initialize input + USB (for bare-metal USB keyboards) */
   input_init();
   usb_core_init();
+  installer_apply_ui_theme(addr, ui_theme_choice);
 
   /* 0. Welcome Menu */
   installer_partition_info_t detected_parts[4];
@@ -1272,7 +1839,8 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
 
   char choice = 0;
   while (choice != '1' && choice != '2' && choice != '0' && choice != 'J' &&
-         choice != 'j' && choice != 'p' && choice != 'P') {
+         choice != 'j' && choice != 'p' && choice != 'P' && choice != 'T' &&
+         choice != 't') {
     choice = kbd_getchar();
   }
 
@@ -1305,6 +1873,29 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
     installer_main(magic, addr);
     return;
   }
+
+  if (choice == 'T' || choice == 't') {
+    bool picked = false;
+    while (!picked) {
+      ui_draw_theme_picker(ui_theme_choice);
+      char tc = kbd_getchar();
+      if (tc == 'b' || tc == 'B' || tc == 27) {
+        break;
+      }
+      if (tc == '1') {
+        installer_apply_ui_theme(addr, "installer-ui.conf");
+        picked = true;
+      } else if (tc == '2') {
+        installer_apply_ui_theme(addr, "installer-ui-visopsys.conf");
+        picked = true;
+      } else if (tc == '3') {
+        installer_apply_ui_theme(addr, "installer-ui-partlogic.conf");
+        picked = true;
+      }
+    }
+    installer_main(magic, addr);
+    return;
+  }
   serial("> Choice: %c selected.\n\n", choice);
 
   bool upgrade_mode = (choice == '2');
@@ -1328,6 +1919,70 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
          target_part_index + 1, start_lba, target_part_sectors,
          installer_os_hint_name(target_os_hint));
 
+  installer_partition_info_t parts_for_boot[4];
+  bool current_has_valid_mbr = false;
+  int tmp_present = 0;
+  int tmp_other = 0;
+  int tmp_chrys = 0;
+  installer_scan_partitions(parts_for_boot, &current_has_valid_mbr, &tmp_present,
+                            &tmp_other, &tmp_chrys);
+  installer_boot_strategy_t boot_strategy =
+      installer_detect_boot_strategy(parts_for_boot, current_has_valid_mbr);
+
+  uint32_t disk_capacity = disk_get_capacity();
+  if (disk_capacity == 0)
+    disk_capacity = 262144;
+  if (target_part_sectors == 0)
+    target_part_sectors =
+        (disk_capacity > start_lba) ? (disk_capacity - start_lba) : 0;
+
+  installer_preflight_result_t preflight;
+  installer_run_preflight(&preflight, upgrade_mode, disk_capacity,
+                          target_part_index, target_part_sectors,
+                          target_os_hint, boot_strategy);
+  while (true) {
+    ui_draw_preflight_screen(preflight, upgrade_mode);
+    char pf = kbd_getchar();
+    if (pf == 'b' || pf == 'B' || pf == 27) {
+      installer_main(magic, addr);
+      return;
+    }
+    if ((pf == 'c' || pf == 'C' || pf == '\n') && preflight.ok)
+      break;
+  }
+
+  while (true) {
+    ui_draw_summary_screen(preflight, upgrade_mode);
+    char sm = kbd_getchar();
+    if (sm == 'b' || sm == 'B' || sm == 27) {
+      installer_main(magic, addr);
+      return;
+    }
+    if (sm == 'c' || sm == 'C' || sm == '\n')
+      break;
+  }
+
+  while (true) {
+    ui_draw_confirm_screen(upgrade_mode);
+    bool confirm_ok = installer_collect_confirmation_phrase(upgrade_mode
+                                                                ? "UPGRADE"
+                                                                : "ERASE");
+    if (confirm_ok)
+      break;
+
+    ui_draw_centered_info_screen(
+        "ChrysalisOS Setup", "Confirmation mismatch",
+        "The confirmation text did not match.",
+        upgrade_mode ? "Expected: UPGRADE" : "Expected: ERASE",
+        "No disk changes have been made yet.", NULL, NULL,
+        "Press C to retry or B to cancel");
+    char cc = kbd_getchar();
+    if (cc == 'b' || cc == 'B' || cc == 27) {
+      installer_main(magic, addr);
+      return;
+    }
+  }
+
   serial_set_vga_mirror(0);
   ui_draw_progress_frame(upgrade_mode);
   ui_progress_update(0, "Preparing installer", "Initializing subsystems...");
@@ -1344,7 +1999,7 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   ui_progress_update(6, "Initializing hardware", "Target disk ready.");
 
   /* 2. Format / Prepare Target Disk */
-  uint32_t total_sectors = disk_get_capacity();
+  uint32_t total_sectors = disk_capacity;
   if (total_sectors == 0)
     total_sectors = 262144; // Default 128MB
   if (target_part_sectors == 0)
@@ -1358,6 +2013,9 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
            target_part_index + 1, start_lba, target_part_sectors);
     if (fat32_format(start_lba, target_part_sectors, "CHRYSALIS") != 0) {
       serial("[INSTALLER] ERROR: Formatting failed!\n");
+      installer_abort_and_restart(
+          magic, addr, "Formatting failed",
+          "The target partition could not be formatted as FAT32.");
       return;
     }
     serial("[INSTALLER] Format Complete.\n");
@@ -1379,11 +2037,11 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
     ui_progress_update(20, "User setup", "Collecting account information...");
     ui_draw_user_setup_screen();
     ui_input_color = UI_PANEL_MUTED;
-    terminal_set_cursor_pos(UI_INPUT_X, 8);
+    terminal_set_cursor_pos(UI_INPUT_X, 9);
     get_input(username, 32);
-    terminal_set_cursor_pos(UI_INPUT_X, 10);
+    terminal_set_cursor_pos(UI_INPUT_X, 11);
     get_password(password, 32);
-    terminal_set_cursor_pos(UI_INPUT_X, 12);
+    terminal_set_cursor_pos(UI_INPUT_X, 13);
     get_input(hostname, 32);
 
     serial("[INSTALLER] User setup: user='%s' host='%s'\n", username, hostname);
@@ -1403,6 +2061,9 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
     if (fat32_init(0, 0) != 0) {
       serial("[INSTALLER] ERROR: No FAT32 filesystem found. You must use [1] "
              "Fresh Install.\n");
+      installer_abort_and_restart(
+          magic, addr, "Filesystem verification failed",
+          "No usable FAT32 filesystem was found on the upgrade target.");
       return;
     }
     fat32_set_mounted(0, 'a');
@@ -1458,16 +2119,25 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   int mr = fat32_create_directory_verified(boot_path, 1);
   if (mr != 0 && !upgrade_mode) {
     serial("[INSTALLER] ERROR: mkdir /boot failed (err=%d)\n", mr);
+    installer_abort_and_restart(
+        magic, addr, "Directory creation failed",
+        "The installer could not create /boot on the target volume.");
     return;
   }
   mr = fat32_create_directory_verified(chrys_path, 1);
   if (mr != 0 && !upgrade_mode) {
     serial("[INSTALLER] ERROR: mkdir /boot/chrysalis failed (err=%d)\n", mr);
+    installer_abort_and_restart(
+        magic, addr, "Directory creation failed",
+        "The installer could not create /boot/chrysalis on the target volume.");
     return;
   }
   mr = fat32_create_directory_verified(grub_path, 1);
   if (mr != 0 && !upgrade_mode) {
     serial("[INSTALLER] ERROR: mkdir /boot/grub failed (err=%d)\n", mr);
+    installer_abort_and_restart(
+        magic, addr, "Directory creation failed",
+        "The installer could not create /boot/grub on the target volume.");
     return;
   }
   mr = fat32_create_directory_verified(system_path, 1);
@@ -1614,6 +2284,8 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
           bg_bmp_data = (void *)(uintptr_t)mod->mod_start;
           bg_bmp_size = mod->mod_end - mod->mod_start;
           serial("[INSTALLER] Assigned to bg.bmp (desktop wallpaper)\n");
+        } else if (strcmp(current_mod_name, "installer-ui.conf") == 0) {
+          serial("[INSTALLER] UI config module retained in memory for runtime theming.\n");
         } else if (has_extension(current_mod_name, ".bmp")) {
           char path[64] = "/system/icons/";
           size_t off = strlen(path);
@@ -1679,6 +2351,9 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   if (!boot_img || boot_img_size < 446 || !core_img || core_img_size == 0) {
     serial(
         "[INSTALLER] ERROR: GRUB boot/core images missing in installer ISO.\n");
+    installer_abort_and_restart(
+        magic, addr, "Bootloader assets missing",
+        "Required GRUB boot images were not present in the installer media.");
     return;
   }
 
@@ -1686,12 +2361,18 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   if (1 + core_sectors >= start_lba) {
     serial("[INSTALLER] ERROR: core.img too large (%u sectors)\n",
            core_sectors);
+    installer_abort_and_restart(
+        magic, addr, "Bootloader layout invalid",
+        "GRUB core image does not fit in the reserved boot area before the partition.");
     return;
   }
 
   uint8_t *mbr = (uint8_t *)kmalloc(512);
   if (!mbr) {
     serial("[INSTALLER] ERROR: no memory for MBR\n");
+    installer_abort_and_restart(
+        magic, addr, "Out of memory",
+        "Unable to allocate temporary memory for bootloader install.");
     return;
   }
   build_mbr(mbr, (const uint8_t *)boot_img, target_part_index, start_lba,
@@ -1702,6 +2383,9 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   if (mwr != 0) {
     serial("[INSTALLER] ERROR: failed to write MBR sector\n");
     kfree(mbr);
+    installer_abort_and_restart(
+        magic, addr, "Bootloader write failed",
+        "Writing the MBR boot sector did not complete successfully.");
     return;
   }
   kfree(mbr);
@@ -1819,6 +2503,9 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
     int r = fat32_create_file_alloc("/boot/chrysalis/kernel.bin", kernel_size);
     if (r != 0) {
       serial("[INSTALLER] ERROR: Failed to allocate kernel.bin (err=%d)\n", r);
+      installer_abort_and_restart(
+          magic, addr, "Kernel install failed",
+          "Could not allocate space for /boot/chrysalis/kernel.bin.");
       return;
     }
     const uint8_t *kp = (const uint8_t *)kernel_data;
@@ -1834,6 +2521,9 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
         serial("[INSTALLER] ERROR: kernel.bin chunk write failed (off=%d "
                "err=%d)\n",
                (int)offset, wr);
+        installer_abort_and_restart(
+            magic, addr, "Kernel install failed",
+            "Writing kernel.bin to disk failed mid-transfer.");
         return;
       }
       offset += n;
@@ -1850,10 +2540,16 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
     serial("[INSTALLER] kernel.bin size on disk: %d\n", ksz);
     if (ksz != (int32_t)kernel_size) {
       serial("[INSTALLER] ERROR: kernel.bin size mismatch\n");
+      installer_abort_and_restart(
+          magic, addr, "Kernel verification failed",
+          "Installed kernel size on disk does not match the source module.");
       return;
     }
   } else {
     serial("[INSTALLER] ERROR: Kernel module not found in memory!\n");
+    installer_abort_and_restart(
+        magic, addr, "Kernel asset missing",
+        "kernel.bin was not loaded by the installer boot media.");
     return;
   }
 
