@@ -35,6 +35,8 @@ cc hi.c -o hi
 ./hi
 ```
 
+> Note: the TinyCC build script will disable Linux ELF interpreter embedding for ChrysalisOS by forcing `CONFIG_TCC_ELFINTERP` to an empty value.
+
 The `cc` command is a built-in wrapper that forwards to `/system/bin/tcc`.
 
 ## Runtime Notes

@@ -2086,11 +2086,13 @@ static int elf_output_file(TCCState *s1, const char *filename)
                 const char *elfint = getenv("LD_SO");
                 if (elfint == NULL)
                     elfint = DEFAULT_ELFINTERP(s1);
-                /* add interpreter section only if executable */
-                interp = new_section(s1, ".interp", SHT_PROGBITS, SHF_ALLOC);
-                interp->sh_addralign = 1;
-                ptr = section_ptr_add(interp, 1 + strlen(elfint));
-                strcpy(ptr, elfint);
+                if (elfint && *elfint != '\0' && strcmp(elfint, "-") != 0) {
+                    /* add interpreter section only if executable */
+                    interp = new_section(s1, ".interp", SHT_PROGBITS, SHF_ALLOC);
+                    interp->sh_addralign = 1;
+                    ptr = section_ptr_add(interp, 1 + strlen(elfint));
+                    strcpy(ptr, elfint);
+                }
             }
 
             /* add dynamic symbol table */

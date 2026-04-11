@@ -259,7 +259,6 @@ int syscall_dispatch_chrys(uint32_t num, uint32_t a1, uint32_t a2,
 
     if (!syscall_range_ok(cur, out_ev, sizeof(input_event_t)))
       return -1;
-
     /*
      * Standalone apps should ONLY receive events pushed to their specific
      * task queue by the Window Manager. Stealing from the global input_pop
@@ -269,20 +268,11 @@ int syscall_dispatch_chrys(uint32_t num, uint32_t a1, uint32_t a2,
       if (task_pop_event(cur, out_ev))
         return 1;
     }
-
     /* If no event, yield to allow others to run */
     yield();
     return 0;
   }
-
-  case SYS_SLEEP:
-    sleep((uint32_t)a1);
-    return 0;
-
-  case SYS_YIELD:
-    schedule();
-    return 0;
-
+  break;
   case SYS_FLY_DRAW_TEXT:
     return 0;
 
@@ -346,9 +336,70 @@ int syscall_dispatch_chrys(uint32_t num, uint32_t a1, uint32_t a2,
   case SYS_USER_IS_LOGGED:
     return user_get_current() ? 1 : 0;
 
-  default:
-    terminal_printf("[syscall] invalid syscall %d\n", num);
-    return -1;
+  default: {
+    // Linux-to-ChrysalisOS syscall translation for compatibility
+    // This allows Linux binaries (like TinyCC) to run on ChrysalisOS
+    
+    // Linux i386 syscall numbers that map to ChrysalisOS equivalents
+    switch (num) {
+    case 1:   // Linux: exit
+      terminal_printf("[syscall] mapped Linux exit(%d) to SYS_EXIT\n", a1);
+      task_exit((int)a1);
+      return 0;
+    
+    case 4:   // Linux: write
+      terminal_printf("[syscall] mapped Linux write(%d, ..., %d) to SYS_WRITE\n", a1, a3);
+      return sys_write((int)a1, (const char *)(uintptr_t)a2, a3);
+    
+    case 3:   // Linux: read
+      terminal_printf("[syscall] mapped Linux read(%d, ..., %d) to SYS_READ\n", a1, a3);
+      return sys_read((int)a1, (void *)(uintptr_t)a2, a3);
+    
+    case 5:   // Linux: open
+      terminal_printf("[syscall] mapped Linux open('%s', %d) to SYS_OPEN\n", 
+                      (const char *)(uintptr_t)a1, a2);
+      return sys_open((const char *)(uintptr_t)a1, (int)a2);
+    
+    case 6:   // Linux: close
+      terminal_printf("[syscall] mapped Linux close(%d) to SYS_CLOSE\n", a1);
+      return sys_close((int)a1);
+    
+    case 20:   // Linux: getpid
+      terminal_printf("[syscall] mapped Linux getpid() -> returning 1\n");
+      return 1;  // Return dummy PID
+    
+    case 45:   // Linux: brk (memory management)
+      terminal_printf("[syscall] mapped Linux brk(%p) -> allowing\n", (void *)(uintptr_t)a1);
+      return (int)a1;  // Simple brk: just return the address requested
+    
+    case 54:   // Linux: ioctl
+      terminal_printf("[syscall] mapped Linux ioctl(%d, %u, %p) to SYS_IOCTL\n", a1, a2, (void *)(uintptr_t)a3);
+      return sys_ioctl((int)a1, a2, (void *)(uintptr_t)a3);
+    
+    case 125:  // Linux: mprotect
+      terminal_printf("[syscall] mapped Linux mprotect(%p, %u, %d) -> allowing\n", 
+                      (void *)(uintptr_t)a1, a2, a3);
+      return 0;  // Simple mprotect: just succeed
+    
+    case 192:  // Linux: mmap2
+      terminal_printf("[syscall] mapped Linux mmap2() -> allocating memory\n");
+      // For simplicity, use kmalloc for mmap2 (not perfect but works for basic cases)
+      return (int)(uintptr_t)kmalloc(a2 != 0 ? a2 : 4096);
+    
+    case 243:  // Linux: set_thread_area
+      terminal_printf("[syscall] mapped Linux set_thread_area() -> ignoring\n");
+      return 0;  // Just succeed
+    
+    case 252:  // Linux: exit_group
+      terminal_printf("[syscall] mapped Linux exit_group(%d) to SYS_EXIT\n", a1);
+      task_exit((int)a1);
+      return 0;
+    
+    default:
+      terminal_printf("[syscall] invalid syscall %d (not Linux, not ChrysalisOS)\n", num);
+      return -1;
+    }
+  }
   }
 }
 
