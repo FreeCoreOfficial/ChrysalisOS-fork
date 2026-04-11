@@ -1,13 +1,14 @@
-# TinyCC Toolchain (On-Device C)
+# Licenses Notice
 
-This directory vendors TinyCC sources for the on-device C compiler.
+While the **ChrysalisOS** project is released under the **MIT License**, some components such as **compilers, programming languages, or libraries** may have their own separate licenses.  
 
-- Sources: `tcc-0.9.27/`
-- Build script: `build_tcc.sh`
-- Output binary: `bin/tcc` (copied into `/system/bin` during ISO build)
+To maintain transparency and compliance, any additional licenses for these components will be included in this directory.  
 
-## Notes
+Please refer to the respective license files for more information on usage, distribution, and restrictions.
 
-- The build assumes you have a ChrysalisOS-compatible cross toolchain.
-- If TinyCC fails to build, the most likely cause is missing libc/posix stubs.
-  Extend `os/user/libc` as needed, rebuild `libc.so`, then retry.
+---
+
+**Summary:**  
+
+- ChrysalisOS itself → MIT License  
+- Compilers, libraries, or other third-party tools → Their respective licenses (added here if used)  

@@ -19,6 +19,7 @@ LDFLAGS = -nostdlib -m elf_i386 -T ../os/linker.ld
 
 BUILD = build
 ISO = iso
+TCC_REQUIRED ?= 1
 
 # Minimal object files (installer only)
 # Minimal object files + OS Drivers
@@ -194,10 +195,19 @@ installer.iso: $(BUILD)/installer.elf
 	@if [ -f ../os/iso/boot/kernel.bin ]; then cp ../os/iso/boot/kernel.bin $(ISO)/boot/chrysalis/; else echo "WARNING: kernel.bin not found!"; fi
 	@if [ -f ../os/iso/boot/kernel64.bin ]; then cp ../os/iso/boot/kernel64.bin $(ISO)/boot/chrysalis/; else echo "WARNING: kernel64.bin not found!"; fi
 	@if [ -f ../os/iso/boot/hello64.elf ]; then cp ../os/iso/boot/hello64.elf $(ISO)/boot/chrysalis/; else echo "WARNING: hello64.elf not found!"; fi
-	@mkdir -p $(ISO)/icons
-	@if [ -d ../os/iso/icons ]; then cp ../os/iso/icons/*.bmp $(ISO)/icons/; else echo "WARNING: icons bmp not found!"; fi
 	@mkdir -p $(ISO)/system/tests
 	@if [ -d ../os/iso/system/tests ]; then cp ../os/iso/system/tests/* $(ISO)/system/tests/ 2>/dev/null || true; else echo "WARNING: system tests not found!"; fi
+	@mkdir -p $(ISO)/system/bin
+	@if [ -f ../os/iso/system/bin/tcc ]; then \
+		cp ../os/iso/system/bin/tcc $(ISO)/system/bin/; \
+		echo "[ISO] TinyCC copied to installer ISO"; \
+	else \
+		echo "WARNING: tcc not found in os/iso/system/bin (run yarn build in os/)"; \
+		if [ "$(TCC_REQUIRED)" = "1" ]; then \
+			echo "[ISO] TinyCC is required (set TCC_REQUIRED=0 to bypass)."; \
+			exit 1; \
+		fi; \
+	fi
 	@mkdir -p $(ISO)/system/config
 	@cp ./config/*.conf $(ISO)/system/config/ 2>/dev/null || true
 	@mkdir -p $(ISO)/lib $(ISO)/lib64
@@ -242,10 +252,6 @@ installer.iso: $(BUILD)/installer.elf
 	@if [ -f $(ISO)/boot/chrysalis/hello64.elf ]; then \
 		echo '  module2 /boot/chrysalis/hello64.elf hello64.elf' >> $(ISO)/boot/grub/grub.cfg; \
 	fi
-	@for f in $(ISO)/icons/*.bmp; do \
-		nm=$$(basename $$f); \
-		echo "  module2 /icons/$$nm $$nm" >> $(ISO)/boot/grub/grub.cfg; \
-	done
 	@for f in $(ISO)/lib/*; do \
 		if [ -f $$f ]; then \
 			nm=$$(basename $$f); \
@@ -262,6 +268,12 @@ installer.iso: $(BUILD)/installer.elf
 	@for f in $(ISO)/system/tests/*; do \
 		nm=$$(basename $$f); \
 		echo "  module2 /system/tests/$$nm $$nm" >> $(ISO)/boot/grub/grub.cfg; \
+	done
+	@for f in $(ISO)/system/bin/*; do \
+		if [ -f $$f ]; then \
+			nm=$$(basename $$f); \
+			echo "  module2 /system/bin/$$nm $$nm" >> $(ISO)/boot/grub/grub.cfg; \
+		fi \
 	done
 	@for f in $(ISO)/system/config/*.conf; do \
 		if [ -f $$f ]; then \

@@ -43,8 +43,8 @@ ARM_O = libtcc1.o armeabi.o alloca-arm.o armflush.o
 ARM64_O = lib-arm64.o
 WIN_O = crt1.o crt1w.o wincrt1.o wincrt1w.o dllcrt1.o dllmain.o
 
-OBJ-i386 = $(I386_O) $(BCHECK_O)
-OBJ-x86_64 = $(X86_64_O) va_list.o $(BCHECK_O)
+OBJ-i386 = $(I386_O)
+OBJ-x86_64 = $(X86_64_O) va_list.o
 OBJ-x86_64-osx = $(X86_64_O) va_list.o
 OBJ-i386-win32 = $(I386_O) chkstk.o bcheck.o $(WIN_O)
 OBJ-x86_64-win32 = $(X86_64_O) chkstk.o bcheck.o $(WIN_O)

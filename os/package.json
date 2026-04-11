@@ -25,7 +25,7 @@
   "scripts": {
     "// --- Main Production Workflow --- //": "",
     
-    "build": "export CHRYSALIS_TCC_CC=i386-chrysalis-gcc &&yarn tcc:build && make clean && make dirs && make && make iso",
+    "build": "TCC_REQUIRED=1 yarn tcc:build && make clean && make dirs && make && make iso",
     "logslivedebug:x64": "make all && make iso && sh -c 'yarn ldebugx64 2>&1 | tee serial.log'",
     "ldebugx64": "clear ; make all && make iso && yarn run:iso64",
     "full": "yarn build && yarn installer:build",
@@ -36,7 +36,7 @@
     "kernel:compile": "make dirs && make",
     "kernel:iso": "make iso",
     "kernel:check": "nm -u build/kernel.bin | grep -v '__' || echo 'No external symbols found.'",
-    "tcc:build": "sh -c 'if [ -f ported-langs/C/toolchain/bin/tcc ]; then echo \"[TCC] tcc already present\"; exit 0; fi; for cc in \"$CHRYSALIS_TCC_CC\" i386-chrysalis-gcc i386-elf-gcc i686-elf-gcc gcc; do if [ -n \"$cc\" ] && command -v \"$cc\" >/dev/null 2>&1; then export CHRYSALIS_TCC_CC=\"$cc\"; echo \"[TCC] Using compiler: $cc\"; ported-langs/C/toolchain/build_tcc.sh && exit 0; fi; done; echo \"[TCC] No suitable compiler found; skipping TinyCC build\"; exit 0'",
+    "tcc:build": "sh -c 'if [ -f ported-langs/C/toolchain/bin/tcc ]; then echo \"[TCC] tcc already present\"; exit 0; fi; for cc in \"$CHRYSALIS_TCC_CC\" i386-chrysalis-gcc i386-elf-gcc i686-elf-gcc; do if [ -n \"$cc\" ] && command -v \"$cc\" >/dev/null 2>&1; then export CHRYSALIS_TCC_CC=\"$cc\"; echo \"[TCC] Using compiler: $cc\"; ported-langs/C/toolchain/build_tcc.sh && exit 0; fi; done; echo \"[TCC] No Chrysalis cross-compiler found. Set CHRYSALIS_TCC_CC (e.g. i386-chrysalis-gcc).\"; if [ \"${TCC_REQUIRED:-1}\" = \"1\" ]; then exit 1; else echo \"[TCC] Skipping TinyCC build (TCC_REQUIRED=0)\"; exit 0; fi'",
     "// --- Installer Suite --- //": "",
     "create-i": "make -C ../installer clean && make -C ../installer",
     "installer:build": "make -C ../installer clean && make -C ../installer",

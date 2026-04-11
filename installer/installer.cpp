@@ -2102,8 +2102,8 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
                          'r', 'y', 's', 'a', 'l', 'i', 's', 0};
   char grub_path[11] = {'/', 'b', 'o', 'o', 't', '/', 'g', 'r', 'u', 'b', 0};
   char system_path[8] = {'/', 's', 'y', 's', 't', 'e', 'm', 0};
-  char icons_dir[14] = {'/', 's', 'y', 's', 't', 'e', 'm',
-                        '/', 'i', 'c', 'o', 'n', 's', 0};
+  char system_bin_dir[13] = {'/', 's', 'y', 's', 't', 'e', 'm',
+                             '/', 'b', 'i', 'n', 0};
   char services_dir[18] = {'/', 's', 'y', 's', 't', 'e', 'm',
                            '/', 's', 'e', 'r', 'v', 'i', 'c', 'e', 's', 0};
   char tests_dir[15] = {'/', 's', 'y', 's', 't', 'e', 'm',
@@ -2144,9 +2144,9 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
   if (mr != 0 && !upgrade_mode) {
     serial("[INSTALLER] WARN: mkdir /system failed (err=%d), continuing\n", mr);
   }
-  mr = fat32_create_directory_verified(icons_dir, 1);
+  mr = fat32_create_directory_verified(system_bin_dir, 1);
   if (mr != 0 && !upgrade_mode) {
-    serial("[INSTALLER] WARN: mkdir /system/icons failed (err=%d)\n", mr);
+    serial("[INSTALLER] WARN: mkdir /system/bin failed (err=%d)\n", mr);
   }
   mr = fat32_create_directory_verified(services_dir, 1);
   if (mr != 0 && !upgrade_mode) {
@@ -2286,11 +2286,9 @@ extern "C" void installer_main(uint32_t magic, uint32_t addr) {
           serial("[INSTALLER] Assigned to bg.bmp (desktop wallpaper)\n");
         } else if (strcmp(current_mod_name, "installer-ui.conf") == 0) {
           serial("[INSTALLER] UI config module retained in memory for runtime theming.\n");
-        } else if (has_extension(current_mod_name, ".bmp")) {
-          char path[64] = "/system/icons/";
-          size_t off = strlen(path);
-          memcpy(path + off, current_mod_name, strlen(current_mod_name) + 1);
-          serial("[INSTALLER] Dynamic Icon: %s -> %s\n", current_mod_name,
+        } else if (strcmp(current_mod_name, "tcc") == 0) {
+          const char *path = "/system/bin/tcc";
+          serial("[INSTALLER] Toolchain binary: %s -> %s\n", current_mod_name,
                  path);
           fat32_create_file_verified(path, (void *)(uintptr_t)mod->mod_start,
                                      (uint32_t)(mod->mod_end - mod->mod_start),
