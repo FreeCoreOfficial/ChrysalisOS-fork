@@ -1,4 +1,4 @@
-# Chrysalis OS ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) | <iframe src="https://github.com/sponsors/mihai209/button" title="Sponsor mihai209" height="32" width="114" style="border: 0; border-radius: 6px;"></iframe> |  [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/S6S11A22SE)
+# Chrysalis OS ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) |  [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/S6S11A22SE) 
 
 Chrysalis OS is a custom operating system built from scratch in **C/C++**, designed as a
 hands-on learning and research project in low-level systems programming.
